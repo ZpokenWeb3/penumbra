@@ -134,40 +134,40 @@ impl TryFrom<crate::crypto::ConsensusKey> for tendermint::PublicKey {
     }
 }
 
-impl Protobuf<crate::chain::Ratio> for num_rational::Ratio<u64> {}
+// impl Protobuf<crate::chain::Ratio> for num_rational::Ratio<u64> {}
 
-impl From<num_rational::Ratio<u64>> for crate::chain::Ratio {
-    fn from(v: num_rational::Ratio<u64>) -> Self {
-        Self {
-            numerator: *v.numer(),
-            denominator: *v.denom(),
-        }
-    }
-}
+// impl From<num_rational::Ratio<u64>> for crate::chain::Ratio {
+//     fn from(v: num_rational::Ratio<u64>) -> Self {
+//         Self {
+//             numerator: *v.numer(),
+//             denominator: *v.denom(),
+//         }
+//     }
+// }
 
-impl From<crate::chain::Ratio> for num_rational::Ratio<u64> {
-    fn from(value: crate::chain::Ratio) -> Self {
-        Self::new(value.numerator, value.denominator)
-    }
-}
+// impl From<crate::chain::Ratio> for num_rational::Ratio<u64> {
+//     fn from(value: crate::chain::Ratio) -> Self {
+//         Self::new(value.numerator, value.denominator)
+//     }
+// }
 
 // IBC-rs impls
 
-extern crate ibc as ibc_rs;
-
-use ibc_rs::core::ics02_client::client_state::AnyClientState;
-
-use ibc_proto::google::protobuf::Any;
-use ibc_proto::ibc::core::channel::v1::Channel as RawChannel;
-use ibc_proto::ibc::core::client::v1::Height as RawHeight;
-use ibc_proto::ibc::core::connection::v1::ConnectionEnd as RawConnectionEnd;
-use ibc_rs::core::ics02_client::client_consensus::AnyConsensusState;
-use ibc_rs::core::ics03_connection::connection::ConnectionEnd;
-use ibc_rs::core::ics04_channel::channel::ChannelEnd;
-use ibc_rs::Height;
-
-impl Protobuf<RawConnectionEnd> for ConnectionEnd {}
-impl Protobuf<Any> for AnyClientState {}
-impl Protobuf<Any> for AnyConsensusState {}
-impl Protobuf<RawChannel> for ChannelEnd {}
-impl Protobuf<RawHeight> for Height {}
+// extern crate ibc as ibc_rs;
+//
+// use ibc_rs::core::ics02_client::client_state::AnyClientState;
+//
+// use ibc_proto::google::protobuf::Any;
+// use ibc_proto::ibc::core::channel::v1::Channel as RawChannel;
+// use ibc_proto::ibc::core::client::v1::Height as RawHeight;
+// use ibc_proto::ibc::core::connection::v1::ConnectionEnd as RawConnectionEnd;
+// use ibc_rs::core::ics02_client::client_consensus::AnyConsensusState;
+// use ibc_rs::core::ics03_connection::connection::ConnectionEnd;
+// use ibc_rs::core::ics04_channel::channel::ChannelEnd;
+// use ibc_rs::Height;
+//
+// impl Protobuf<RawConnectionEnd> for ConnectionEnd {}
+// impl Protobuf<Any> for AnyClientState {}
+// impl Protobuf<Any> for AnyConsensusState {}
+// impl Protobuf<RawChannel> for ChannelEnd {}
+// impl Protobuf<RawHeight> for Height {}

@@ -43,91 +43,91 @@ pub mod governance {
     include!(concat!(env!("OUT_DIR"), "/penumbra.governance.rs"));
 }
 
-/// Transaction structures.
-pub mod transaction {
-    include!(concat!(env!("OUT_DIR"), "/penumbra.transaction.rs"));
-}
+// /// Transaction structures.
+// pub mod transaction {
+//     include!(concat!(env!("OUT_DIR"), "/penumbra.transaction.rs"));
+// }
 
-/// Chain-related structures.
-pub mod chain {
-    tonic::include_proto!("penumbra.chain");
-}
-
-/// Client protocol structures.
-pub mod client {
-    pub mod oblivious {
-        tonic::include_proto!("penumbra.client.oblivious");
-    }
-    pub mod specific {
-        tonic::include_proto!("penumbra.client.specific");
-
-        use specific_query_client::SpecificQueryClient;
-        use tonic::{
-            body::BoxBody,
-            codegen::{Body, StdError},
-        };
-
-        // Convenience methods for fetching data...
-
-        impl<C> SpecificQueryClient<C> {
-            /// Get the Rust protobuf type corresponding to a state key.
-            ///
-            /// Prefer `key_domain` when applicable, because this gets the validated domain type,
-            /// rather than just the raw translation of the protobuf.
-            pub async fn key_proto<P>(&mut self, key: impl AsRef<str>) -> anyhow::Result<P>
-            where
-                P: prost::Message + Default + From<P>,
-                C: tonic::client::GrpcService<BoxBody> + 'static,
-                C::ResponseBody: Send,
-                <C::ResponseBody as Body>::Error: Into<StdError> + Send,
-            {
-                let request = KeyValueRequest {
-                    key: key.as_ref().as_bytes().to_vec(),
-                    ..Default::default()
-                };
-
-                let t = P::decode(self.key_value(request).await?.into_inner().value.as_slice())?;
-
-                Ok(t)
-            }
-
-            /// Get the typed domain value corresponding to a state key.
-            pub async fn key_domain<T, P>(&mut self, key: impl AsRef<str>) -> anyhow::Result<T>
-            where
-                T: crate::Protobuf<P> + TryFrom<P>,
-                T::Error: Into<anyhow::Error> + Send + Sync + 'static,
-                P: prost::Message + Default + From<T>,
-                C: tonic::client::GrpcService<BoxBody> + 'static,
-                C::ResponseBody: Send,
-                <C::ResponseBody as Body>::Error: Into<StdError> + Send,
-            {
-                let request = KeyValueRequest {
-                    key: key.as_ref().as_bytes().to_vec(),
-                    ..Default::default()
-                };
-
-                let t = T::decode(self.key_value(request).await?.into_inner().value.as_slice())?;
-
-                Ok(t)
-            }
-        }
-    }
-}
+// /// Chain-related structures.
+// pub mod chain {
+//     tonic::include_proto!("penumbra.chain");
+// }
+//
+// /// Client protocol structures.
+// pub mod client {
+//     pub mod oblivious {
+//         tonic::include_proto!("penumbra.client.oblivious");
+//     }
+//     pub mod specific {
+//         tonic::include_proto!("penumbra.client.specific");
+//
+//         use specific_query_client::SpecificQueryClient;
+//         use tonic::{
+//             body::BoxBody,
+//             codegen::{Body, StdError},
+//         };
+//
+//         // Convenience methods for fetching data...
+//
+//         impl<C> SpecificQueryClient<C> {
+//             /// Get the Rust protobuf type corresponding to a state key.
+//             ///
+//             /// Prefer `key_domain` when applicable, because this gets the validated domain type,
+//             /// rather than just the raw translation of the protobuf.
+//             pub async fn key_proto<P>(&mut self, key: impl AsRef<str>) -> anyhow::Result<P>
+//             where
+//                 P: prost::Message + Default + From<P>,
+//                 C: tonic::client::GrpcService<BoxBody> + 'static,
+//                 C::ResponseBody: Send,
+//                 <C::ResponseBody as Body>::Error: Into<StdError> + Send,
+//             {
+//                 let request = KeyValueRequest {
+//                     key: key.as_ref().as_bytes().to_vec(),
+//                     ..Default::default()
+//                 };
+//
+//                 let t = P::decode(self.key_value(request).await?.into_inner().value.as_slice())?;
+//
+//                 Ok(t)
+//             }
+//
+//             /// Get the typed domain value corresponding to a state key.
+//             pub async fn key_domain<T, P>(&mut self, key: impl AsRef<str>) -> anyhow::Result<T>
+//             where
+//                 T: crate::Protobuf<P> + TryFrom<P>,
+//                 T::Error: Into<anyhow::Error> + Send + Sync + 'static,
+//                 P: prost::Message + Default + From<T>,
+//                 C: tonic::client::GrpcService<BoxBody> + 'static,
+//                 C::ResponseBody: Send,
+//                 <C::ResponseBody as Body>::Error: Into<StdError> + Send,
+//             {
+//                 let request = KeyValueRequest {
+//                     key: key.as_ref().as_bytes().to_vec(),
+//                     ..Default::default()
+//                 };
+//
+//                 let t = T::decode(self.key_value(request).await?.into_inner().value.as_slice())?;
+//
+//                 Ok(t)
+//             }
+//         }
+//     }
+// }
 
 /// IBC protocol structures.
-pub mod ibc {
-    tonic::include_proto!("penumbra.ibc");
-}
+// pub mod ibc {
+//     // tonic::include_proto!("penumbra.ibc");
+// }
 
-/// View protocol structures.
-pub mod view {
-    tonic::include_proto!("penumbra.view");
-}
-
-/// Custody protocol structures.
-pub mod custody {
-    tonic::include_proto!("penumbra.custody");
-}
+// /// View protocol structures.
+// pub mod view {
+//     tonic::include_proto!("penumbra.view");
+// }
+//
+// /// Custody protocol structures.
+// pub mod custody {
+//     tonic::include_proto!("penumbra.custody");
+// }
 
 /// Transparent proofs.
 ///

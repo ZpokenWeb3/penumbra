@@ -46,7 +46,7 @@ fn main() -> Result<()> {
             "proto/transaction.proto",
             "proto/stake.proto",
             "proto/chain.proto",
-            "proto/ibc.proto",
+            // "proto/ibc.proto",
             "proto/dex.proto",
             "proto/governance.proto",
         ],
