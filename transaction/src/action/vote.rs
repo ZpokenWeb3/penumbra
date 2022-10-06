@@ -5,8 +5,12 @@ use std::{
 
 use decaf377_rdsa::{Signature, SpendAuth};
 use penumbra_crypto::{GovernanceKey, IdentityKey};
-use penumbra_proto::{governance as pb_g, transaction as pb_t, Protobuf};
+use penumbra_proto::{
+    core::governance::v1alpha1 as pb_g, core::transaction::v1alpha1 as pb_t, Protobuf,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::{ActionView, IsAction, TransactionPerspective};
 
 /// A vote on a proposal.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -109,6 +113,16 @@ pub struct ValidatorVote {
     pub body: ValidatorVoteBody,
     /// The signature authorizing the vote (signed with governance key over the body).
     pub auth_sig: Signature<SpendAuth>,
+}
+
+impl IsAction for ValidatorVote {
+    fn balance_commitment(&self) -> penumbra_crypto::balance::Commitment {
+        Default::default()
+    }
+
+    fn view_from_perspective(&self, _txp: &TransactionPerspective) -> ActionView {
+        ActionView::ValidatorVote(self.to_owned())
+    }
 }
 
 impl From<ValidatorVote> for pb_t::ValidatorVote {

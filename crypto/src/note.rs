@@ -4,7 +4,7 @@ use ark_ff::{PrimeField, UniformRand};
 use blake2b_simd;
 use decaf377::FieldExt;
 use once_cell::sync::Lazy;
-use penumbra_proto::crypto as pb;
+use penumbra_proto::core::crypto::v1alpha1 as pb;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use thiserror;
@@ -12,10 +12,10 @@ use thiserror;
 pub use penumbra_tct::Commitment;
 
 use crate::{
-    asset, fmd, ka,
+    asset, balance, fmd, ka,
     keys::{Diversifier, IncomingViewingKey, OutgoingViewingKey},
     symmetric::{OutgoingCipherKey, OvkWrappedKey, PayloadKey, PayloadKind},
-    value, Address, Fq, Value,
+    Address, Fq, Value,
 };
 
 pub const NOTE_LEN_BYTES: usize = 152;
@@ -112,7 +112,7 @@ impl Note {
         self.value.asset_id
     }
 
-    pub fn amount(&self) -> u64 {
+    pub fn amount(&self) -> asset::Amount {
         self.value.amount
     }
 
@@ -139,7 +139,7 @@ impl Note {
         &self,
         esk: &ka::Secret,
         ovk: &OutgoingViewingKey,
-        cv: value::Commitment,
+        cv: balance::Commitment,
     ) -> OvkWrappedKey {
         let epk = esk.diversified_public(&self.diversified_generator());
         let ock = OutgoingCipherKey::derive(ovk, cv, self.commit(), &epk);
@@ -160,7 +160,7 @@ impl Note {
     pub(crate) fn decrypt_key(
         wrapped_ovk: OvkWrappedKey,
         cm: Commitment,
-        cv: value::Commitment,
+        cv: balance::Commitment,
         ovk: &OutgoingViewingKey,
         epk: &ka::Public,
     ) -> Result<ka::SharedSecret, Error> {
@@ -185,7 +185,7 @@ impl Note {
         ciphertext: &[u8],
         wrapped_ovk: OvkWrappedKey,
         cm: Commitment,
-        cv: value::Commitment,
+        cv: balance::Commitment,
         ovk: &OutgoingViewingKey,
         epk: &ka::Public,
     ) -> Result<Note, Error> {
@@ -366,7 +366,7 @@ impl TryFrom<&[u8]> for Note {
                 .try_into()
                 .map_err(|_| Error::NoteDeserializationError)?,
             Value {
-                amount: u64::from_le_bytes(amount_bytes),
+                amount: amount_bytes.into(),
                 asset_id: asset::Id(
                     Fq::from_bytes(asset_id_bytes).map_err(|_| Error::NoteDeserializationError)?,
                 ),
@@ -403,7 +403,7 @@ mod tests {
         let (dest, _dtk_d) = ivk.payment_address(0u64.into());
 
         let value = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let note = Note::generate(&mut rng, &dest, value);
@@ -436,7 +436,7 @@ mod tests {
         let (dest, _dtk_d) = ivk.payment_address(0u64.into());
 
         let value = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let note = Note::generate(&mut rng, &dest, value);

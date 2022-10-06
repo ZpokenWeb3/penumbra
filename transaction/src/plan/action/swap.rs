@@ -2,10 +2,11 @@ use anyhow::{anyhow, Result};
 use ark_ff::UniformRand;
 use decaf377::Fq;
 use penumbra_crypto::dex::swap::SwapPlaintext;
+use penumbra_crypto::Balance;
 use penumbra_crypto::{
     proofs::transparent::SwapProof, FieldExt, Fr, FullViewingKey, Note, NotePayload, Value,
 };
-use penumbra_proto::{transaction as pb, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +18,8 @@ use crate::action::{swap, Swap};
 pub struct SwapPlan {
     // No commitments for the values, as they're plaintext
     // until flow encryption is available
-    // pub asset_1_commitment: value::Commitment,
-    // pub asset_2_commitment: value::Commitment,
+    // pub asset_1_commitment: balance::Commitment,
+    // pub asset_2_commitment: balance::Commitment,
     pub swap_plaintext: SwapPlaintext,
     pub fee_blinding: Fr,
     pub note_blinding: Fq,
@@ -58,7 +59,7 @@ impl SwapPlan {
         let swap_nft_asset_id = self.swap_plaintext.asset_id();
 
         let swap_nft_value = Value {
-            amount: 1,
+            amount: 1u64.into(),
             asset_id: swap_nft_asset_id,
         };
 
@@ -82,12 +83,11 @@ impl SwapPlan {
 
         swap::Body {
             trading_pair: self.swap_plaintext.trading_pair,
-            delta_1: self.swap_plaintext.delta_1,
-            delta_2: self.swap_plaintext.delta_2,
+            delta_1_i: self.swap_plaintext.delta_1_i,
+            delta_2_i: self.swap_plaintext.delta_2_i,
             fee_commitment,
             swap_nft,
             swap_ciphertext,
-            fee_blinding: self.fee_blinding,
         }
     }
 
@@ -99,12 +99,13 @@ impl SwapPlan {
             claim_address: self.swap_plaintext.claim_address,
             note_blinding: self.note_blinding,
             fee_delta: self.swap_plaintext.claim_fee.clone(),
+            fee_blinding: self.fee_blinding,
             value_t1: Value {
-                amount: self.swap_plaintext.delta_1,
+                amount: self.swap_plaintext.delta_1_i,
                 asset_id: self.swap_plaintext.trading_pair.asset_1(),
             },
             value_t2: Value {
-                amount: self.swap_plaintext.delta_2,
+                amount: self.swap_plaintext.delta_2_i,
                 asset_id: self.swap_plaintext.trading_pair.asset_2(),
             },
             swap_nft_asset_id,
@@ -114,6 +115,31 @@ impl SwapPlan {
             // delta_1_blinding: self.delta_1_blinding(),
             // delta_2_blinding: self.delta_2_blinding(),
         }
+    }
+
+    pub fn balance(&self) -> penumbra_crypto::Balance {
+        // Swaps must have spends corresponding to:
+        // - the input amount of asset 1
+        // - the input amount of asset 2
+        // - the pre-paid swap claim fee
+        let value_1 = Value {
+            amount: self.swap_plaintext.delta_1_i,
+            asset_id: self.swap_plaintext.trading_pair.asset_1(),
+        };
+        let value_2 = Value {
+            amount: self.swap_plaintext.delta_2_i,
+            asset_id: self.swap_plaintext.trading_pair.asset_2(),
+        };
+        let value_fee = Value {
+            amount: self.swap_plaintext.claim_fee.amount(),
+            asset_id: self.swap_plaintext.claim_fee.asset_id(),
+        };
+
+        let mut balance = Balance::default();
+        balance -= value_1;
+        balance -= value_2;
+        balance -= value_fee;
+        balance
     }
 }
 

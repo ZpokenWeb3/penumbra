@@ -58,16 +58,20 @@ extern crate async_stream;
 mod commitment;
 mod index;
 mod proof;
+mod random;
 mod tree;
+mod witness;
 
 pub mod error;
 pub mod storage;
 pub mod structure;
 pub mod validate;
+
 pub use commitment::Commitment;
 pub use internal::hash::Forgotten;
 pub use proof::Proof;
 pub use tree::{Position, Root, Tree};
+pub use witness::Witness;
 
 #[cfg(any(doc, feature = "internal"))]
 pub mod internal;
@@ -112,26 +116,6 @@ mod prelude {
         structure::{self, Kind, Node, Place},
         Commitment, Position, Proof, Root, Tree,
     };
-}
-
-/// When inserting a [`Commitment`] into a [`Tree`], should we [`Keep`](Witness::Keep) it to allow
-/// it to be witnessed later, or [`Forget`](Witness::Forget) about it after updating the root
-/// hash of the tree?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(proptest_derive::Arbitrary))]
-pub enum Witness {
-    /// When inserting a [`Commitment`] into a [`Tree`], this flag indicates that we should
-    /// immediately forget about it to save space, because we will not want to witness its presence
-    /// later.
-    ///
-    /// This is equivalent to inserting the commitment using [`Witness::Keep`] and then immediately
-    /// forgetting that same commitment using [`Tree::forget`], though it is more efficient to
-    /// directly forget commitments upon insertion rather than to remember them on insertion and
-    /// then immediately forget them.
-    Forget,
-    /// When inserting a [`Commitment`] into a [`Tree`], this flag indicates that we should keep
-    /// this commitment to allow it to be witnessed later.
-    Keep,
 }
 
 #[cfg(feature = "arbitrary")]

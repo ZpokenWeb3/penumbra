@@ -23,43 +23,72 @@ pub mod serializers;
 mod protobuf;
 pub use protobuf::Protobuf;
 
-/// Crypto structures.
-pub mod crypto {
-    include!(concat!(env!("OUT_DIR"), "/penumbra.crypto.rs"));
-}
+/// Core protocol structures.
+pub mod core {
+    /// Crypto structures.
+    pub mod crypto {
+        pub mod v1alpha1 {
+            include!("gen/penumbra.core.crypto.v1alpha1.rs");
+        }
+    }
 
-/// Staking structures.
-pub mod stake {
-    include!(concat!(env!("OUT_DIR"), "/penumbra.stake.rs"));
-}
+    /// Staking structures.
+    pub mod stake {
+        pub mod v1alpha1 {
+            include!("gen/penumbra.core.stake.v1alpha1.rs");
+        }
+    }
 
-/// Decentralized exchange structures.
-pub mod dex {
-    include!(concat!(env!("OUT_DIR"), "/penumbra.dex.rs"));
-}
+    /// Decentralized exchange structures.
+    pub mod dex {
+        pub mod v1alpha1 {
+            include!("gen/penumbra.core.dex.v1alpha1.rs");
+        }
+    }
 
-/// Governance structures.
-pub mod governance {
-    include!(concat!(env!("OUT_DIR"), "/penumbra.governance.rs"));
-}
-
-// /// Transaction structures.
-// pub mod transaction {
-//     include!(concat!(env!("OUT_DIR"), "/penumbra.transaction.rs"));
-// }
-
-// /// Chain-related structures.
-// pub mod chain {
-//     tonic::include_proto!("penumbra.chain");
-// }
+    /// Governance structures.
+    pub mod governance {
+        pub mod v1alpha1 {
+            include!("gen/penumbra.core.governance.v1alpha1.rs");
+        }
+    }
 //
-// /// Client protocol structures.
-// pub mod client {
-//     pub mod oblivious {
-//         tonic::include_proto!("penumbra.client.oblivious");
+//     /// Transaction structures.
+//     pub mod transaction {
+//         pub mod v1alpha1 {
+//             include!("gen/penumbra.core.transaction.v1alpha1.rs");
+//         }
 //     }
-//     pub mod specific {
-//         tonic::include_proto!("penumbra.client.specific");
+//
+//     /// Chain-related structures.
+//     pub mod chain {
+//         pub mod v1alpha1 {
+//             include!("gen/penumbra.core.chain.v1alpha1.rs");
+//         }
+//     }
+//
+//     /// IBC protocol structures.
+//     pub mod ibc {
+//         pub mod v1alpha1 {
+//             include!("gen/penumbra.core.ibc.v1alpha1.rs");
+//         }
+//     }
+//
+//     /// Transparent proofs.
+//     ///
+//     /// Note that these are protos for the "MVP" transparent version of Penumbra,
+//     /// i.e. not for production use and intentionally not private.
+//     pub mod transparent_proofs {
+//         pub mod v1alpha1 {
+//             include!("gen/penumbra.core.transparent_proofs.v1alpha1.rs");
+//         }
+//     }
+}
+
+/// Client protocol structures.
+// pub mod client {
+//     pub mod v1alpha1 {
+//         include!("gen/penumbra.client.v1alpha1.rs");
 //
 //         use specific_query_client::SpecificQueryClient;
 //         use tonic::{
@@ -79,6 +108,8 @@ pub mod governance {
 //                 P: prost::Message + Default + From<P>,
 //                 C: tonic::client::GrpcService<BoxBody> + 'static,
 //                 C::ResponseBody: Send,
+//                 <C as tonic::client::GrpcService<BoxBody>>::ResponseBody:
+//                     tonic::codegen::Body<Data = bytes::Bytes>,
 //                 <C::ResponseBody as Body>::Error: Into<StdError> + Send,
 //             {
 //                 let request = KeyValueRequest {
@@ -99,6 +130,8 @@ pub mod governance {
 //                 P: prost::Message + Default + From<T>,
 //                 C: tonic::client::GrpcService<BoxBody> + 'static,
 //                 C::ResponseBody: Send,
+//                 <C as tonic::client::GrpcService<BoxBody>>::ResponseBody:
+//                     tonic::codegen::Body<Data = bytes::Bytes>,
 //                 <C::ResponseBody as Body>::Error: Into<StdError> + Send,
 //             {
 //                 let request = KeyValueRequest {
@@ -114,25 +147,16 @@ pub mod governance {
 //     }
 // }
 
-/// IBC protocol structures.
-// pub mod ibc {
-//     // tonic::include_proto!("penumbra.ibc");
-// }
-
-// /// View protocol structures.
+/// View protocol structures.
 // pub mod view {
-//     tonic::include_proto!("penumbra.view");
+//     pub mod v1alpha1 {
+//         include!("gen/penumbra.view.v1alpha1.rs");
+//     }
 // }
 //
 // /// Custody protocol structures.
 // pub mod custody {
-//     tonic::include_proto!("penumbra.custody");
+//     pub mod v1alpha1 {
+//         include!("gen/penumbra.custody.v1alpha1.rs");
+//     }
 // }
-
-/// Transparent proofs.
-///
-/// Note that these are protos for the "MVP" transparent version of Penumbra,
-/// i.e. not for production use and intentionally not private.
-pub mod transparent_proofs {
-    include!(concat!(env!("OUT_DIR"), "/penumbra.transparent_proofs.rs"));
-}

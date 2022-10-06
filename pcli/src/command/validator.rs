@@ -3,7 +3,7 @@ use std::{fs::File, io::Write};
 use anyhow::{Context, Result};
 use penumbra_component::stake::{validator, validator::Validator, FundingStream, FundingStreams};
 use penumbra_crypto::{transaction::Fee, GovernanceKey, IdentityKey};
-use penumbra_proto::{stake::Validator as ProtoValidator, Message, Protobuf};
+use penumbra_proto::{core::stake::v1alpha1::Validator as ProtoValidator, Message, Protobuf};
 use penumbra_transaction::action::{ValidatorVote, ValidatorVoteBody, Vote};
 use penumbra_wallet::plan;
 use rand_core::OsRng;
@@ -103,7 +103,7 @@ impl ValidatorCmd {
                     File::open(&file).with_context(|| format!("cannot open file {:?}", file))?;
                 let new_validator: Validator = serde_json::from_reader(definition_file)
                     .map_err(|_| anyhow::anyhow!("Unable to parse validator definition"))?;
-                let fee = Fee::from_staking_token_amount(*fee);
+                let fee = Fee::from_staking_token_amount((*fee as u64).into());
 
                 // Sign the validator definition with the wallet's spend key.
                 let protobuf_serialized: ProtoValidator = new_validator.clone().into();
@@ -152,7 +152,7 @@ impl ValidatorCmd {
                 let vote = ValidatorVote { body, auth_sig };
 
                 // Construct a new transaction and include the validator definition.
-                let fee = Fee::from_staking_token_amount(*fee);
+                let fee = Fee::from_staking_token_amount((*fee as u64).into());
                 let plan = plan::validator_vote(&app.fvk, &mut app.view, OsRng, vote, fee, *source)
                     .await?;
                 app.build_and_submit_transaction(plan).await?;

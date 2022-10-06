@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display};
 
 use decaf377::{FieldExt, Fq};
 use hash_hasher::HashedMap;
-use penumbra_proto::{crypto as pb, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb, Protobuf};
 
 use crate::error::*;
 use crate::prelude::{Witness as _, *};
@@ -122,6 +122,22 @@ impl From<Position> for u64 {
 impl From<u64> for Position {
     fn from(position: u64) -> Self {
         Position(position.into())
+    }
+}
+
+impl From<(u16, u16, u16)> for Position {
+    fn from((epoch, block, commitment): (u16, u16, u16)) -> Self {
+        Position(index::within::Tree {
+            epoch: epoch.into(),
+            block: block.into(),
+            commitment: commitment.into(),
+        })
+    }
+}
+
+impl From<Position> for (u16, u16, u16) {
+    fn from(position: Position) -> Self {
+        (position.epoch(), position.block(), position.commitment())
     }
 }
 

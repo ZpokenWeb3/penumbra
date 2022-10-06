@@ -1,9 +1,6 @@
 //! Staking reward and delegation token exchange rates.
 
-use penumbra_proto::{
-    stake::{self as pb},
-    Protobuf,
-};
+use penumbra_proto::{core::stake::v1alpha1 as pb, Protobuf};
 use penumbra_transaction::action::{Delegate, Undelegate};
 use serde::{Deserialize, Serialize};
 
@@ -141,9 +138,9 @@ impl RateData {
     /// delegates `unbonded_amount` of the staking token.
     pub fn build_delegate(&self, unbonded_amount: u64) -> Delegate {
         Delegate {
-            delegation_amount: self.delegation_amount(unbonded_amount),
+            delegation_amount: self.delegation_amount(unbonded_amount).into(),
             epoch_index: self.epoch_index,
-            unbonded_amount,
+            unbonded_amount: unbonded_amount.into(),
             validator_identity: self.identity_key.clone(),
         }
     }
@@ -153,8 +150,8 @@ impl RateData {
     pub fn build_undelegate(&self, delegation_amount: u64) -> Undelegate {
         Undelegate {
             epoch_index: self.epoch_index,
-            delegation_amount,
-            unbonded_amount: self.unbonded_amount(delegation_amount),
+            delegation_amount: delegation_amount.into(),
+            unbonded_amount: self.unbonded_amount(delegation_amount).into(),
             validator_identity: self.identity_key.clone(),
         }
     }

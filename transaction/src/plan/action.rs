@@ -1,4 +1,8 @@
-use penumbra_proto::{ibc as pb_ibc, stake as pb_stake, transaction as pb_t, Protobuf};
+use penumbra_crypto::Balance;
+use penumbra_proto::{
+    core::ibc::v1alpha1 as pb_ibc, core::stake::v1alpha1 as pb_stake,
+    core::transaction::v1alpha1 as pb_t, Protobuf,
+};
 use serde::{Deserialize, Serialize};
 
 mod delegator_vote;
@@ -58,6 +62,34 @@ pub enum ActionPlan {
     PositionClose(PositionClose),
     PositionWithdraw(PositionWithdraw),
     PositionRewardClaim(PositionRewardClaim),
+}
+
+impl ActionPlan {
+    pub fn balance(&self) -> Balance {
+        use ActionPlan::*;
+
+        match self {
+            Spend(spend) => spend.balance(),
+            Output(output) => output.balance(),
+            Delegate(delegate) => delegate.balance(),
+            Undelegate(undelegate) => undelegate.balance(),
+            Swap(swap) => swap.balance(),
+            SwapClaim(swap_claim) => swap_claim.balance(),
+            ProposalSubmit(proposal_submit) => proposal_submit.balance(),
+            PositionOpen(_position_open) => todo!(),
+            PositionClose(_position_close) => todo!(),
+            PositionWithdraw(_position_withdraw) => todo!(),
+            PositionRewardClaim(_position_reward_claim) => {
+                todo!()
+            }
+            // None of these contribute to transaction balance:
+            IBCAction(_)
+            | ValidatorDefinition(_)
+            | ProposalWithdraw(_)
+            | DelegatorVote(_)
+            | ValidatorVote(_) => Balance::default(),
+        }
+    }
 }
 
 // Convenience impls that make declarative transaction construction easier.

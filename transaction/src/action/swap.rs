@@ -1,10 +1,14 @@
 use ark_ff::Zero;
-use decaf377::{FieldExt, Fr};
+use decaf377::Fr;
+use penumbra_crypto::asset::Amount;
 use penumbra_crypto::dex::TradingPair;
 use penumbra_crypto::proofs::transparent::SwapProof;
-use penumbra_crypto::{dex::swap::SwapCiphertext, value};
-use penumbra_crypto::{NotePayload, Value};
-use penumbra_proto::{dex as pb, Protobuf};
+use penumbra_crypto::{balance, dex::swap::SwapCiphertext};
+use penumbra_crypto::{Note, NotePayload, Value};
+use penumbra_proto::{core::dex::v1alpha1 as pb, Protobuf};
+
+use crate::view::action_view::SwapView;
+use crate::{ActionView, IsAction, TransactionPerspective};
 
 #[derive(Clone, Debug)]
 pub struct Swap {
@@ -18,22 +22,56 @@ pub struct Swap {
     pub body: Body,
 }
 
-impl Swap {
+impl IsAction for Swap {
     /// Compute a commitment to the value contributed to a transaction by this swap.
     /// Will subtract (v1,t1), (v2,t2), and (f,fee_token)
-    pub fn value_commitment(&self) -> value::Commitment {
+    fn balance_commitment(&self) -> balance::Commitment {
         let input_1 = Value {
-            amount: self.body.delta_1,
+            amount: self.body.delta_1_i,
             asset_id: self.body.trading_pair.asset_1(),
         }
         .commit(Fr::zero());
         let input_2 = Value {
-            amount: self.body.delta_2,
+            amount: self.body.delta_2_i,
             asset_id: self.body.trading_pair.asset_2(),
         }
         .commit(Fr::zero());
 
         -(input_1 + input_2 + self.body.fee_commitment)
+    }
+
+    fn view_from_perspective(&self, txp: &TransactionPerspective) -> ActionView {
+        let note_commitment = self.body.swap_nft.note_commitment;
+
+        // Get payload key for note commitment of swap NFT.
+
+        let swap_view = if let Some(payload_key) = txp.payload_keys.get(&note_commitment) {
+            // Decrypt swap NFT
+            let swap_nft =
+                Note::decrypt_with_payload_key(&self.body.swap_nft.encrypted_note, payload_key);
+
+            // Decrypt swap ciphertext
+            let swap_plaintext =
+                SwapCiphertext::decrypt_with_payload_key(&self.body.swap_ciphertext, payload_key);
+
+            if let (Ok(swap_nft), Ok(swap_plaintext)) = (swap_nft, swap_plaintext) {
+                SwapView::Visible {
+                    swap: self.to_owned(),
+                    swap_nft,
+                    swap_plaintext,
+                }
+            } else {
+                SwapView::Opaque {
+                    swap: self.to_owned(),
+                }
+            }
+        } else {
+            SwapView::Opaque {
+                swap: self.to_owned(),
+            }
+        };
+
+        ActionView::Swap(swap_view)
     }
 }
 
@@ -68,12 +106,11 @@ pub struct Body {
     pub trading_pair: TradingPair,
     // No commitments for the values, as they're plaintext
     // until flow encryption is available
-    // pub asset_1_commitment: value::Commitment,
-    // pub asset_2_commitment: value::Commitment,
-    pub delta_1: u64,
-    pub delta_2: u64,
-    pub fee_commitment: value::Commitment,
-    pub fee_blinding: Fr,
+    // pub asset_1_commitment: balance::Commitment,
+    // pub asset_2_commitment: balance::Commitment,
+    pub delta_1_i: Amount,
+    pub delta_2_i: Amount,
+    pub fee_commitment: balance::Commitment,
     // TODO: rename to note_payload
     pub swap_nft: NotePayload,
     pub swap_ciphertext: SwapCiphertext,
@@ -85,9 +122,8 @@ impl From<Body> for pb::SwapBody {
     fn from(s: Body) -> Self {
         pb::SwapBody {
             trading_pair: Some(s.trading_pair.into()),
-            delta_1: s.delta_1,
-            delta_2: s.delta_2,
-            fee_blinding: s.fee_blinding.to_bytes().to_vec(),
+            delta_1_i: Some(s.delta_1_i.into()),
+            delta_2_i: Some(s.delta_2_i.into()),
             fee_commitment: s.fee_commitment.to_bytes().to_vec(),
             swap_nft: Some(s.swap_nft.into()),
             swap_ciphertext: s.swap_ciphertext.0.to_vec(),
@@ -98,24 +134,27 @@ impl From<Body> for pb::SwapBody {
 impl TryFrom<pb::SwapBody> for Body {
     type Error = anyhow::Error;
     fn try_from(s: pb::SwapBody) -> Result<Self, Self::Error> {
-        let fee_blinding_bytes: [u8; 32] = s.fee_blinding[..]
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("proto malformed"))?;
-
         Ok(Self {
             trading_pair: s
                 .trading_pair
                 .ok_or_else(|| anyhow::anyhow!("missing trading_pair"))?
                 .try_into()?,
-            delta_1: s.delta_1,
-            delta_2: s.delta_2,
+
+            delta_1_i: s
+                .delta_1_i
+                .ok_or_else(|| anyhow::anyhow!("missing delta_1"))?
+                .try_into()?,
+            delta_2_i: s
+                .delta_2_i
+                .ok_or_else(|| anyhow::anyhow!("missing delta_2"))?
+                .try_into()?,
+
             fee_commitment: (&s.fee_commitment[..]).try_into()?,
             swap_nft: s
                 .swap_nft
                 .ok_or_else(|| anyhow::anyhow!("missing swap_nft"))?
                 .try_into()?,
             swap_ciphertext: (&s.swap_ciphertext[..]).try_into()?,
-            fee_blinding: Fr::from_bytes(fee_blinding_bytes)?,
         })
     }
 }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use penumbra_crypto::FullViewingKey;
 use penumbra_custody::{AuthorizeRequest, CustodyClient};
-use penumbra_proto::view::WitnessRequest;
+use penumbra_proto::view::v1alpha1::WitnessRequest;
 use penumbra_tct::Proof;
 use penumbra_transaction::{plan::TransactionPlan, Transaction};
 use penumbra_view::ViewClient;
@@ -31,7 +31,7 @@ where
     // since dummy spends will have a zero amount.
     let note_commitments = plan
         .spend_plans()
-        .filter(|plan| plan.note.amount() != 0)
+        .filter(|plan| plan.note.amount() != 0u64.into())
         .map(|spend| spend.note.commit().into())
         .chain(
             plan.swap_claim_plans()
@@ -49,7 +49,7 @@ where
     // note commitments corresponding to dummy spends also have proofs.
     for nc in plan
         .spend_plans()
-        .filter(|plan| plan.note.amount() == 0)
+        .filter(|plan| plan.note.amount() == 0u64.into())
         .map(|plan| plan.note.commit())
     {
         witness_data.add_proof(nc, Proof::dummy(&mut rng, nc));

@@ -1,7 +1,7 @@
 use ark_ff::Zero;
 use decaf377::Fq;
 use penumbra_crypto::{asset, Address, Note, Value};
-use penumbra_proto::{chain as pb, Protobuf};
+use penumbra_proto::{core::chain::v1alpha1 as pb, Protobuf};
 use serde::{Deserialize, Serialize};
 
 /// A (transparent) genesis allocation.
@@ -63,7 +63,7 @@ impl Allocation {
         Note::from_parts(
             self.address,
             Value {
-                amount: self.amount,
+                amount: self.amount.into(),
                 asset_id: asset::REGISTRY
                     .parse_denom(&self.denom)
                     .ok_or_else(|| anyhow::anyhow!("invalid denomination"))?

@@ -3,25 +3,33 @@ use std::{
     mem,
 };
 
+use anyhow::{anyhow, Result};
+
 use penumbra_component::stake::{rate::RateData, validator};
 use penumbra_crypto::{
+    asset::Amount,
+    asset::Denom,
+    dex::{swap::SwapPlaintext, BatchSwapOutputData, TradingPair},
     keys::AddressIndex,
     memo::MemoPlaintext,
     rdsa::{SpendAuth, VerificationKey},
     transaction::Fee,
     Address, DelegationToken, FieldExt, Fr, FullViewingKey, Note, Value, STAKING_TOKEN_ASSET_ID,
 };
-use penumbra_proto::view::NotesRequest;
+use penumbra_proto::view::v1alpha1::NotesRequest;
 use penumbra_tct as tct;
 use penumbra_transaction::{
     action::{Proposal, ProposalSubmit, ProposalWithdrawBody, ValidatorVote},
-    plan::{ActionPlan, MemoPlan, OutputPlan, ProposalWithdrawPlan, SpendPlan, TransactionPlan},
+    plan::{
+        ActionPlan, MemoPlan, OutputPlan, ProposalWithdrawPlan, SpendPlan, SwapClaimPlan, SwapPlan,
+        TransactionPlan,
+    },
 };
 use penumbra_view::ViewClient;
 use rand::{CryptoRng, RngCore};
 use tracing::instrument;
 
-pub use super::balance::Balance;
+use penumbra_crypto::Balance;
 
 /// A planner for a [`TransactionPlan`] that can fill in the required spends and change outputs upon
 /// finalization to make a transaction balance.
@@ -93,6 +101,79 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         let spend = SpendPlan::new(&mut self.rng, note, position).into();
         self.action(spend);
         self
+    }
+
+    /// Perform a swap claim based on an input swap NFT with a pre-paid fee.
+    #[instrument(skip(self))]
+    pub fn swap_claim(
+        &mut self,
+        swap_plaintext: SwapPlaintext,
+        swap_nft_note: Note,
+        swap_nft_position: tct::Position,
+        epoch_duration: u64,
+        output_data: BatchSwapOutputData,
+    ) -> &mut Self {
+        // Add a `SwapClaimPlan` action:
+        let swap_claim = SwapClaimPlan::new(
+            &mut self.rng,
+            swap_plaintext,
+            swap_nft_note,
+            swap_nft_position,
+            epoch_duration,
+            output_data,
+        )
+        .into();
+
+        // Nothing needs to be spent, since the fee is pre-paid and the
+        // swap NFT will be automatically consumed when the SwapClaim action
+        // is processed by the validators.
+        self.action(swap_claim);
+        self
+    }
+
+    /// Perform a swap based on input notes in the transaction.
+    #[instrument(skip(self))]
+    pub fn swap(
+        &mut self,
+        input_value: Value,
+        into_denom: Denom,
+        swap_claim_fee: Fee,
+        claim_address: Address,
+    ) -> Result<&mut Self> {
+        // Determine the canonical order for the assets being swapped.
+        // This will determine whether the input amount is assigned to delta_1 or delta_2.
+        let trading_pair =
+            TradingPair::canonical_order_for((input_value.asset_id, into_denom.id()))?;
+
+        // If `trading_pair.asset_1` is the input asset, then `delta_1` is the input amount,
+        // and `delta_2` is 0.
+        //
+        // Otherwise, `delta_1` is 0, and `delta_2` is the input amount.
+        let (delta_1, delta_2) = if trading_pair.asset_1() == input_value.asset_id {
+            (input_value.amount, 0u64.into())
+        } else {
+            (0u64.into(), input_value.amount)
+        };
+
+        // If there is no input, then there is no swap.
+        if delta_1 == Amount::zero() && delta_2 == Amount::zero() {
+            return Err(anyhow!("No input value for swap"));
+        }
+
+        // Create the `SwapPlaintext` representing the swap to be performed:
+        let swap_plaintext = SwapPlaintext::from_parts(
+            trading_pair,
+            delta_1,
+            delta_2,
+            swap_claim_fee,
+            claim_address,
+        )
+        .map_err(|_| anyhow!("error generating swap plaintext"))?;
+
+        let swap = SwapPlan::new(&mut self.rng, swap_plaintext).into();
+        self.action(swap);
+
+        Ok(self)
     }
 
     /// Add an output note from this transaction.
@@ -178,53 +259,8 @@ impl<R: RngCore + CryptoRng> Planner<R> {
     }
 
     fn action(&mut self, action: ActionPlan) -> &mut Self {
-        use ActionPlan::*;
-
-        // Track this action's contribution to the value balance of the transaction: this must match
-        // the actual contribution to the value commitment, but this isn't checked, so make sure
-        // that when you're adding a new action, you correctly match this up to the calculation of
-        // the value commitment for the transaction, or else the planner will submit transactions
-        // that are not balanced!
-        match &action {
-            Spend(spend) => self.balance += spend.note.value(),
-            Output(output) => self.balance -= output.value,
-            Delegate(delegate) => {
-                self.balance -= Value {
-                    amount: delegate.unbonded_amount,
-                    asset_id: *STAKING_TOKEN_ASSET_ID,
-                };
-                self.balance += Value {
-                    amount: delegate.delegation_amount,
-                    asset_id: DelegationToken::new(delegate.validator_identity).id(),
-                };
-            }
-            Undelegate(undelegate) => {
-                self.balance += Value {
-                    amount: undelegate.unbonded_amount,
-                    asset_id: *STAKING_TOKEN_ASSET_ID,
-                };
-                self.balance -= Value {
-                    amount: undelegate.delegation_amount,
-                    asset_id: DelegationToken::new(undelegate.validator_identity).id(),
-                };
-            }
-            ProposalSubmit(proposal_submit) => {
-                self.balance -= Value {
-                    amount: proposal_submit.deposit_amount,
-                    asset_id: *STAKING_TOKEN_ASSET_ID,
-                };
-            }
-            PositionOpen(_) => todo!(),
-            PositionClose(_) => todo!(),
-            PositionWithdraw(_) => todo!(),
-            PositionRewardClaim(_) => todo!(),
-            Swap(_) => todo!(),
-            SwapClaim(_) => todo!(),
-            IBCAction(_) => todo!(),
-            ValidatorDefinition(_) | ProposalWithdraw(_) | DelegatorVote(_) | ValidatorVote(_) => {
-                // No contribution to the value balance of the transaction
-            }
-        };
+        // Track the contribution of the action to the transaction's balance
+        self.balance += action.balance();
 
         // Add the action to the plan
         self.plan.actions.push(action);
@@ -281,7 +317,7 @@ impl<R: RngCore + CryptoRng> Planner<R> {
                     account_id: Some(fvk.hash().into()),
                     asset_id: Some(asset_id.into()),
                     address_index: source.map(Into::into),
-                    amount_to_spend: amount,
+                    amount_to_spend: amount.into(),
                     include_spent: false,
                 })
                 .await?,

@@ -1,7 +1,10 @@
 use std::convert::{TryFrom, TryInto};
 
-use penumbra_crypto::value;
-use penumbra_proto::{ibc as pb_ibc, stake as pbs, transaction as pb, Protobuf};
+use penumbra_crypto::balance;
+use penumbra_proto::{
+    core::ibc::v1alpha1 as pb_ibc, core::stake::v1alpha1 as pbs, core::transaction::v1alpha1 as pb,
+    Protobuf,
+};
 
 mod delegate;
 mod ibc;
@@ -13,6 +16,8 @@ pub mod swap;
 pub mod swap_claim;
 mod undelegate;
 mod vote;
+
+use crate::{ActionView, TransactionPerspective};
 
 pub use self::ibc::ICS20Withdrawal;
 pub use delegate::Delegate;
@@ -26,6 +31,12 @@ pub use swap::Swap;
 pub use swap_claim::SwapClaim;
 pub use undelegate::Undelegate;
 pub use vote::{DelegatorVote, ValidatorVote, ValidatorVoteBody, Vote};
+
+/// Common behavior between Penumbra actions.
+pub trait IsAction {
+    fn balance_commitment(&self) -> balance::Commitment;
+    fn view_from_perspective(&self, txp: &TransactionPerspective) -> ActionView;
+}
 
 /// An action performed by a Penumbra transaction.
 #[derive(Clone, Debug)]
@@ -52,31 +63,50 @@ pub enum Action {
     ICS20Withdrawal(ICS20Withdrawal),
 }
 
-impl Action {
-    /// Obtains or computes a commitment to the (typed) value added or subtracted from
-    /// the transaction's balance by this action.
-    pub fn value_commitment(&self) -> value::Commitment {
+impl IsAction for Action {
+    fn balance_commitment(&self) -> balance::Commitment {
         match self {
-            Action::Output(output) => output.body.value_commitment,
-            Action::Spend(spend) => spend.body.value_commitment,
-            Action::Delegate(delegate) => delegate.value_commitment(),
-            Action::Undelegate(undelegate) => undelegate.value_commitment(),
-            Action::Swap(swap) => swap.value_commitment(),
-            Action::SwapClaim(swap_claim) => swap_claim.value_commitment(),
-            // These actions just post data to the chain, and leave the value balance
-            // unchanged.
-            Action::ValidatorDefinition(_) => value::Commitment::default(),
-            Action::IBCAction(_) => value::Commitment::default(),
-            Action::ProposalSubmit(submit) => submit.value_commitment(),
-            Action::ProposalWithdraw(_) => value::Commitment::default(),
-            // Action::DelegatorVote(_) => value::Commitment::default(),
-            Action::ValidatorVote(_) => value::Commitment::default(),
+            Action::Output(output) => output.balance_commitment(),
+            Action::Spend(spend) => spend.balance_commitment(),
+            Action::Delegate(delegate) => delegate.balance_commitment(),
+            Action::Undelegate(undelegate) => undelegate.balance_commitment(),
+            Action::Swap(swap) => swap.balance_commitment(),
+            Action::SwapClaim(swap_claim) => swap_claim.balance_commitment(),
+            Action::ProposalSubmit(submit) => submit.balance_commitment(),
+            Action::ProposalWithdraw(withdraw) => withdraw.balance_commitment(),
+            // Action::DelegatorVote(_) => ...
+            Action::ValidatorVote(v) => v.balance_commitment(),
+            Action::PositionOpen(p) => p.balance_commitment(),
+            Action::PositionClose(p) => p.balance_commitment(),
+            Action::PositionWithdraw(p) => p.balance_commitment(),
+            Action::PositionRewardClaim(p) => p.balance_commitment(),
+            Action::ICS20Withdrawal(withdrawal) => withdrawal.balance_commitment(),
+            // These actions just post Protobuf data to the chain, and leave the
+            // value balance unchanged.
+            Action::ValidatorDefinition(_) => balance::Commitment::default(),
+            Action::IBCAction(_) => balance::Commitment::default(),
+        }
+    }
 
-            Action::PositionOpen(p) => p.value_commitment(),
-            Action::PositionClose(p) => p.value_commitment(),
-            Action::PositionWithdraw(p) => p.value_commitment(),
-            Action::PositionRewardClaim(p) => p.value_commitment(),
-            Action::ICS20Withdrawal(withdrawal) => withdrawal.value_commitment(),
+    fn view_from_perspective(&self, txp: &TransactionPerspective) -> ActionView {
+        match self {
+            Action::Swap(x) => x.view_from_perspective(txp),
+            Action::SwapClaim(x) => x.view_from_perspective(txp),
+            Action::Output(x) => x.view_from_perspective(txp),
+            Action::Spend(x) => x.view_from_perspective(txp),
+            Action::Delegate(x) => x.view_from_perspective(txp),
+            Action::Undelegate(x) => x.view_from_perspective(txp),
+            Action::ProposalSubmit(x) => x.view_from_perspective(txp),
+            Action::ProposalWithdraw(x) => x.view_from_perspective(txp),
+            Action::ValidatorVote(x) => x.view_from_perspective(txp),
+            Action::PositionOpen(x) => x.view_from_perspective(txp),
+            Action::PositionClose(x) => x.view_from_perspective(txp),
+            Action::PositionWithdraw(x) => x.view_from_perspective(txp),
+            Action::PositionRewardClaim(x) => x.view_from_perspective(txp),
+            Action::ICS20Withdrawal(x) => x.view_from_perspective(txp),
+            // TODO: figure out where to implement the actual decryption methods for these? where are their action definitions?
+            Action::ValidatorDefinition(x) => ActionView::ValidatorDefinition(x.to_owned()),
+            Action::IBCAction(x) => ActionView::IBCAction(x.to_owned()),
         }
     }
 }

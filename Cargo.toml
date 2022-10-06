@@ -1,5 +1,9 @@
 [workspace]
 
+exclude = [
+    "tools/proto-compiler",
+]
+
 # Also remember to add to .github/workflows/notes.yml
 members = [
   "decaf377-fmd",
@@ -12,8 +16,10 @@ members = [
   "custody",
   "measure",
   "storage",
+  "storage2",
   "tct",
   "tct-property-test",
+  "tct-visualize",
   "transaction",
   "wallet",
   "view",

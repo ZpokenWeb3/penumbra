@@ -1,0 +1,24 @@
+{{ $count := (.Values.numValidators | int) }}
+{{ range $i,$e := until $count }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "tm-config-val-{{$i}}"
+data:
+  config.toml: |
+    proxy_app = "tcp://localhost:26658"
+
+    [p2p]
+    max_num_inbound-peers = 50
+    max_num_outbound-peers = 50
+
+    persistent_peers = "{{ $.Files.Get (printf "pdcli/persistent_peers_%d.txt" $i) | trim }}"
+    private_peer_ids = "{{ $.Files.Get "pdcli/private_peers.txt" | trim }}"
+
+    [tx_index]
+    indexer = "null"
+
+    [instrumentation]
+    prometheus = true
+{{ end }}

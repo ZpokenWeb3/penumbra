@@ -5,18 +5,22 @@ use ark_ff::Zero;
 use bytes::Bytes;
 use decaf377_fmd::Clue;
 use penumbra_crypto::{
-    memo::MemoCiphertext,
+    memo::{MemoCiphertext, MemoPlaintext},
     rdsa::{Binding, Signature, VerificationKey, VerificationKeyBytes},
     transaction::Fee,
     Fr, NotePayload, Nullifier,
 };
-use penumbra_proto::{ibc as pb_ibc, stake as pbs, transaction as pbt, Message, Protobuf};
+use penumbra_proto::{
+    core::ibc::v1alpha1 as pb_ibc, core::stake::v1alpha1 as pbs,
+    core::transaction::v1alpha1 as pbt, Message, Protobuf,
+};
 use penumbra_tct as tct;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    action::{Delegate, Output, ProposalSubmit, ProposalWithdraw, Undelegate, ValidatorVote},
-    Action,
+    action::{Delegate, Output, ProposalSubmit, ProposalWithdraw, Swap, Undelegate, ValidatorVote},
+    view::action_view::OutputView,
+    Action, ActionView, IsAction, TransactionPerspective, TransactionView,
 };
 
 #[derive(Clone, Debug)]
@@ -38,6 +42,46 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    pub fn decrypt_with_perspective(&self, txp: &TransactionPerspective) -> TransactionView {
+        let mut avs = Vec::new();
+
+        let mut memo_plaintext: Option<MemoPlaintext> = None;
+
+        for action in self.actions() {
+            let action_view = action.view_from_perspective(txp);
+
+            // In the case of Output actions, decrypt the transaction memo if this hasn't already been done.
+            if let ActionView::Output(output) = &action_view {
+                if memo_plaintext.is_none() {
+                    memo_plaintext = match self.transaction_body().memo {
+                        Some(ciphertext) => match output {
+                            OutputView::Visible {
+                                output: _,
+                                decrypted_note: _,
+                                decrypted_memo_key,
+                            } => MemoPlaintext::decrypt(ciphertext, decrypted_memo_key).ok(),
+                            OutputView::Opaque { output: _ } => None,
+                        },
+                        None => None,
+                    }
+                }
+            }
+
+            avs.push(action_view);
+        }
+
+        TransactionView {
+            tx: self.clone(),
+            actions: avs,
+            expiry_height: self.transaction_body().expiry_height,
+            chain_id: self.transaction_body().chain_id,
+            fee: self.transaction_body().fee,
+            fmd_clues: self.transaction_body().fmd_clues,
+            //TODO: this MemoPlaintext -> String conversion is a bit eklig & should be fixed up when we get rid of MemoPlaintext entirely
+            memo: memo_plaintext.map(|x| String::from_utf8(x.0.to_vec()).unwrap()),
+        }
+    }
+
     pub fn actions(&self) -> impl Iterator<Item = &Action> {
         self.transaction_body.actions.iter()
     }
@@ -132,6 +176,16 @@ impl Transaction {
         })
     }
 
+    pub fn swaps(&self) -> impl Iterator<Item = &Swap> {
+        self.actions().filter_map(|action| {
+            if let Action::Swap(s) = action {
+                Some(s)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn note_payloads(&self) -> impl Iterator<Item = &NotePayload> {
         // This is somewhat cursed but avoids the need to allocate or erase types, I guess?
         self.actions()
@@ -181,18 +235,18 @@ impl Transaction {
 
     /// Compute the binding verification key from the transaction data.
     pub fn binding_verification_key(&self) -> VerificationKey<Binding> {
-        let mut value_commitments = decaf377::Element::default();
+        let mut balance_commitments = decaf377::Element::default();
         for action in &self.transaction_body.actions {
-            value_commitments += action.value_commitment().0;
+            balance_commitments += action.balance_commitment().0;
         }
 
         // Add fee into binding verification key computation.
         let fee_v_blinding = Fr::zero();
-        let fee_value_commitment = self.transaction_body.fee.commit(fee_v_blinding);
-        value_commitments -= fee_value_commitment.0;
+        let fee_balance_commitment = self.transaction_body.fee.commit(fee_v_blinding);
+        balance_commitments -= fee_balance_commitment.0;
 
         let binding_verification_key_bytes: VerificationKeyBytes<Binding> =
-            value_commitments.vartime_compress().0.into();
+            balance_commitments.vartime_compress().0.into();
 
         binding_verification_key_bytes
             .try_into()

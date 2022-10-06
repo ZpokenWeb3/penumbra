@@ -6,9 +6,9 @@ use chacha20poly1305::{
 use rand::{CryptoRng, RngCore};
 
 use crate::{
-    ka,
+    balance, ka,
     keys::{IncomingViewingKey, OutgoingViewingKey},
-    note, value,
+    note,
 };
 
 pub const PAYLOAD_KEY_LEN_BYTES: usize = 32;
@@ -17,9 +17,13 @@ pub const MEMOKEY_WRAPPED_LEN_BYTES: usize = 48;
 
 /// Represents the item to be encrypted/decrypted with the [`PayloadKey`].
 pub enum PayloadKind {
+    /// Note is action-scoped.
     Note,
+    /// MemoKey is action-scoped.
     MemoKey,
+    /// Swap is action-scoped.
     Swap,
+    /// Memo is transaction-scoped.
     Memo,
 }
 
@@ -114,7 +118,7 @@ impl OutgoingCipherKey {
     /// Use Blake2b-256 to derive an encryption key `ock` from the OVK and public fields.
     pub(crate) fn derive(
         ovk: &OutgoingViewingKey,
-        cv: value::Commitment,
+        cv: balance::Commitment,
         cm: note::Commitment,
         epk: &ka::Public,
     ) -> Self {

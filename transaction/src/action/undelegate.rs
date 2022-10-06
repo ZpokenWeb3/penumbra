@@ -1,8 +1,11 @@
+use ark_ff::Zero;
 use penumbra_crypto::{
-    value, DelegationToken, Fr, IdentityKey, Value, Zero, STAKING_TOKEN_ASSET_ID,
+    asset::Amount, Balance, DelegationToken, Fr, IdentityKey, Value, STAKING_TOKEN_ASSET_ID,
 };
-use penumbra_proto::{stake as pb, Protobuf};
+use penumbra_proto::{core::stake::v1alpha1 as pb, Protobuf};
 use serde::{Deserialize, Serialize};
+
+use crate::{ActionView, IsAction, TransactionPerspective};
 
 /// A transaction action withdrawing stake from a validator's delegation pool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,31 +17,40 @@ pub struct Undelegate {
     /// The undelegation takes effect after the unbonding period.
     pub epoch_index: u64,
     /// The amount to undelegate, in units of unbonded stake.
-    pub unbonded_amount: u64,
+    pub unbonded_amount: Amount,
     /// The amount of delegation tokens produced by this action.
     ///
     /// This is implied by the validator's exchange rate in the specified epoch
     /// (and should be checked in transaction validation!), but including it allows
     /// stateless verification that the transaction is internally consistent.
-    pub delegation_amount: u64,
+    pub delegation_amount: Amount,
+}
+
+impl IsAction for Undelegate {
+    fn balance_commitment(&self) -> penumbra_crypto::balance::Commitment {
+        self.balance().commit(Fr::zero())
+    }
+
+    fn view_from_perspective(&self, _txp: &TransactionPerspective) -> ActionView {
+        ActionView::Undelegate(self.to_owned())
+    }
 }
 
 impl Undelegate {
     /// Compute a commitment to the value contributed to a transaction by this undelegation.
-    pub fn value_commitment(&self) -> value::Commitment {
+    pub fn balance(&self) -> Balance {
         let stake = Value {
             amount: self.unbonded_amount,
             asset_id: STAKING_TOKEN_ASSET_ID.clone(),
-        }
-        .commit(Fr::zero());
+        };
+
         let delegation = Value {
             amount: self.delegation_amount,
             asset_id: DelegationToken::new(self.validator_identity.clone()).id(),
-        }
-        .commit(Fr::zero());
+        };
 
         // We consume the delegation tokens and produce the staking tokens.
-        stake - delegation
+        Balance::from(stake) - delegation
     }
 }
 
@@ -49,8 +61,8 @@ impl From<Undelegate> for pb::Undelegate {
         pb::Undelegate {
             validator_identity: Some(d.validator_identity.into()),
             epoch_index: d.epoch_index,
-            unbonded_amount: d.unbonded_amount,
-            delegation_amount: d.delegation_amount,
+            unbonded_amount: Some(d.unbonded_amount.into()),
+            delegation_amount: Some(d.delegation_amount.into()),
         }
     }
 }
@@ -64,8 +76,14 @@ impl TryFrom<pb::Undelegate> for Undelegate {
                 .ok_or_else(|| anyhow::anyhow!("missing validator identity"))?
                 .try_into()?,
             epoch_index: d.epoch_index,
-            unbonded_amount: d.unbonded_amount,
-            delegation_amount: d.delegation_amount,
+            unbonded_amount: d
+                .unbonded_amount
+                .ok_or_else(|| anyhow::anyhow!("missing unbonded amount"))?
+                .try_into()?,
+            delegation_amount: d
+                .delegation_amount
+                .ok_or_else(|| anyhow::anyhow!("missing delegation amount"))?
+                .try_into()?,
         })
     }
 }

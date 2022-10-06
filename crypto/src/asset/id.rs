@@ -1,8 +1,9 @@
+use crate::Amount;
 use ark_ff::fields::PrimeField;
 use ark_serialize::CanonicalDeserialize;
 use decaf377::FieldExt;
 use once_cell::sync::Lazy;
-use penumbra_proto::{crypto as pb, serializers::bech32str, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb, serializers::bech32str, Protobuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{Fq, Value};
@@ -115,7 +116,7 @@ impl Id {
     }
 
     /// Create a value of this denomination.
-    pub fn value(&self, amount: u64) -> Value {
+    pub fn value(&self, amount: Amount) -> Value {
         Value {
             amount,
             asset_id: self.clone(),

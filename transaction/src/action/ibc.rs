@@ -1,6 +1,11 @@
-use penumbra_crypto::{value, Address, Fr, Zero};
-use penumbra_proto::{ibc as pb, Protobuf};
+use ark_ff::Zero;
+use penumbra_crypto::{value, Address, Balance, Fr};
+use penumbra_proto::{core::ibc::v1alpha1 as pb, Protobuf};
 use serde::{Deserialize, Serialize};
+
+use crate::{ActionView, TransactionPerspective};
+
+use super::IsAction;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "pb::Ics20Withdrawal", into = "pb::Ics20Withdrawal")]
@@ -24,16 +29,19 @@ pub struct ICS20Withdrawal {
     pub timeout_time: u64,
 }
 
-impl ICS20Withdrawal {
-    pub fn value_commitment(&self) -> value::Commitment {
-        // we need to compute a value commitment to the transparent value of this withdrawal
-        let withdrawal_value = self.value.commit(Fr::zero());
+impl IsAction for ICS20Withdrawal {
+    fn balance_commitment(&self) -> penumbra_crypto::balance::Commitment {
+        self.balance().commit(Fr::zero())
+    }
 
-        // Consume from the withdrawal value. This should be negative because it consumes from the value
-        // balance of the transaction. when we compute the binding verification key, we sum all of
-        // the value commitments. Thus, there should be a spend that ouputs a positive value
-        // balance to this tx prior to this withdrawal action.
-        -withdrawal_value
+    fn view_from_perspective(&self, _txp: &TransactionPerspective) -> ActionView {
+        ActionView::ICS20Withdrawal(self.to_owned())
+    }
+}
+
+impl ICS20Withdrawal {
+    pub fn balance(&self) -> Balance {
+        -Balance::from(self.value)
     }
 }
 

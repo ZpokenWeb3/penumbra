@@ -2,10 +2,7 @@ use blake2b_simd::{Hash, Params};
 use decaf377::FieldExt;
 use decaf377_fmd::Clue;
 use penumbra_crypto::{FullViewingKey, PayloadKey};
-use penumbra_proto::{
-    transaction::{self as pb},
-    Message, Protobuf,
-};
+use penumbra_proto::{core::transaction::v1alpha1 as pb, Message, Protobuf};
 
 use crate::{
     action::{
@@ -248,7 +245,7 @@ impl AuthorizingData for output::Body {
         state.update(&self.note_payload.note_commitment.0.to_bytes());
         state.update(&self.note_payload.ephemeral_key.0);
         state.update(&self.note_payload.encrypted_note);
-        state.update(&self.value_commitment.to_bytes());
+        state.update(&self.balance_commitment.to_bytes());
         state.update(&self.wrapped_memo_key.0);
         state.update(&self.ovk_wrapped_key.0);
 
@@ -264,7 +261,7 @@ impl AuthorizingData for spend::Body {
 
         // All of these fields are fixed-length, so we can just throw them
         // in the hash one after the other.
-        state.update(&self.value_commitment.to_bytes());
+        state.update(&self.balance_commitment.to_bytes());
         state.update(&self.nullifier.0.to_bytes());
         state.update(&self.rk.to_bytes());
 
@@ -281,8 +278,8 @@ impl AuthorizingData for swap::Body {
         // All of these fields are fixed-length, so we can just throw them
         // in the hash one after the other.
         state.update(self.trading_pair.auth_hash().as_bytes());
-        state.update(&self.delta_1.to_le_bytes());
-        state.update(&self.delta_2.to_le_bytes());
+        state.update(&self.delta_1_i.to_le_bytes());
+        state.update(&self.delta_2_i.to_le_bytes());
         state.update(&self.fee_commitment.to_bytes());
         state.update(self.swap_nft.auth_hash().as_bytes());
         state.update(&self.swap_ciphertext.0);
@@ -559,7 +556,7 @@ mod tests {
             &mut OsRng,
             &addr,
             penumbra_crypto::Value {
-                amount: 10000,
+                amount: 10000u64.into(),
                 asset_id: *STAKING_TOKEN_ASSET_ID,
             },
         );
@@ -567,7 +564,7 @@ mod tests {
             &mut OsRng,
             &addr,
             penumbra_crypto::Value {
-                amount: 20000,
+                amount: 20000u64.into(),
                 asset_id: *STAKING_TOKEN_ASSET_ID,
             },
         );
@@ -583,10 +580,10 @@ mod tests {
 
         let swap_plaintext = SwapPlaintext {
             trading_pair,
-            delta_1: 100000,
-            delta_2: 1,
+            delta_1_i: 100000u64.into(),
+            delta_2_i: 1u64.into(),
             claim_fee: Fee(Value {
-                amount: 3,
+                amount: 3u64.into(),
                 asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
             }),
             claim_address: addr,
@@ -602,7 +599,7 @@ mod tests {
                 OutputPlan::new(
                     &mut OsRng,
                     Value {
-                        amount: 30000,
+                        amount: 30000u64.into(),
                         asset_id: *STAKING_TOKEN_ASSET_ID,
                     },
                     addr.clone(),

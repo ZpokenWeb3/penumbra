@@ -2,10 +2,10 @@ use anyhow::Error;
 use blake2b_simd::Hash;
 use bytes::Bytes;
 use decaf377::FieldExt;
-use penumbra_proto::{crypto as pb, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb, Protobuf};
 use serde::{Deserialize, Serialize};
 
-use crate::{ka, note, FullViewingKey, Note};
+use crate::{asset::Amount, ka, note, FullViewingKey, Note};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "pb::NotePayload", into = "pb::NotePayload")]
@@ -29,8 +29,8 @@ impl NotePayload {
 
         // Verification logic (if any fails, return None & log error)
         // Reject notes with zero amount
-        if note.amount() == 0 {
-            // This is only debug-level because it can happen honestly (e.g., swap claims).
+        if note.amount() == Amount::zero() {
+            // This is only debug-level because it can happen honestly (e.g., swap claims, dummy spends).
             tracing::debug!("ignoring note recording zero assets");
             return None;
         }
@@ -49,6 +49,15 @@ impl NotePayload {
             return None;
         }
 
+        // NOTE: We intentionally return `Option` here instead of `Result`
+        // such that we gracefully drop malformed notes instead of returning an error
+        // that may propagate up the call stack and cause a panic.
+        // All errors in parsing notes must not cause a panic in the view service.
+        // A panic when parsing a specific note could link the fact that the malformed
+        // note can be successfully decrypted with a specific IP.
+        //
+        // See "REJECT" attack (CVE-2019-16930) for a similar attack in ZCash
+        // Section 4.1 in https://crypto.stanford.edu/timings/pingreject.pdf
         Some(note)
     }
 

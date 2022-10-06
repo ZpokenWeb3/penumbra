@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use comfy_table::{presets, Table};
 use penumbra_crypto::dex::{lp::Reserves, BatchSwapOutputData, TradingPair};
-use penumbra_proto::client::specific::{BatchSwapOutputDataRequest, StubCpmmReservesRequest};
+use penumbra_proto::client::v1alpha1::{BatchSwapOutputDataRequest, StubCpmmReservesRequest};
 use penumbra_view::ViewClient;
 
 use crate::App;
@@ -120,21 +120,53 @@ impl DexCmd {
                         "Failure"
                     }
                 );
+
+                let view_client: &mut dyn ViewClient = &mut app.view;
+                let asset_cache = view_client.assets().await?;
+                let asset_1 = asset_cache
+                    .get(&trading_pair.asset_1())
+                    .map(|base_denom| {
+                        let display_denom = base_denom
+                            .best_unit_for(std::cmp::max(outputs.delta_1, outputs.lambda_1).into());
+                        (
+                            format!("{}", display_denom),
+                            display_denom.format_value(outputs.delta_1.into()),
+                            display_denom.format_value(outputs.lambda_1.into()),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            format!("{}", trading_pair.asset_1()),
+                            outputs.delta_1.to_string(),
+                            outputs.lambda_1.to_string(),
+                        )
+                    });
+                let asset_2 = asset_cache
+                    .get(&trading_pair.asset_2())
+                    .map(|base_denom| {
+                        let display_denom = base_denom
+                            .best_unit_for(std::cmp::max(outputs.delta_2, outputs.lambda_2).into());
+                        (
+                            format!("{}", display_denom),
+                            display_denom.format_value(outputs.delta_2.into()),
+                            display_denom.format_value(outputs.lambda_2.into()),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            format!("{}", trading_pair.asset_2()),
+                            outputs.delta_2.to_string(),
+                            outputs.lambda_2.to_string(),
+                        )
+                    });
+
                 println!("Batch Swap Outputs for height {}:", outputs.height);
                 let mut table = Table::new();
                 table.load_preset(presets::NOTHING);
                 table
-                    .set_header(vec!["Asset ID", "Input Amount", "Output Amount"])
-                    .add_row(vec![
-                        outputs.trading_pair.asset_1().to_string(),
-                        outputs.delta_1.to_string(),
-                        outputs.lambda_1.to_string(),
-                    ])
-                    .add_row(vec![
-                        outputs.trading_pair.asset_2().to_string(),
-                        outputs.delta_2.to_string(),
-                        outputs.lambda_2.to_string(),
-                    ]);
+                    .set_header(vec!["Denomination", "Input Amount", "Output Amount"])
+                    .add_row(vec![asset_1.0, asset_1.1, asset_1.2])
+                    .add_row(vec![asset_2.0, asset_2.1, asset_2.2]);
 
                 println!("{}", table);
             }

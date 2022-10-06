@@ -2,13 +2,15 @@ use std::io::{Cursor, Read, Write};
 
 use ark_serialize::CanonicalDeserialize;
 use f4jumble::{f4jumble, f4jumble_inv};
-use penumbra_proto::{crypto as pb, serializers::bech32str, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb, serializers::bech32str, Protobuf};
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 
 use crate::{fmd, ka, keys::Diversifier, Fq};
 
 pub const ADDRESS_LEN_BYTES: usize = 80;
+/// Number of bits in the address short form divided by the number of bits per Bech32m character
+pub const ADDRESS_NUM_CHARS_SHORT_FORM: usize = 24;
 
 /// A valid payment address.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,7 +38,6 @@ impl Address {
     /// of an [`Fq`] `s` value.
     pub(crate) fn from_components(
         d: Diversifier,
-        g_d: decaf377::Element,
         pk_d: ka::Public,
         ck_d: fmd::ClueKey,
     ) -> Option<Self> {
@@ -46,7 +47,7 @@ impl Address {
             // don't need an error type here, caller will probably .expect anyways
             Some(Self {
                 d,
-                g_d,
+                g_d: d.diversified_generator(),
                 pk_d,
                 ck_d,
                 transmission_key_s,
@@ -105,11 +106,20 @@ impl Address {
         let diversifier = Diversifier(diversifier_bytes);
         Address::from_components(
             diversifier,
-            diversifier.diversified_generator(),
             ka::Public(pk_d_bytes),
             fmd::ClueKey(clue_key_bytes),
         )
         .expect("generated dummy address")
+    }
+
+    /// Short form suitable for displaying in a UI.
+    pub fn display_short_form(&self) -> String {
+        let full_address = format!("{}", self);
+        // Fixed prefix is `penumbrav2t` plus the Bech32m separator `1`.
+        let fixed_prefix = format!("{}{}", bech32str::address::BECH32_PREFIX, '1');
+        let num_chars_to_display = fixed_prefix.len() + ADDRESS_NUM_CHARS_SHORT_FORM;
+
+        format!("{}…", &full_address[0..num_chars_to_display])
     }
 }
 
@@ -204,7 +214,6 @@ impl TryFrom<&[u8]> for Address {
 
         let address = Address::from_components(
             diversifier,
-            diversifier.diversified_generator(),
             ka::Public(pk_d_bytes),
             fmd::ClueKey(clue_key_bytes),
         );

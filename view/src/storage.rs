@@ -5,11 +5,10 @@ use parking_lot::Mutex;
 use penumbra_chain::params::{ChainParameters, FmdParameters};
 use penumbra_crypto::{
     asset::{self, Id},
-    Asset, FieldExt, FullViewingKey, Nullifier,
+    Amount, Asset, FieldExt, FullViewingKey, Nullifier,
 };
 use penumbra_proto::{
-    client::oblivious::{oblivious_query_client::ObliviousQueryClient, ChainParamsRequest},
-    view::TransactionHashStreamResponse,
+    client::v1alpha1::{oblivious_query_client::ObliviousQueryClient, ChainParamsRequest},
     Protobuf,
 };
 use penumbra_tct as tct;
@@ -18,7 +17,7 @@ use sha2::Digest;
 use sqlx::{migrate::MigrateDatabase, query, Pool, Sqlite};
 use std::{num::NonZeroU64, sync::Arc};
 use tct::Commitment;
-use tokio::sync::broadcast;
+use tokio::sync::broadcast::{self, error::RecvError};
 
 use crate::{sync::FilteredBlock, QuarantinedNoteRecord, SpendableNoteRecord};
 
@@ -205,12 +204,29 @@ impl Storage {
 
             // Otherwise, wait for newly detected notes and check whether they're
             // the requested one.
-            loop {
-                let record = rx.recv().await.context("Change subscriber failed")?;
 
-                if record.note_commitment == note_commitment {
-                    return Ok(record);
-                }
+            loop {
+                match rx.recv().await {
+                    Ok(record) => {
+                        if record.note_commitment == note_commitment {
+                            return Ok(record);
+                        }
+                    }
+
+                    Err(e) => match e {
+                        RecvError::Closed => {
+                            return Err(anyhow!(
+                            "Receiver error during note detection: closed (no more active senders)"
+                        ))
+                        }
+                        RecvError::Lagged(count) => {
+                            return Err(anyhow!(
+                                "Receiver error during note detection: lagged (by {:?} messages)",
+                                count
+                            ))
+                        }
+                    },
+                };
             }
         }
     }
@@ -335,12 +351,12 @@ impl Storage {
         tx.commit().await?;
         Ok(tree)
     }
-
-    pub async fn transactions(
+    /// Returns a tuple of (block height, transaction hash) for all transactions in a given range of block heights.
+    pub async fn transaction_hashes(
         &self,
         start_height: Option<u64>,
         end_height: Option<u64>,
-    ) -> anyhow::Result<Vec<TransactionHashStreamResponse>> {
+    ) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
         let starting_block = start_height.unwrap_or(0) as i64;
         let ending_block = end_height.unwrap_or(self.last_sync_height().await?.unwrap_or(0)) as i64;
 
@@ -354,14 +370,41 @@ impl Storage {
         .fetch_all(&self.pool)
         .await?;
 
-        let mut output: Vec<TransactionHashStreamResponse> = Vec::new();
+        let mut output: Vec<(u64, Vec<u8>)> = Vec::new();
 
         for record in result {
-            let tx_hash_response = TransactionHashStreamResponse {
-                block_height: record.block_height as u64,
-                tx_hash: record.tx_hash,
-            };
-            output.push(tx_hash_response);
+            output.push((record.block_height as u64, record.tx_hash));
+        }
+
+        Ok(output)
+    }
+    /// Returns a tuple of (block height, transaction hash, transaction) for all transactions in a given range of block heights.
+    pub async fn transactions(
+        &self,
+        start_height: Option<u64>,
+        end_height: Option<u64>,
+    ) -> anyhow::Result<Vec<(u64, Vec<u8>, Transaction)>> {
+        let starting_block = start_height.unwrap_or(0) as i64;
+        let ending_block = end_height.unwrap_or(self.last_sync_height().await?.unwrap_or(0)) as i64;
+
+        let result = sqlx::query!(
+            "SELECT block_height, tx_hash, tx_bytes
+            FROM tx
+            WHERE block_height BETWEEN ? AND ?",
+            starting_block,
+            ending_block
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut output: Vec<(u64, Vec<u8>, Transaction)> = Vec::new();
+
+        for record in result {
+            output.push((
+                record.block_height as u64,
+                record.tx_hash,
+                Transaction::decode(record.tx_bytes.as_slice())?,
+            ));
         }
 
         Ok(output)
@@ -448,7 +491,7 @@ impl Storage {
         // uint64 amount_to_spend = 5;
         //TODO: figure out a clever way to only return notes up to the sum using SQL
         let amount_cutoff = (amount_to_spend != 0) && !(include_spent || asset_id.is_none());
-        let mut amount_total = 0;
+        let mut amount_total = Amount::zero();
 
         let mut output: Vec<SpendableNoteRecord> = Vec::new();
 
@@ -459,14 +502,14 @@ impl Storage {
             // and check if we should break out of the loop.
             if amount_cutoff {
                 // We know all the notes are of the same type, so adding raw quantities makes sense.
-                amount_total += amount;
-                if amount_total >= amount_to_spend {
+                amount_total = amount_total + amount;
+                if amount_total >= amount_to_spend.into() {
                     break;
                 }
             }
         }
 
-        if amount_total < amount_to_spend {
+        if amount_total < amount_to_spend.into() {
             return Err(anyhow!(
                 "requested amount of {} exceeds total of {}",
                 amount_to_spend,
@@ -625,7 +668,7 @@ impl Storage {
                 .to_vec();
             let height_created = filtered_block.height as i64;
             let address = quarantined_note_record.note.address().to_vec();
-            let amount = quarantined_note_record.note.amount() as i64;
+            let amount = u64::from(quarantined_note_record.note.amount()) as i64;
             let asset_id = quarantined_note_record.note.asset_id().to_bytes().to_vec();
             let blinding_factor = quarantined_note_record
                 .note
@@ -688,7 +731,7 @@ impl Storage {
             let note_commitment = note_record.note_commitment.0.to_bytes().to_vec();
             let height_created = filtered_block.height as i64;
             let address = note_record.note.address().to_vec();
-            let amount = note_record.note.amount() as i64;
+            let amount = u64::from(note_record.note.amount()) as i64;
             let asset_id = note_record.note.asset_id().to_bytes().to_vec();
             let blinding_factor = note_record.note.note_blinding().to_bytes().to_vec();
             let address_index = note_record.address_index.to_bytes().to_vec();

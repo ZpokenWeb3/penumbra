@@ -4,7 +4,7 @@ use penumbra_crypto::{
     proofs::transparent::SpendProof, Address, FieldExt, Fq, Fr, FullViewingKey, Note, Value,
     STAKING_TOKEN_ASSET_ID,
 };
-use penumbra_proto::{transaction as pb, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
 use penumbra_tct as tct;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ impl SpendPlan {
         let dummy_note = Note::from_parts(
             dummy_address,
             Value {
-                amount: 0,
+                amount: 0u64.into(),
                 asset_id: *STAKING_TOKEN_ASSET_ID,
             },
             note_blinding,
@@ -70,7 +70,7 @@ impl SpendPlan {
     /// Construct the [`spend::Body`] described by this [`SpendPlan`].
     pub fn spend_body(&self, fvk: &FullViewingKey) -> spend::Body {
         spend::Body {
-            value_commitment: self.note.value().commit(self.value_blinding),
+            balance_commitment: self.note.value().commit(self.value_blinding),
             nullifier: fvk.derive_nullifier(self.position, &self.note.commit()),
             rk: fvk.spend_verification_key().randomize(&self.randomizer),
         }
@@ -84,16 +84,20 @@ impl SpendPlan {
     ) -> SpendProof {
         SpendProof {
             note_commitment_proof,
-            g_d: self.note.diversified_generator(),
-            pk_d: *self.note.transmission_key(),
-            ck_d: *self.note.clue_key(),
-            value: self.note.value(),
+            note: self.note.clone(),
             v_blinding: self.value_blinding,
-            note_blinding: self.note.note_blinding(),
             spend_auth_randomizer: self.randomizer,
             ak: *fvk.spend_verification_key(),
             nk: *fvk.nullifier_key(),
         }
+    }
+
+    pub fn balance(&self) -> penumbra_crypto::Balance {
+        penumbra_crypto::Value {
+            amount: self.note.value().amount,
+            asset_id: self.note.value().asset_id,
+        }
+        .into()
     }
 }
 

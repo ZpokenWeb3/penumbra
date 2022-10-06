@@ -16,9 +16,8 @@ use pd::testnet::{canonicalize_path, generate_tm_config, write_configs, Validato
 use penumbra_chain::{genesis::Allocation, params::ChainParameters};
 use penumbra_component::stake::{validator::Validator, FundingStream, FundingStreams};
 use penumbra_crypto::{keys::SpendKey, DelegationToken, GovernanceKey};
-use penumbra_proto::client::{
-    oblivious::oblivious_query_server::ObliviousQueryServer,
-    specific::specific_query_server::SpecificQueryServer,
+use penumbra_proto::client::v1alpha1::{
+    oblivious_query_server::ObliviousQueryServer, specific_query_server::SpecificQueryServer,
 };
 use penumbra_storage::Storage;
 use rand::Rng;
@@ -110,6 +109,9 @@ enum TestnetCommand {
     Join {
         #[clap(default_value = "testnet.penumbra.zone")]
         node: String,
+        // Default: node-#
+        #[clap(long)]
+        moniker: Option<String>,
     },
 
     /// Reset all `pd` testnet state.
@@ -260,7 +262,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         RootCommand::Testnet {
-            tn_cmd: TestnetCommand::Join { node },
+            tn_cmd: TestnetCommand::Join { node, moniker },
             testnet_dir,
         } => {
             // By default output directory will be in `~/.penumbra/testnet_data/`
@@ -312,7 +314,11 @@ async fn main() -> anyhow::Result<()> {
             let node_id = serde_json::value::from_value(node_id)?;
             tracing::info!(?node_id, "fetched node id");
 
-            let node_name = format!("node-{}", hex::encode(OsRng.gen::<u32>().to_le_bytes()));
+            let node_name = if let Some(moniker) = moniker {
+                moniker
+            } else {
+                format!("node-{}", hex::encode(OsRng.gen::<u32>().to_le_bytes()))
+            };
             let tm_config = generate_tm_config(&node_name, &[(node_id, node)]);
 
             write_configs(node_dir, &vk, &genesis, tm_config)?;
@@ -450,7 +456,7 @@ async fn main() -> anyhow::Result<()> {
                     // Add an initial allocation of 50,000 delegation tokens,
                     // starting them with 50x the individual allocations to discord users.
                     // 50,000 delegation tokens * 1e6 udelegation factor
-                    amount: 50_000 * 10u64.pow(6),
+                    amount: (50_000 * 10u64.pow(6)).into(),
                     denom: delegation_denom.to_string(),
                 });
 

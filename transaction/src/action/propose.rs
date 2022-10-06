@@ -1,13 +1,12 @@
 use ark_ff::Zero;
-use decaf377::Fr;
 use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, str::FromStr};
 
-use penumbra_crypto::{value, Address, Value, STAKING_TOKEN_ASSET_ID};
-use penumbra_proto::{transaction as pb, Protobuf};
+use penumbra_crypto::{asset::Amount, Address, Balance, Fr, Value, STAKING_TOKEN_ASSET_ID};
+use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
 
-use crate::{plan::TransactionPlan, AuthHash};
+use crate::{plan::TransactionPlan, ActionView, AuthHash, IsAction, TransactionPerspective};
 
 /// A governance proposal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,24 +312,32 @@ pub struct ProposalSubmit {
     /// The refund address for the proposal's proposer.
     pub deposit_refund_address: Address,
     /// The amount deposited for the proposal.
-    pub deposit_amount: u64,
+    pub deposit_amount: Amount,
     /// The verification key to be used when withdrawing the proposal.
     pub withdraw_proposal_key: VerificationKey<SpendAuth>,
 }
 
+impl IsAction for ProposalSubmit {
+    fn balance_commitment(&self) -> penumbra_crypto::balance::Commitment {
+        self.balance().commit(Fr::zero())
+    }
+
+    fn view_from_perspective(&self, _txp: &TransactionPerspective) -> ActionView {
+        ActionView::ProposalSubmit(self.to_owned())
+    }
+}
+
 impl ProposalSubmit {
     /// Compute a commitment to the value contributed to a transaction by this proposal submission.
-    pub fn value_commitment(&self) -> value::Commitment {
+    pub fn balance(&self) -> Balance {
         let deposit = Value {
             amount: self.deposit_amount,
             asset_id: STAKING_TOKEN_ASSET_ID.clone(),
-        }
-        // We can use the zero blinding factor for the value commitment because the value is public.
-        .commit(Fr::zero());
+        };
 
         // Proposal submissions *require* the deposit amount in order to be accepted, so they
         // contribute (-deposit) to the value balance of the transaction
-        -deposit
+        -Balance::from(deposit)
     }
 }
 
@@ -339,7 +346,7 @@ impl From<ProposalSubmit> for pb::ProposalSubmit {
         pb::ProposalSubmit {
             proposal: Some(value.proposal.into()),
             deposit_refund_address: Some(value.deposit_refund_address.into()),
-            deposit_amount: value.deposit_amount,
+            deposit_amount: Some(value.deposit_amount.into()),
             rk: value.withdraw_proposal_key.to_bytes().to_vec().into(),
         }
     }
@@ -358,7 +365,10 @@ impl TryFrom<pb::ProposalSubmit> for ProposalSubmit {
                 .deposit_refund_address
                 .ok_or_else(|| anyhow::anyhow!("missing deposit refund address in `Propose`"))?
                 .try_into()?,
-            deposit_amount: msg.deposit_amount,
+            deposit_amount: msg
+                .deposit_amount
+                .ok_or_else(|| anyhow::anyhow!("missing deposit amount in `Propose`"))?
+                .try_into()?,
             withdraw_proposal_key: <[u8; 32]>::try_from(msg.rk.to_vec())
                 .map_err(|_| anyhow::anyhow!("invalid length for withdraw proposal key"))?
                 .try_into()?,
@@ -375,6 +385,16 @@ pub struct ProposalWithdraw {
     pub body: ProposalWithdrawBody,
     /// The signature authorizing the withdrawal.
     pub auth_sig: Signature<SpendAuth>,
+}
+
+impl IsAction for ProposalWithdraw {
+    fn balance_commitment(&self) -> penumbra_crypto::balance::Commitment {
+        Default::default()
+    }
+
+    fn view_from_perspective(&self, _txp: &TransactionPerspective) -> ActionView {
+        ActionView::ProposalWithdraw(self.to_owned())
+    }
 }
 
 impl From<ProposalWithdraw> for pb::ProposalWithdraw {

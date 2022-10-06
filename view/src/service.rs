@@ -12,12 +12,12 @@ use penumbra_crypto::{
     keys::{AccountID, AddressIndex, FullViewingKey},
 };
 use penumbra_proto::{
-    chain as pbp,
-    crypto::{self as pbc},
-    transaction as pbt,
-    view::{
+    core::chain::v1alpha1 as pbp,
+    core::crypto::v1alpha1 as pbc,
+    core::transaction::v1alpha1 as pbt,
+    view::v1alpha1::{
         self as pb, view_protocol_server::ViewProtocol, StatusResponse,
-        TransactionHashStreamResponse,
+        TransactionHashStreamResponse, TransactionStreamResponse,
     },
 };
 use penumbra_tct::{Commitment, Proof};
@@ -169,24 +169,19 @@ impl ViewService {
             .ok_or_else(|| anyhow::anyhow!("could not parse latest_block_height in JSON response"))?
             .parse()?;
 
-        let max_peer_block_height = sync_info
-            .get("max_peer_block_height")
-            .and_then(|c| c.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("could not parse max_peer_block_height in JSON response")
-            })?
-            .parse()?;
-
         let node_catching_up = sync_info
             .get("catching_up")
             .and_then(|c| c.as_bool())
             .ok_or_else(|| anyhow::anyhow!("could not parse catching_up in JSON response"))?;
 
-        let latest_known_block_height = std::cmp::max(latest_block_height, max_peer_block_height);
+        // There is a `max_peer_block_height` available in TM 0.35, however it should not be used
+        // as it does not seem to reflect the consensus height. Since clients use `latest_known_block_height`
+        // to determine the height to attempt syncing to, a validator reporting a non-consensus height
+        // can cause a DoS to clients attempting to sync if `max_peer_block_height` is used.
+        let latest_known_block_height = latest_block_height;
 
         tracing::debug!(
             ?latest_block_height,
-            ?max_peer_block_height,
             ?node_catching_up,
             ?latest_known_block_height
         );
@@ -235,10 +230,13 @@ impl ViewProtocol for ViewService {
     type StatusStreamStream = Pin<
         Box<dyn futures::Stream<Item = Result<pb::StatusStreamResponse, tonic::Status>> + Send>,
     >;
-    type TransactionsStream = Pin<
+    type TransactionHashesStream = Pin<
         Box<
             dyn futures::Stream<Item = Result<TransactionHashStreamResponse, tonic::Status>> + Send,
         >,
+    >;
+    type TransactionsStream = Pin<
+        Box<dyn futures::Stream<Item = Result<TransactionStreamResponse, tonic::Status>> + Send>,
     >;
 
     async fn note_by_commitment(
@@ -444,6 +442,39 @@ impl ViewProtocol for ViewService {
         ))
     }
 
+    async fn transaction_hashes(
+        &self,
+        request: tonic::Request<pb::TransactionsRequest>,
+    ) -> Result<tonic::Response<Self::TransactionHashesStream>, tonic::Status> {
+        self.check_worker().await?;
+
+        // Fetch transactions from storage.
+        let txs = self
+            .storage
+            .transaction_hashes(request.get_ref().start_height, request.get_ref().end_height)
+            .await
+            .map_err(|e| {
+                tonic::Status::unavailable(format!("error fetching transactions: {}", e))
+            })?;
+
+        let stream = try_stream! {
+            for tx in txs {
+                yield TransactionHashStreamResponse {
+                    block_height: tx.0,
+                    tx_hash: tx.1,
+                }
+            }
+        };
+
+        Ok(tonic::Response::new(
+            stream
+                .map_err(|e: anyhow::Error| {
+                    tonic::Status::unavailable(format!("error getting transactions: {}", e))
+                })
+                .boxed(),
+        ))
+    }
+
     async fn transactions(
         &self,
         request: tonic::Request<pb::TransactionsRequest>,
@@ -461,7 +492,11 @@ impl ViewProtocol for ViewService {
 
         let stream = try_stream! {
             for tx in txs {
-                yield tx.into()
+                yield TransactionStreamResponse {
+                    block_height: tx.0,
+                    tx_hash: tx.1,
+                    tx: Some(tx.2.into())
+                }
             }
         };
 

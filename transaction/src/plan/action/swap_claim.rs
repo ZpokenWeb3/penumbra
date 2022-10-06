@@ -7,7 +7,7 @@ use penumbra_crypto::{
     proofs::transparent::SwapClaimProof,
     Fq, FullViewingKey, Note, NotePayload, Value,
 };
-use penumbra_proto::{transaction as pb, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
 use penumbra_tct as tct;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -80,16 +80,21 @@ impl SwapClaimPlan {
         note_commitment_proof: &tct::Proof,
         nk: &NullifierKey,
     ) -> SwapClaimProof {
+        let (lambda_1_i, lambda_2_i) = self.output_data.pro_rata_outputs((
+            self.swap_plaintext.delta_1_i.into(),
+            self.swap_plaintext.delta_2_i.into(),
+        ));
+
         SwapClaimProof {
             swap_nft_asset_id: self.swap_plaintext.asset_id(),
             claim_address: self.swap_nft_note.address(),
             note_commitment_proof: note_commitment_proof.clone(),
             trading_pair: self.swap_plaintext.trading_pair,
             note_blinding: self.swap_nft_note.note_blinding(),
-            delta_1: self.output_data.delta_1,
-            delta_2: self.output_data.delta_2,
-            lambda_1: self.output_data.lambda_1,
-            lambda_2: self.output_data.lambda_2,
+            delta_1_i: self.swap_plaintext.delta_1_i.into(),
+            delta_2_i: self.swap_plaintext.delta_2_i.into(),
+            lambda_1_i: lambda_1_i,
+            lambda_2_i: lambda_2_i,
             note_blinding_1: self.output_1_blinding,
             note_blinding_2: self.output_2_blinding,
             esk_1: self.esk_1.clone(),
@@ -100,14 +105,15 @@ impl SwapClaimPlan {
 
     /// Construct the [`swap_claim::Body`] described by this plan.
     pub fn swap_claim_body(&self, fvk: &FullViewingKey) -> swap_claim::Body {
-        let (lambda_1, lambda_2) = self
-            .output_data
-            .pro_rata_outputs((self.swap_plaintext.delta_1, self.swap_plaintext.delta_2));
+        let (lambda_1_i, lambda_2_i) = self.output_data.pro_rata_outputs((
+            self.swap_plaintext.delta_1_i.into(),
+            self.swap_plaintext.delta_2_i.into(),
+        ));
 
         let output_1_note = Note::from_parts(
             self.swap_nft_note.address(),
             Value {
-                amount: lambda_1,
+                amount: lambda_1_i.into(),
                 asset_id: self.swap_plaintext.trading_pair.asset_1(),
             },
             self.output_1_blinding,
@@ -116,7 +122,7 @@ impl SwapClaimPlan {
         let output_2_note = Note::from_parts(
             self.swap_nft_note.address(),
             Value {
-                amount: lambda_2,
+                amount: lambda_2_i.into(),
                 asset_id: self.swap_plaintext.trading_pair.asset_2(),
             },
             self.output_2_blinding,
@@ -152,6 +158,17 @@ impl SwapClaimPlan {
     /// Checks whether this plan's output is viewed by the given IVK.
     pub fn is_viewed_by(&self, ivk: &IncomingViewingKey) -> bool {
         ivk.views_address(&self.swap_nft_note.address())
+    }
+
+    pub fn balance(&self) -> penumbra_crypto::Balance {
+        // Only the pre-paid fee is contributed to the value balance
+        // The rest is handled internally to the SwapClaim action.
+        let value_fee = Value {
+            amount: self.swap_plaintext.claim_fee.amount(),
+            asset_id: self.swap_plaintext.claim_fee.asset_id(),
+        };
+
+        value_fee.into()
     }
 }
 

@@ -3,11 +3,16 @@ use std::convert::{TryFrom, TryInto};
 use anyhow::Error;
 use bytes::Bytes;
 use penumbra_crypto::{
+    balance,
     proofs::transparent::OutputProof,
     symmetric::{OvkWrappedKey, WrappedMemoKey},
-    value, NotePayload,
+    Note, NotePayload,
 };
-use penumbra_proto::{transaction as pb, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
+
+use crate::{view::action_view::OutputView, ActionView, TransactionPerspective};
+
+use super::IsAction;
 
 #[derive(Clone, Debug)]
 pub struct Output {
@@ -15,10 +20,50 @@ pub struct Output {
     pub proof: OutputProof,
 }
 
+impl IsAction for Output {
+    fn balance_commitment(&self) -> balance::Commitment {
+        self.body.balance_commitment
+    }
+
+    fn view_from_perspective(&self, txp: &TransactionPerspective) -> ActionView {
+        let note_commitment = self.body.note_payload.note_commitment;
+        // Retrieve payload key for associated note commitment
+        let output_view = if let Some(payload_key) = txp.payload_keys.get(&note_commitment) {
+            let decrypted_note =
+                Note::decrypt_with_payload_key(&self.body.note_payload.encrypted_note, payload_key);
+
+            let decrypted_memo_key = self.body.wrapped_memo_key.decrypt_outgoing(payload_key);
+
+            if let (Ok(decrypted_note), Ok(decrypted_memo_key)) =
+                (decrypted_note, decrypted_memo_key)
+            {
+                // Neither decryption failed, so return the visible ActionView
+                OutputView::Visible {
+                    output: self.to_owned(),
+                    decrypted_note,
+                    decrypted_memo_key,
+                }
+            } else {
+                // One or both of the note or memo key is missing, so return the opaque ActionView
+                OutputView::Opaque {
+                    output: self.to_owned(),
+                }
+            }
+        } else {
+            // There was no payload key found, so return the opaque ActionView
+            OutputView::Opaque {
+                output: self.to_owned(),
+            }
+        };
+
+        ActionView::Output(output_view)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Body {
     pub note_payload: NotePayload,
-    pub value_commitment: value::Commitment,
+    pub balance_commitment: balance::Commitment,
     pub ovk_wrapped_key: OvkWrappedKey,
     pub wrapped_memo_key: WrappedMemoKey,
 }
@@ -57,7 +102,7 @@ impl From<Body> for pb::OutputBody {
     fn from(output: Body) -> Self {
         pb::OutputBody {
             note_payload: Some(output.note_payload.into()),
-            value_commitment: Some(output.value_commitment.into()),
+            balance_commitment: Some(output.balance_commitment.into()),
             wrapped_memo_key: Bytes::copy_from_slice(&output.wrapped_memo_key.0),
             ovk_wrapped_key: Bytes::copy_from_slice(&output.ovk_wrapped_key.0),
         }
@@ -82,8 +127,8 @@ impl TryFrom<pb::OutputBody> for Body {
             .try_into()
             .map_err(|_| anyhow::anyhow!("output malformed"))?;
 
-        let value_commitment = proto
-            .value_commitment
+        let balance_commitment = proto
+            .balance_commitment
             .ok_or_else(|| anyhow::anyhow!("missing value commitment"))?
             .try_into()?;
 
@@ -91,7 +136,7 @@ impl TryFrom<pb::OutputBody> for Body {
             note_payload,
             wrapped_memo_key,
             ovk_wrapped_key,
-            value_commitment,
+            balance_commitment,
         })
     }
 }

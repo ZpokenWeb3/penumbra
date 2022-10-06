@@ -1,20 +1,21 @@
 //! Transparent proofs for `MVP1` of the Penumbra system.
 
-use anyhow::{anyhow, Context as _, Error, Result};
-use ark_ff::{PrimeField, Zero};
+use anyhow::{anyhow, Error, Result};
+use ark_ff::PrimeField;
 use std::convert::{TryFrom, TryInto};
 
 use decaf377::FieldExt;
 use decaf377_rdsa::{SpendAuth, VerificationKey};
-use penumbra_proto::{transparent_proofs, Message, Protobuf};
+use penumbra_proto::{core::transparent_proofs::v1alpha1 as transparent_proofs, Message, Protobuf};
 use penumbra_tct as tct;
 
+use super::transparent_gadgets as gadgets;
 use crate::{
-    asset,
-    dex::{swap::SwapPlaintext, BatchSwapOutputData, TradingPair},
-    fmd, ka, keys, note,
+    asset, balance,
+    dex::{BatchSwapOutputData, TradingPair},
+    ka, keys, note,
     transaction::Fee,
-    value, Address, Fq, Fr, Nullifier, Value,
+    Address, Fq, Fr, Note, Nullifier, Value,
 };
 
 /// Transparent proof for spending existing notes.
@@ -24,18 +25,10 @@ use crate::{
 pub struct SpendProof {
     // Inclusion proof for the note commitment.
     pub note_commitment_proof: tct::Proof,
-    // The diversified base for the address.
-    pub g_d: decaf377::Element,
-    // The transmission key for the address.
-    pub pk_d: ka::Public,
-    // The clue key for the address.
-    pub ck_d: fmd::ClueKey,
-    // The value of the note.
-    pub value: Value,
+    // The note being spent.
+    pub note: Note,
     // The blinding factor used for generating the value commitment.
     pub v_blinding: Fr,
-    // The blinding factor used for generating the note commitment.
-    pub note_blinding: Fq,
     // The randomizer used for generating the randomized spend auth key.
     pub spend_auth_randomizer: Fr,
     // The spend authorization key.
@@ -55,74 +48,46 @@ impl SpendProof {
     pub fn verify(
         &self,
         anchor: tct::Root,
-        value_commitment: value::Commitment,
+        balance_commitment: balance::Commitment,
         nullifier: Nullifier,
         rk: VerificationKey<SpendAuth>,
     ) -> anyhow::Result<()> {
         // Short circuit to true if value released is 0. That means this is a _dummy_ spend.
-        if self.value.amount == 0 {
+        if self.note.value().amount == asset::Amount::zero() {
             return Ok(());
         }
 
-        // Note commitment integrity.
-        let s_component_transmission_key = Fq::from_bytes(self.pk_d.0);
-        if let Ok(transmission_key_s) = s_component_transmission_key {
-            let note_commitment_test = note::commitment(
-                self.note_blinding,
-                self.value,
-                self.g_d,
-                transmission_key_s,
-                &self.ck_d,
-            );
-
-            if self.note_commitment_proof.commitment() != note_commitment_test {
-                return Err(anyhow!("note commitment mismatch"));
-            }
-        } else {
-            return Err(anyhow!("transmission key mismatch"));
-        }
+        gadgets::note_commitment_integrity(
+            self.note.clone(),
+            self.note_commitment_proof.commitment(),
+        )?;
 
         // Merkle path integrity.
         self.note_commitment_proof
             .verify(anchor)
             .map_err(|_| anyhow!("merkle root mismatch"))?;
 
-        // Value commitment integrity.
-        if self.value.commit(self.v_blinding) != value_commitment {
-            return Err(anyhow!("value commitment mismatch"));
-        }
+        gadgets::balance_commitment_integrity(
+            balance_commitment,
+            self.v_blinding,
+            self.note.value(),
+        )?;
 
-        // The use of decaf means that we do not need to check that the
-        // diversified basepoint is of small order. However we instead
-        // check it is not identity.
-        if self.g_d.is_identity() || self.ak.is_identity() {
+        gadgets::diversified_basepoint_not_identity(self.note.diversified_generator().clone())?;
+        if self.ak.is_identity() {
             return Err(anyhow!("unexpected identity"));
         }
 
-        // Nullifier integrity.
-        if nullifier
-            != self.nk.derive_nullifier(
-                self.note_commitment_proof.position(),
-                &self.note_commitment_proof.commitment(),
-            )
-        {
-            return Err(anyhow!("bad nullifier"));
-        }
+        gadgets::nullifier_integrity(
+            nullifier,
+            self.nk,
+            self.note_commitment_proof.position(),
+            self.note_commitment_proof.commitment(),
+        )?;
 
-        // Spend authority.
-        let rk_bytes: [u8; 32] = rk.into();
-        let rk_test = self.ak.randomize(&self.spend_auth_randomizer);
-        let rk_test_bytes: [u8; 32] = rk_test.into();
-        if rk_bytes != rk_test_bytes {
-            return Err(anyhow!("invalid spend auth randomizer"));
-        }
+        gadgets::rk_integrity(self.spend_auth_randomizer, rk, self.ak)?;
 
-        // Diversified address integrity.
-        let fvk = keys::FullViewingKey::from_components(self.ak, self.nk);
-        let ivk = fvk.incoming();
-        if self.pk_d != ivk.diversified_public(&self.g_d) {
-            return Err(anyhow!("invalid diversified address"));
-        }
+        gadgets::diversified_address_integrity(self.ak, self.nk, self.note.clone())?;
 
         Ok(())
     }
@@ -133,18 +98,10 @@ impl SpendProof {
 /// This structure keeps track of the auxiliary (private) inputs.
 #[derive(Clone, Debug)]
 pub struct OutputProof {
-    // The diversified base for the destination address.
-    pub g_d: decaf377::Element,
-    // The transmission key for the destination address.
-    pub pk_d: ka::Public,
-    // The clue key for the address.
-    pub ck_d: fmd::ClueKey,
-    // The value of the newly created note.
-    pub value: Value,
+    // The note being created.
+    pub note: Note,
     // The blinding factor used for generating the value commitment.
     pub v_blinding: Fr,
-    // The blinding factor used for generating the note commitment.
-    pub note_blinding: Fq,
     // The ephemeral secret key that corresponds to the public key.
     pub esk: ka::Secret,
 }
@@ -158,48 +115,27 @@ impl OutputProof {
     /// * the ephemeral public key used to generate the new note.
     pub fn verify(
         &self,
-        value_commitment: value::Commitment,
+        balance_commitment: balance::Commitment,
         note_commitment: note::Commitment,
         epk: ka::Public,
     ) -> anyhow::Result<()> {
-        // Note commitment integrity.
-        let s_component_transmission_key = Fq::from_bytes(self.pk_d.0);
-        if let Ok(transmission_key_s) = s_component_transmission_key {
-            let note_commitment_test = note::commitment(
-                self.note_blinding,
-                self.value,
-                self.g_d,
-                transmission_key_s,
-                &self.ck_d,
-            );
+        gadgets::note_commitment_integrity(self.note.clone(), note_commitment)?;
 
-            if note_commitment != note_commitment_test {
-                return Err(anyhow!(
-                    "note commitment mismatch, public input {:?} does not match witnessed data {:?}",
-                     note_commitment,
-                     note_commitment_test,
-                ));
-            }
-        } else {
-            return Err(anyhow!("transmission key mismatch"));
-        }
+        gadgets::balance_commitment_integrity(
+            -balance_commitment,
+            self.v_blinding,
+            self.note.value(),
+        )?;
 
-        // Value commitment integrity.
-        if value_commitment != -self.value.commit(self.v_blinding) {
-            return Err(anyhow!("value commitment mismatch"));
-        }
+        gadgets::ephemeral_public_key_integrity(
+            epk,
+            self.esk.clone(),
+            self.note.diversified_generator(),
+        )?;
 
-        // Ephemeral public key integrity.
-        if self.esk.diversified_public(&self.g_d) != epk {
-            return Err(anyhow!("ephemeral public key mismatch"));
-        }
-
-        // The use of decaf means that we do not need to check that the
-        // diversified basepoint is of small order. However we instead
-        // check it is not identity.
-        if self.g_d.is_identity() {
-            return Err(anyhow!("unexpected identity"));
-        }
+        gadgets::diversified_basepoint_not_identity(
+            self.note.address().diversified_generator().clone(),
+        )?;
 
         Ok(())
     }
@@ -213,19 +149,13 @@ impl From<SpendProof> for transparent_proofs::SpendProof {
     fn from(msg: SpendProof) -> Self {
         let ak_bytes: [u8; 32] = msg.ak.into();
         let nk_bytes: [u8; 32] = msg.nk.0.to_bytes();
-        let ck_d_bytes: [u8; 32] = msg.ck_d.0;
         transparent_proofs::SpendProof {
             note_commitment_proof: Some(msg.note_commitment_proof.into()),
-            g_d: msg.g_d.vartime_compress().0.to_vec(),
-            pk_d: msg.pk_d.0.to_vec(),
-            value_amount: msg.value.amount,
-            value_asset_id: msg.value.asset_id.0.to_bytes().to_vec(),
+            note: Some(msg.note.into()),
             v_blinding: msg.v_blinding.to_bytes().to_vec(),
-            note_blinding: msg.note_blinding.to_bytes().to_vec(),
             spend_auth_randomizer: msg.spend_auth_randomizer.to_bytes().to_vec(),
             ak: ak_bytes.into(),
             nk: nk_bytes.into(),
-            ck_d: ck_d_bytes.into(),
         }
     }
 }
@@ -234,17 +164,6 @@ impl TryFrom<transparent_proofs::SpendProof> for SpendProof {
     type Error = Error;
 
     fn try_from(proto: transparent_proofs::SpendProof) -> anyhow::Result<Self, Self::Error> {
-        let g_d_bytes: [u8; 32] = proto
-            .g_d
-            .try_into()
-            .map_err(|_| anyhow!("proto malformed"))?;
-        let g_d_encoding = decaf377::Encoding(g_d_bytes);
-
-        let ck_d_bytes: [u8; 32] = proto
-            .ck_d
-            .try_into()
-            .map_err(|_| anyhow!("proto malformed"))?;
-
         let v_blinding_bytes: [u8; 32] = proto.v_blinding[..]
             .try_into()
             .map_err(|_| anyhow!("proto malformed"))?;
@@ -262,35 +181,12 @@ impl TryFrom<transparent_proofs::SpendProof> for SpendProof {
                 .ok_or_else(|| anyhow!("proto malformed"))?
                 .try_into()
                 .map_err(|_| anyhow!("proto malformed"))?,
-            g_d: g_d_encoding
-                .vartime_decompress()
+            note: proto
+                .note
+                .ok_or_else(|| anyhow!("proto malformed"))?
+                .try_into()
                 .map_err(|_| anyhow!("proto malformed"))?,
-            pk_d: ka::Public(
-                proto
-                    .pk_d
-                    .try_into()
-                    .map_err(|_| anyhow!("proto malformed"))?,
-            ),
-            ck_d: fmd::ClueKey(ck_d_bytes),
-            value: Value {
-                amount: proto.value_amount,
-                asset_id: asset::Id(
-                    Fq::from_bytes(
-                        proto
-                            .value_asset_id
-                            .try_into()
-                            .map_err(|_| anyhow!("proto malformed"))?,
-                    )
-                    .map_err(|_| anyhow!("proto malformed"))?,
-                ),
-            },
             v_blinding: Fr::from_bytes(v_blinding_bytes).map_err(|_| anyhow!("proto malformed"))?,
-            note_blinding: Fq::from_bytes(
-                proto.note_blinding[..]
-                    .try_into()
-                    .map_err(|_| anyhow!("proto malformed"))?,
-            )
-            .map_err(|_| anyhow!("proto malformed"))?,
             spend_auth_randomizer: Fr::from_bytes(
                 proto.spend_auth_randomizer[..]
                     .try_into()
@@ -315,13 +211,8 @@ impl Protobuf<transparent_proofs::OutputProof> for OutputProof {}
 impl From<OutputProof> for transparent_proofs::OutputProof {
     fn from(msg: OutputProof) -> Self {
         transparent_proofs::OutputProof {
-            g_d: msg.g_d.vartime_compress().0.to_vec(),
-            pk_d: msg.pk_d.0.to_vec(),
-            ck_d: msg.ck_d.0.to_vec(),
-            value_amount: msg.value.amount,
-            value_asset_id: msg.value.asset_id.0.to_bytes().to_vec(),
+            note: Some(msg.note.into()),
             v_blinding: msg.v_blinding.to_bytes().to_vec(),
-            note_blinding: msg.note_blinding.to_bytes().to_vec(),
             esk: msg.esk.to_bytes().to_vec(),
         }
     }
@@ -331,12 +222,6 @@ impl TryFrom<transparent_proofs::OutputProof> for OutputProof {
     type Error = Error;
 
     fn try_from(proto: transparent_proofs::OutputProof) -> anyhow::Result<Self, Self::Error> {
-        let g_d_bytes: [u8; 32] = proto
-            .g_d
-            .try_into()
-            .map_err(|_| anyhow!("proto malformed"))?;
-        let g_d_encoding = decaf377::Encoding(g_d_bytes);
-
         let v_blinding_bytes: [u8; 32] = proto.v_blinding[..]
             .try_into()
             .map_err(|_| anyhow!("proto malformed"))?;
@@ -348,40 +233,13 @@ impl TryFrom<transparent_proofs::OutputProof> for OutputProof {
             Fr::from_bytes(esk_bytes).map_err(|_| anyhow!("proto malformed"))?,
         );
 
-        let ck_bytes: [u8; 32] = proto.ck_d[..]
-            .try_into()
-            .map_err(|_| anyhow!("proto malformed"))?;
-
         Ok(OutputProof {
-            g_d: g_d_encoding
-                .vartime_decompress()
+            note: proto
+                .note
+                .ok_or_else(|| anyhow!("proto malformed"))?
+                .try_into()
                 .map_err(|_| anyhow!("proto malformed"))?,
-            pk_d: ka::Public(
-                proto
-                    .pk_d
-                    .try_into()
-                    .map_err(|_| anyhow!("proto malformed"))?,
-            ),
-            ck_d: fmd::ClueKey(ck_bytes),
-            value: Value {
-                amount: proto.value_amount,
-                asset_id: asset::Id(
-                    Fq::from_bytes(
-                        proto
-                            .value_asset_id
-                            .try_into()
-                            .map_err(|_| anyhow!("proto malformed"))?,
-                    )
-                    .map_err(|_| anyhow!("proto malformed"))?,
-                ),
-            },
             v_blinding: Fr::from_bytes(v_blinding_bytes).map_err(|_| anyhow!("proto malformed"))?,
-            note_blinding: Fq::from_bytes(
-                proto.note_blinding[..]
-                    .try_into()
-                    .map_err(|_| anyhow!("proto malformed"))?,
-            )
-            .map_err(|_| anyhow!("proto malformed"))?,
             esk,
         })
     }
@@ -449,12 +307,12 @@ pub struct SwapClaimProof {
 
     // Describes opening of Swap NFT asset ID for commitment verification
     pub trading_pair: TradingPair,
-    pub delta_1: u64,
-    pub delta_2: u64,
+    pub delta_1_i: u64,
+    pub delta_2_i: u64,
 
     // Describes output amounts
-    pub lambda_1: u64,
-    pub lambda_2: u64,
+    pub lambda_1_i: u64,
+    pub lambda_2_i: u64,
 
     // Describes first output note (lambda 1)
     pub note_blinding_1: Fq,
@@ -474,6 +332,7 @@ impl SwapClaimProof {
     /// * nullifier of the note to be spent,
     /// * the randomized verification spend key,
     /// * the pre-paid fee amount for the swap,
+    /// * the note commitments for the outputs,
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
         &self,
@@ -493,39 +352,25 @@ impl SwapClaimProof {
             .map_err(|_| anyhow!("merkle root mismatch"))?;
 
         // Check that the provided note commitment is for the proof's Swap NFT.
-        let swap_nft_value = Value {
-            amount: 1,
-            asset_id: self.swap_nft_asset_id,
-        };
-        let transmission_key_s = self.claim_address.transmission_key_s();
-        let note_commitment_test = note::commitment(
-            self.note_blinding,
-            swap_nft_value.clone(),
-            *self.claim_address.diversified_generator(),
-            *transmission_key_s,
-            self.claim_address.clue_key(),
-        );
-
-        if self.note_commitment_proof.commitment() != note_commitment_test {
-            return Err(anyhow!("note commitment mismatch"));
-        }
-
-        // check the swap NFT Asset ID is properly constructed
-        let asset_id = self.swap_nft_asset_id;
-        let expected_plaintext = SwapPlaintext::from_parts(
-            self.trading_pair.clone(),
-            self.delta_1,
-            self.delta_2,
-            fee,
-            // This should ensure that the claim address matches the address
-            // used to construct the Swap NFT.
+        let note = Note::from_parts(
             self.claim_address,
-        )
-        .map_err(|_| anyhow!("error generating expected swap plaintext"))?;
-        let expected_asset_id = expected_plaintext.asset_id();
-        if expected_asset_id != asset_id {
-            return Err(anyhow!("improper swap NFT asset id"));
-        }
+            Value {
+                amount: 1u64.into(),
+                asset_id: self.swap_nft_asset_id,
+            },
+            self.note_blinding,
+        )?;
+        gadgets::note_commitment_integrity(note, self.note_commitment_proof.commitment())?;
+
+        // Check that the Swap NFT asset ID is properly constructed.
+        gadgets::swap_nft_asset_id_integrity(
+            self.swap_nft_asset_id,
+            self.trading_pair.clone(),
+            self.delta_1_i,
+            self.delta_2_i,
+            fee,
+            self.claim_address,
+        )?;
 
         // Validate the note commitment's height matches the output data's height.
         let position = self.note_commitment_proof.position();
@@ -554,59 +399,46 @@ impl SwapClaimProof {
         // * and verify the output notes
 
         // Swap NFT nullifier integrity. Ensure the nullifier is correctly formed.
-        if nullifier
-            != self
-                .nk
-                .derive_nullifier(position, &self.note_commitment_proof.commitment())
-        {
-            return Err(anyhow!("bad nullifier"));
-        }
+        gadgets::nullifier_integrity(
+            nullifier,
+            self.nk,
+            position,
+            self.note_commitment_proof.commitment(),
+        )?;
 
-        let (lambda_1, lambda_2) = output_data.pro_rata_outputs((self.delta_1, self.delta_2));
+        gadgets::diversified_basepoint_not_identity(
+            self.claim_address.diversified_generator().clone(),
+        )?;
+
+        // Check output 1
         let value_1 = Value {
-            amount: lambda_1,
+            amount: self.lambda_1_i.into(),
             asset_id: self.trading_pair.asset_1(),
         };
+        gadgets::note_commitment_integrity(
+            Note::from_parts(self.claim_address, value_1, self.note_blinding_1)?,
+            note_commitment_1,
+        )?;
+        gadgets::ephemeral_public_key_integrity(
+            epk_1,
+            self.esk_1.clone(),
+            self.claim_address.diversified_generator().clone(),
+        )?;
+
+        // Check output 2
         let value_2 = Value {
-            amount: lambda_2,
+            amount: self.lambda_2_i.into(),
             asset_id: self.trading_pair.asset_2(),
         };
-
-        let proof_1 = OutputProof {
-            value: value_1,
-            // We use a zero blinding factor here because we haven't properly
-            // factored out the common code between OutputProof and SwapClaimProof,
-            // so we construct a "fake" value commitment internal to this proof.
-            v_blinding: Fr::zero(),
-            note_blinding: self.note_blinding_1,
-            esk: self.esk_1.clone(),
-            g_d: *self.claim_address.diversified_generator(),
-            pk_d: *self.claim_address.transmission_key(),
-            ck_d: *self.claim_address.clue_key(),
-        };
-        proof_1
-            // This is a dummy value commitment, since we don't have a way of calling the output proof logic otherwise.
-            // It has to be -, since an output proof would expect to consume the value
-            .verify(-value_1.commit(Fr::zero()), note_commitment_1, epk_1)
-            .context("output proof 1 failed")?;
-
-        let proof_2 = OutputProof {
-            value: value_2,
-            // We use a zero blinding factor here because we haven't properly
-            // factored out the common code between OutputProof and SwapClaimProof,
-            // so we construct a "fake" value commitment internal to this proof.
-            v_blinding: Fr::zero(),
-            note_blinding: self.note_blinding_2,
-            esk: self.esk_2.clone(),
-            g_d: *self.claim_address.diversified_generator(),
-            pk_d: *self.claim_address.transmission_key(),
-            ck_d: *self.claim_address.clue_key(),
-        };
-        proof_2
-            // This is a dummy value commitment, since we don't have a way of calling the output proof logic otherwise.
-            // It has to be -, since an output proof would expect to consume the value
-            .verify(-value_2.commit(Fr::zero()), note_commitment_2, epk_2)
-            .context("output proof 2 failed")?;
+        gadgets::note_commitment_integrity(
+            Note::from_parts(self.claim_address, value_2, self.note_blinding_2)?,
+            note_commitment_2,
+        )?;
+        gadgets::ephemeral_public_key_integrity(
+            epk_2,
+            self.esk_2.clone(),
+            self.claim_address.diversified_generator().clone(),
+        )?;
 
         Ok(())
     }
@@ -640,10 +472,10 @@ impl From<SwapClaimProof> for transparent_proofs::SwapClaimProof {
             note_commitment_proof: Some(msg.note_commitment_proof.into()),
             claim_address: Some(msg.claim_address.into()),
             trading_pair: Some(msg.trading_pair.into()),
-            delta_1: msg.delta_1,
-            delta_2: msg.delta_2,
-            lambda_1: msg.lambda_1,
-            lambda_2: msg.lambda_2,
+            delta_1_i: msg.delta_1_i,
+            delta_2_i: msg.delta_2_i,
+            lambda_1_i: msg.lambda_1_i,
+            lambda_2_i: msg.lambda_2_i,
             note_blinding_1: msg.note_blinding_1.to_bytes().to_vec(),
             note_blinding_2: msg.note_blinding_2.to_bytes().to_vec(),
             esk_1: msg.esk_1.to_bytes().to_vec(),
@@ -677,10 +509,10 @@ impl TryFrom<transparent_proofs::SwapClaimProof> for SwapClaimProof {
             esk_2,
             note_blinding_1: Fq::from_le_bytes_mod_order(&proto.note_blinding_1),
             note_blinding_2: Fq::from_le_bytes_mod_order(&proto.note_blinding_2),
-            lambda_2: proto.lambda_2,
-            lambda_1: proto.lambda_1,
-            delta_2: proto.delta_2,
-            delta_1: proto.delta_1,
+            lambda_2_i: proto.lambda_2_i,
+            lambda_1_i: proto.lambda_1_i,
+            delta_2_i: proto.delta_2_i,
+            delta_1_i: proto.delta_1_i,
             trading_pair: proto
                 .trading_pair
                 .ok_or_else(|| anyhow!("proto malformed"))?
@@ -738,6 +570,8 @@ pub struct SwapProof {
     pub value_t2: Value,
     // The fee amount associated with the swap.
     pub fee_delta: Fee,
+    // The blinding factor for the fee.
+    pub fee_blinding: Fr,
     // The asset ID of the Swap NFT.
     pub swap_nft_asset_id: asset::Id,
     // The blinding factor used for generating the note commitment for the Swap NFT.
@@ -762,31 +596,25 @@ impl SwapProof {
     /// * the ephemeral public key used to generate the new swap NFT note.
     pub fn verify(
         &self,
-        _value_1_commitment: value::Commitment,
-        _value_2_commitment: value::Commitment,
-        value_fee_commitment: value::Commitment,
+        _value_1_commitment: balance::Commitment,
+        _value_2_commitment: balance::Commitment,
+        value_fee_commitment: balance::Commitment,
         note_commitment: note::Commitment,
         epk: ka::Public,
-        fee_blinding: Fr,
     ) -> anyhow::Result<(), Error> {
-        // Note commitment integrity.
-        let transmission_key_s = self.claim_address.transmission_key_s();
         // Checks the note commitment of the Swap NFT.
-        let note_commitment_test = note::commitment(
-            self.note_blinding,
-            Value {
-                // The swap NFT is always amount 1.
-                amount: 1,
-                asset_id: self.swap_nft_asset_id,
-            },
-            *self.claim_address.diversified_generator(),
-            *transmission_key_s,
-            self.claim_address.clue_key(),
-        );
-
-        if note_commitment != note_commitment_test {
-            return Err(anyhow!("note commitment mismatch"));
-        }
+        gadgets::note_commitment_integrity(
+            Note::from_parts(
+                self.claim_address,
+                Value {
+                    // The swap NFT is always amount 1.
+                    amount: 1u64.into(),
+                    asset_id: self.swap_nft_asset_id,
+                },
+                self.note_blinding,
+            )?,
+            note_commitment,
+        )?;
 
         // TODO: no value commitment checks until flow encryption is available
         // // Value commitment integrity.
@@ -798,25 +626,21 @@ impl SwapProof {
         //     return Err(anyhow!("value commitment mismatch"));
         // }
 
-        if value_fee_commitment != self.fee_delta.commit(fee_blinding) {
-            return Err(anyhow!("value commitment mismatch"));
-        }
+        gadgets::balance_commitment_integrity(
+            value_fee_commitment,
+            self.fee_blinding,
+            self.fee_delta.0,
+        )?;
 
-        // Ephemeral public key integrity.
-        if self
-            .esk
-            .diversified_public(self.claim_address.diversified_generator())
-            != epk
-        {
-            return Err(anyhow!("ephemeral public key mismatch"));
-        }
+        gadgets::ephemeral_public_key_integrity(
+            epk,
+            self.esk.clone(),
+            self.claim_address.diversified_generator().clone(),
+        )?;
 
-        // The use of decaf means that we do not need to check that the
-        // diversified basepoint is of small order. However we instead
-        // check it is not identity.
-        if self.claim_address.diversified_generator().is_identity() {
-            return Err(anyhow!("unexpected identity"));
-        }
+        gadgets::diversified_basepoint_not_identity(
+            self.claim_address.diversified_generator().clone(),
+        )?;
 
         Ok(())
     }
@@ -828,11 +652,12 @@ impl From<SwapProof> for transparent_proofs::SwapProof {
     fn from(msg: SwapProof) -> Self {
         transparent_proofs::SwapProof {
             claim_address: Some(msg.claim_address.into()),
-            delta_1: msg.value_t1.amount,
+            delta_1: msg.value_t1.amount.into(),
             t1: msg.value_t1.asset_id.0.to_bytes().to_vec(),
-            delta_2: msg.value_t2.amount,
+            delta_2: msg.value_t2.amount.into(),
             t2: msg.value_t2.asset_id.0.to_bytes().to_vec(),
             fee: Some(msg.fee_delta.into()),
+            fee_blinding: msg.fee_blinding.to_bytes().to_vec(),
             swap_nft_asset_id: msg.swap_nft_asset_id.0.to_bytes().to_vec(),
             // TODO: no value commitments for delta 1/delta 2 until flow encryption is available
             // delta_1_blinding: msg.delta_1_blinding.to_bytes().to_vec(),
@@ -854,6 +679,10 @@ impl TryFrom<transparent_proofs::SwapProof> for SwapProof {
         //     .try_into()
         //     .map_err(|_| anyhow!("proto malformed"))?;
 
+        let fee_blinding_bytes: [u8; 32] = proto.fee_blinding[..]
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("proto malformed"))?;
+
         let esk_bytes: [u8; 32] = proto.esk[..]
             .try_into()
             .map_err(|_| anyhow!("proto malformed"))?;
@@ -870,7 +699,7 @@ impl TryFrom<transparent_proofs::SwapProof> for SwapProof {
                 .try_into()
                 .map_err(|_| anyhow!("proto malformed"))?,
             value_t1: Value {
-                amount: proto.delta_1,
+                amount: proto.delta_1.into(),
                 asset_id: asset::Id(
                     Fq::from_bytes(
                         proto
@@ -882,7 +711,7 @@ impl TryFrom<transparent_proofs::SwapProof> for SwapProof {
                 ),
             },
             value_t2: Value {
-                amount: proto.delta_2,
+                amount: proto.delta_2.into(),
                 asset_id: asset::Id(
                     Fq::from_bytes(
                         proto
@@ -898,6 +727,7 @@ impl TryFrom<transparent_proofs::SwapProof> for SwapProof {
                 .ok_or_else(|| anyhow::anyhow!("proto malformed"))?
                 .try_into()
                 .map_err(|_| anyhow!("proto malformed"))?,
+            fee_blinding: Fr::from_bytes(fee_blinding_bytes)?,
             swap_nft_asset_id: asset::Id(
                 Fq::from_bytes(
                     proto
@@ -964,7 +794,7 @@ mod tests {
         let (dest, _dtk_d) = ivk_recipient.payment_address(0u64.into());
 
         let value_to_send = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let v_blinding = Fr::rand(&mut rng);
@@ -973,12 +803,8 @@ mod tests {
         let epk = esk.diversified_public(&note.diversified_generator());
 
         let proof = OutputProof {
-            g_d: *dest.diversified_generator(),
-            pk_d: *dest.transmission_key(),
-            ck_d: *dest.clue_key(),
-            value: value_to_send,
+            note: note.clone(),
             v_blinding,
-            note_blinding: note.note_blinding(),
             esk,
         };
 
@@ -998,7 +824,7 @@ mod tests {
         let (dest, _dtk_d) = ivk_recipient.payment_address(0u64.into());
 
         let value_to_send = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let v_blinding = Fr::rand(&mut rng);
@@ -1007,12 +833,8 @@ mod tests {
         let epk = esk.diversified_public(&note.diversified_generator());
 
         let proof = OutputProof {
-            g_d: *dest.diversified_generator(),
-            pk_d: *dest.transmission_key(),
-            ck_d: *dest.clue_key(),
-            value: value_to_send,
+            note: note.clone(),
             v_blinding,
-            note_blinding: note.note_blinding(),
             esk,
         };
 
@@ -1034,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_proof_verification_value_commitment_integrity_failure() {
+    fn test_output_proof_verification_balance_commitment_integrity_failure() {
         let mut rng = OsRng;
 
         let seed_phrase = SeedPhrase::generate(&mut rng);
@@ -1044,7 +866,7 @@ mod tests {
         let (dest, _dtk_d) = ivk_recipient.payment_address(0u64.into());
 
         let value_to_send = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let v_blinding = Fr::rand(&mut rng);
@@ -1053,18 +875,14 @@ mod tests {
         let correct_epk = esk.diversified_public(&note.diversified_generator());
 
         let proof = OutputProof {
-            g_d: *dest.diversified_generator(),
-            pk_d: *dest.transmission_key(),
-            ck_d: *dest.clue_key(),
-            value: value_to_send,
+            note: note.clone(),
             v_blinding,
-            note_blinding: note.note_blinding(),
             esk,
         };
-        let incorrect_value_commitment = value_to_send.commit(Fr::rand(&mut rng));
+        let incorrect_balance_commitment = value_to_send.commit(Fr::rand(&mut rng));
 
         assert!(proof
-            .verify(incorrect_value_commitment, note.commit(), correct_epk)
+            .verify(incorrect_balance_commitment, note.commit(), correct_epk)
             .is_err());
     }
 
@@ -1079,7 +897,7 @@ mod tests {
         let (dest, _dtk_d) = ivk_recipient.payment_address(0u64.into());
 
         let value_to_send = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let v_blinding = Fr::rand(&mut rng);
@@ -1087,12 +905,8 @@ mod tests {
         let esk = ka::Secret::new(&mut rng);
 
         let proof = OutputProof {
-            g_d: *dest.diversified_generator(),
-            pk_d: *dest.transmission_key(),
-            ck_d: *dest.clue_key(),
-            value: value_to_send,
+            note: note.clone(),
             v_blinding,
-            note_blinding: note.note_blinding(),
             esk,
         };
         let incorrect_esk = ka::Secret::new(&mut rng);
@@ -1108,40 +922,6 @@ mod tests {
     }
 
     #[test]
-    fn test_output_proof_verification_identity_check_failure() {
-        let mut rng = OsRng;
-
-        let seed_phrase = SeedPhrase::generate(&mut rng);
-        let sk_recipient = SpendKey::from_seed_phrase(seed_phrase, 0);
-        let fvk_recipient = sk_recipient.full_viewing_key();
-        let ivk_recipient = fvk_recipient.incoming();
-        let (dest, _dtk_d) = ivk_recipient.payment_address(0u64.into());
-
-        let value_to_send = Value {
-            amount: 10,
-            asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
-        };
-        let v_blinding = Fr::rand(&mut rng);
-        let note = Note::generate(&mut rng, &dest, value_to_send);
-        let esk = ka::Secret::new(&mut rng);
-        let epk = esk.diversified_public(&note.diversified_generator());
-
-        let proof = OutputProof {
-            g_d: decaf377::Element::default(),
-            pk_d: *dest.transmission_key(),
-            ck_d: *dest.clue_key(),
-            value: value_to_send,
-            v_blinding,
-            note_blinding: note.note_blinding(),
-            esk,
-        };
-
-        assert!(proof
-            .verify(-value_to_send.commit(v_blinding), note.commit(), epk)
-            .is_err());
-    }
-
-    #[test]
     fn test_spend_proof_verification_success() {
         let mut rng = OsRng;
 
@@ -1152,7 +932,7 @@ mod tests {
         let (sender, _dtk_d) = ivk_sender.payment_address(0u64.into());
 
         let value_to_send = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let v_blinding = Fr::rand(&mut rng);
@@ -1170,12 +950,8 @@ mod tests {
 
         let proof = SpendProof {
             note_commitment_proof,
-            g_d: *sender.diversified_generator(),
-            pk_d: *sender.transmission_key(),
-            ck_d: *sender.clue_key(),
-            value: value_to_send,
+            note,
             v_blinding,
-            note_blinding: note.note_blinding(),
             spend_auth_randomizer,
             ak,
             nk,
@@ -1198,7 +974,7 @@ mod tests {
         let (sender, _dtk_d) = ivk_sender.payment_address(0u64.into());
 
         let value_to_send = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let v_blinding = Fr::rand(&mut rng);
@@ -1216,12 +992,8 @@ mod tests {
 
         let proof = SpendProof {
             note_commitment_proof,
-            g_d: *sender.diversified_generator(),
-            pk_d: *sender.transmission_key(),
-            ck_d: *sender.clue_key(),
-            value: value_to_send,
+            note,
             v_blinding,
-            note_blinding: note.note_blinding(),
             spend_auth_randomizer,
             ak,
             nk,
@@ -1235,7 +1007,7 @@ mod tests {
     }
 
     #[test]
-    fn test_spend_proof_verification_value_commitment_integrity_failure() {
+    fn test_spend_proof_verification_balance_commitment_integrity_failure() {
         let mut rng = OsRng;
         let seed_phrase = SeedPhrase::generate(&mut rng);
         let sk_sender = SpendKey::from_seed_phrase(seed_phrase, 0);
@@ -1244,7 +1016,7 @@ mod tests {
         let (sender, _dtk_d) = ivk_sender.payment_address(0u64.into());
 
         let value_to_send = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let v_blinding = Fr::rand(&mut rng);
@@ -1261,12 +1033,8 @@ mod tests {
 
         let proof = SpendProof {
             note_commitment_proof,
-            g_d: *sender.diversified_generator(),
-            pk_d: *sender.transmission_key(),
-            ck_d: *sender.clue_key(),
-            value: value_to_send,
+            note,
             v_blinding,
-            note_blinding: note.note_blinding(),
             spend_auth_randomizer,
             ak,
             nk,
@@ -1289,7 +1057,7 @@ mod tests {
         let (sender, _dtk_d) = ivk_sender.payment_address(0u64.into());
 
         let value_to_send = Value {
-            amount: 10,
+            amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let v_blinding = Fr::rand(&mut rng);
@@ -1306,12 +1074,8 @@ mod tests {
 
         let proof = SpendProof {
             note_commitment_proof,
-            g_d: *sender.diversified_generator(),
-            pk_d: *sender.transmission_key(),
-            ck_d: *sender.clue_key(),
-            value: value_to_send,
+            note,
             v_blinding,
-            note_blinding: note.note_blinding(),
             spend_auth_randomizer,
             ak,
             nk,

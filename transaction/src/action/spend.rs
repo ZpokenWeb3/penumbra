@@ -3,17 +3,42 @@ use std::convert::{TryFrom, TryInto};
 use anyhow::Error;
 use bytes::Bytes;
 use penumbra_crypto::{
+    balance,
     proofs::transparent::SpendProof,
     rdsa::{Signature, SpendAuth, VerificationKey},
-    value, Nullifier,
+    Nullifier,
 };
-use penumbra_proto::{transaction, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as transaction, Protobuf};
+
+use crate::{view::action_view::SpendView, ActionView, TransactionPerspective};
+
+use super::IsAction;
 
 #[derive(Clone, Debug)]
 pub struct Spend {
     pub body: Body,
     pub auth_sig: Signature<SpendAuth>,
     pub proof: SpendProof,
+}
+
+impl IsAction for Spend {
+    fn balance_commitment(&self) -> balance::Commitment {
+        self.body.balance_commitment
+    }
+
+    fn view_from_perspective(&self, txp: &TransactionPerspective) -> ActionView {
+        let spend_view = match txp.spend_nullifiers.get(&self.body.nullifier) {
+            Some(note) => SpendView::Visible {
+                spend: self.to_owned(),
+                note: note.to_owned(),
+            },
+            None => SpendView::Opaque {
+                spend: self.to_owned(),
+            },
+        };
+
+        ActionView::Spend(spend_view)
+    }
 }
 
 impl Protobuf<transaction::Spend> for Spend {}
@@ -56,7 +81,7 @@ impl TryFrom<transaction::Spend> for Spend {
 
 #[derive(Clone, Debug)]
 pub struct Body {
-    pub value_commitment: value::Commitment,
+    pub balance_commitment: balance::Commitment,
     pub nullifier: Nullifier,
     pub rk: VerificationKey<SpendAuth>,
 }
@@ -68,7 +93,7 @@ impl From<Body> for transaction::SpendBody {
         let nullifier_bytes: [u8; 32] = msg.nullifier.into();
         let rk_bytes: [u8; 32] = msg.rk.into();
         transaction::SpendBody {
-            value_commitment: Some(msg.value_commitment.into()),
+            balance_commitment: Some(msg.balance_commitment.into()),
             nullifier: Bytes::copy_from_slice(&nullifier_bytes),
             rk: Bytes::copy_from_slice(&rk_bytes),
         }
@@ -79,8 +104,8 @@ impl TryFrom<transaction::SpendBody> for Body {
     type Error = Error;
 
     fn try_from(proto: transaction::SpendBody) -> anyhow::Result<Self, Self::Error> {
-        let value_commitment: value::Commitment = proto
-            .value_commitment
+        let balance_commitment: balance::Commitment = proto
+            .balance_commitment
             .ok_or_else(|| anyhow::anyhow!("missing value commitment"))?
             .try_into()?;
 
@@ -96,7 +121,7 @@ impl TryFrom<transaction::SpendBody> for Body {
             .map_err(|_| anyhow::anyhow!("spend body malformed"))?;
 
         Ok(Body {
-            value_commitment,
+            balance_commitment,
             nullifier,
             rk,
         })

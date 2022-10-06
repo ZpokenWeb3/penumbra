@@ -1,27 +1,27 @@
 use blake2b_simd::Hash;
 
-use penumbra_proto::{crypto as pb, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb, Protobuf};
 
-use crate::{asset, value, Fr, Value, STAKING_TOKEN_ASSET_ID};
+use crate::{asset, balance, Fr, Value, STAKING_TOKEN_ASSET_ID};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fee(pub Value);
 
 impl Default for Fee {
     fn default() -> Self {
-        Fee::from_staking_token_amount(0)
+        Fee::from_staking_token_amount(asset::Amount::zero())
     }
 }
 
 impl Fee {
-    pub fn from_staking_token_amount(amount: u64) -> Self {
+    pub fn from_staking_token_amount(amount: asset::Amount) -> Self {
         Self(Value {
             amount,
             asset_id: *STAKING_TOKEN_ASSET_ID,
         })
     }
 
-    pub fn amount(&self) -> u64 {
+    pub fn amount(&self) -> asset::Amount {
         self.0.amount
     }
 
@@ -29,7 +29,7 @@ impl Fee {
         self.0.asset_id
     }
 
-    pub fn commit(&self, blinding: Fr) -> value::Commitment {
+    pub fn commit(&self, blinding: Fr) -> balance::Commitment {
         self.0.commit(blinding)
     }
 
@@ -44,12 +44,12 @@ impl From<Fee> for pb::Fee {
     fn from(fee: Fee) -> Self {
         if fee.0.asset_id == *STAKING_TOKEN_ASSET_ID {
             pb::Fee {
-                amount: fee.0.amount,
+                amount: Some(fee.0.amount.into()),
                 asset_id: None,
             }
         } else {
             pb::Fee {
-                amount: fee.0.amount,
+                amount: Some(fee.0.amount.into()),
                 asset_id: Some(fee.0.asset_id.into()),
             }
         }
@@ -62,12 +62,12 @@ impl TryFrom<pb::Fee> for Fee {
     fn try_from(proto: pb::Fee) -> anyhow::Result<Self> {
         if proto.asset_id.is_some() {
             Ok(Fee(Value {
-                amount: proto.amount,
+                amount: proto.amount.unwrap().try_into()?,
                 asset_id: proto.asset_id.unwrap().try_into()?,
             }))
         } else {
             Ok(Fee(Value {
-                amount: proto.amount,
+                amount: proto.amount.unwrap().try_into()?,
                 asset_id: *STAKING_TOKEN_ASSET_ID,
             }))
         }

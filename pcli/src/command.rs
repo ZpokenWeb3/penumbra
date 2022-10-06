@@ -8,7 +8,7 @@ pub use keys::KeysCmd;
 pub use query::QueryCmd;
 pub use tx::TxCmd;
 pub use validator::ValidatorCmd;
-pub use view::transactions::TransactionsCmd;
+pub use view::transaction_hashes::TransactionHashesCmd;
 pub use view::ViewCmd;
 
 // Note on display_order:
@@ -26,7 +26,7 @@ pub use view::ViewCmd;
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
-    /// Query the  public chain state, like the validator set.
+    /// Query the public chain state, like the validator set.
     ///
     /// This command has two modes: it can be used to query raw bytes of
     /// arbitrary keys with the `key` subcommand, or it can be used to query
