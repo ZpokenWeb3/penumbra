@@ -31,7 +31,7 @@ async-process = { version = "1.0.1", optional = true }
 
 
 
-getrandom = { version = "0.2", features = ["js"] }
+#getrandom = { version = "0.2", features = ["js"] }
 
 
 
