@@ -74,18 +74,17 @@ pub mod core {
 //         }
 //     }
 //
-//     /// Transparent proofs.
-//     ///
-//     /// Note that these are protos for the "MVP" transparent version of Penumbra,
-//     /// i.e. not for production use and intentionally not private.
-//     pub mod transparent_proofs {
-//         pub mod v1alpha1 {
-//             include!("gen/penumbra.core.transparent_proofs.v1alpha1.rs");
-//         }
-//     }
+    /// Transparent proofs.
+    ///
+    /// Note that these are protos for the "MVP" transparent version of Penumbra,
+    /// i.e. not for production use and intentionally not private.
+    pub mod transparent_proofs {
+        pub mod v1alpha1 {
+            include!("gen/penumbra.core.transparent_proofs.v1alpha1.rs");
+        }
+    }
 }
 
-/// Client protocol structures.
 // pub mod client {
 //     pub mod v1alpha1 {
 //         include!("gen/penumbra.client.v1alpha1.rs");
@@ -147,7 +146,6 @@ pub mod core {
 //     }
 // }
 
-/// View protocol structures.
 // pub mod view {
 //     pub mod v1alpha1 {
 //         include!("gen/penumbra.view.v1alpha1.rs");

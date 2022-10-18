@@ -10,6 +10,7 @@ use hex::FromHex;
 
 
 use wasm_bindgen::prelude::*;
+use penumbra_crypto::keys::{SeedPhrase, SpendKey};
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
@@ -34,5 +35,21 @@ pub fn decrypt_note(full_viewing_key: &str, encrypted_note: &str, ephemeral_key:
 
 
     return  JsValue::from_serde(&note).unwrap();
-
 }
+
+#[wasm_bindgen]
+pub fn generate_spend_key(seed_phrase: &str) -> JsValue {
+    let seed = SeedPhrase::from_str(seed_phrase).unwrap();
+    let spend_key = SpendKey::from_seed_phrase(seed, 0);
+
+    return  JsValue::from_serde(&spend_key).unwrap();
+}
+
+#[wasm_bindgen]
+pub fn get_full_viewing_key(spend_key_str: &str) -> JsValue {
+    let spend_key = SpendKey::from_str(spend_key_str).unwrap();
+
+    return  JsValue::from_serde(&spend_key.full_viewing_key()).unwrap();
+}
+
+
