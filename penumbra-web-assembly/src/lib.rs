@@ -52,4 +52,15 @@ pub fn get_full_viewing_key(spend_key_str: &str) -> JsValue {
     return  JsValue::from_serde(&spend_key.full_viewing_key()).unwrap();
 }
 
+#[wasm_bindgen]
+pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
+    let fvk = FullViewingKey::from_str(full_viewing_key.as_ref())
+        .context("The provided string is not a valid FullViewingKey").unwrap();
+
+    let (address, _dtk) = fvk
+        .incoming()
+        .payment_address(index.into());
+    return  JsValue::from_serde(&address).unwrap();
+}
+
 

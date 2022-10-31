@@ -1,6 +1,6 @@
 [package]
 name = "penumbra-web-assembly"
-version = "0.34.1-getFVK"
+version = "0.34.2-getAddressByIndex"
 authors = ["Valentine <valentine@zpoken.io>"]
 edition = "2018"
 

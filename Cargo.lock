@@ -3651,7 +3651,7 @@ dependencies = [
 
 [[package]]
 name = "penumbra-web-assembly"
-version = "0.34.1-getFVK"
+version = "0.34.2-getAddressByIndex"
 dependencies = [
  "anyhow",
  "async-global-executor",
