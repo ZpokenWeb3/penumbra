@@ -73,6 +73,23 @@ message Action {
   }
 }
 
+message TransactionPerspective {
+
+  repeated PayloadKeyWithCommitment payload_keys = 1;
+  repeated NullifierWithNote spend_nullifiers = 2;
+
+}
+
+message PayloadKeyWithCommitment {
+  bytes payload_key = 1;
+  crypto.v1alpha1.NoteCommitment commitment = 2;
+}
+
+message NullifierWithNote {
+  crypto.v1alpha1.Nullifier nullifier = 1;
+  crypto.v1alpha1.Note note = 2;
+}
+
 message TransactionView {
   // A list views into of actions (state changes) performed by this transaction.
   repeated ActionView action_views = 1;
@@ -90,39 +107,34 @@ message TransactionView {
   // An optional plaintext memo. It will only be populated if there are
   // outputs in the actions of this transaction.
   optional string memo = 6;
-  // The parent transaction
-  Transaction transaction = 7;
 }
 
 message SpendView {
-    crypto.v1alpha1.Note note = 1;
-    Action spend = 2;
+    Spend spend = 1;
+    crypto.v1alpha1.Note note = 2;
 }
 
 message OutputView {
-    crypto.v1alpha1.Note note = 1;
-    bytes payload_key = 2;
-    Action output = 3;
+    Output output = 1;
+    crypto.v1alpha1.Note note = 2;
+    bytes payload_key = 3;
 }
 
 message SwapView {
-
-    crypto.v1alpha1.Note note = 1;
-    dex.v1alpha1.SwapPlaintext swap_plaintext = 2;
-    Action swap = 3;
-
+    dex.v1alpha1.Swap swap = 1;
+    crypto.v1alpha1.Note swap_nft = 2;
+    dex.v1alpha1.SwapPlaintext swap_plaintext = 3;
 }
 
 message SwapClaimView {
-
-    crypto.v1alpha1.Note note_1 = 1;
-    crypto.v1alpha1.Note note_2 = 2;
-    Action swap_claim = 3;
+    dex.v1alpha1.SwapClaim swap_claim = 1;
+    crypto.v1alpha1.Note output_1 = 2;
+    crypto.v1alpha1.Note output_2 = 3;
 }
 
 // A view of a specific state change action performed by a transaction.
 message ActionView {
-  oneof action {
+  oneof action_view {
     SpendView spend = 1;
     OutputView output = 2;
     stake.v1alpha1.Delegate delegate = 3;

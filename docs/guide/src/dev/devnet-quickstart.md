@@ -3,7 +3,7 @@
 This page describes a quickstart method for running `pd`+`tendermint` to test
 changes during development.
 
-To start, you'll need to [install Tendermint `v0.34`](https://docs.tendermint.com/v0.34/introduction/install.html).
+To start, you'll need to [install Tendermint `v0.34`](../pd/build.md#installing-tendermint).
 
 ## Generating configs
 
@@ -79,3 +79,15 @@ At this point you're ready to generate new configs, and restart both `pd` and
 `tendermint`.  The order they're started in doesn't particularly matter for
 correctness, because `tendermint` will retry connecting to the ABCI server until
 it succeeds.
+
+## Optional: running smoke-tests
+
+Once you have a working devnet running, you should be able to run the [smoke tests](https://en.wikipedia.org/wiki/Smoke_testing_(software)) successfully. This can be useful if you are looking to contribute to Penumbra, or if you need to check that your setup is correct.
+
+To run the smoke tests:
+
+1. Make sure you have a devnet running (see previous steps)
+2. Run integration tests:
+```shell
+PENUMBRA_NODE_HOSTNAME=127.0.0.1 PCLI_UNLEASH_DANGER=yes cargo test --package pcli -- --ignored --test-threads 1
+```

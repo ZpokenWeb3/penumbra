@@ -11,7 +11,6 @@ use penumbra_crypto::{
     asset::Denom,
     dex::{swap::SwapPlaintext, BatchSwapOutputData, TradingPair},
     keys::AddressIndex,
-    memo::MemoPlaintext,
     rdsa::{SpendAuth, VerificationKey},
     transaction::Fee,
     Address, DelegationToken, FieldExt, Fr, FullViewingKey, Note, Value, STAKING_TOKEN_ASSET_ID,
@@ -76,10 +75,12 @@ impl<R: RngCore + CryptoRng> Planner<R> {
     }
 
     /// Set a memo for this transaction plan.
+    ///
+    /// Errors if the memo is too long.
     #[instrument(skip(self))]
-    pub fn memo(&mut self, memo: MemoPlaintext) -> &mut Self {
-        self.plan.memo_plan = Some(MemoPlan::new(&mut self.rng, memo));
-        self
+    pub fn memo(&mut self, memo: String) -> anyhow::Result<&mut Self> {
+        self.plan.memo_plan = Some(MemoPlan::new(&mut self.rng, memo)?);
+        Ok(self)
     }
 
     /// Add a fee to the transaction plan.
@@ -341,7 +342,8 @@ impl<R: RngCore + CryptoRng> Planner<R> {
 
         // If there are outputs, we check that a memo has been added. If not, we add a default memo.
         if self.plan.num_outputs() > 0 && self.plan.memo_plan.is_none() {
-            self.memo(MemoPlaintext::default());
+            self.memo(String::new())
+                .expect("empty string is a valid memo");
         } else if self.plan.num_outputs() == 0 && self.plan.memo_plan.is_some() {
             anyhow::bail!("if no outputs, no memo should be added");
         }

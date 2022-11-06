@@ -1,7 +1,9 @@
 // Rust analyzer complains without this (but rustc is happy regardless)
 #![recursion_limit = "256"]
 #![allow(clippy::clone_on_copy)]
-use anyhow::Result;
+use std::fs;
+
+use anyhow::{Context, Result};
 use clap::Parser;
 use futures::StreamExt;
 use penumbra_crypto::FullViewingKey;
@@ -30,7 +32,10 @@ const VIEW_FILE_NAME: &str = "pcli-view.sqlite";
 
 #[derive(Debug)]
 pub struct App {
-    pub view: ViewProtocolClient<BoxGrpcService>,
+    /// view will be `None` when a command indicates that it can be run offline via
+    /// `.offline()` and Some(_) otherwise. Assuming `.offline()` has been implemenented
+    /// correctly, this can be unwrapped safely.
+    pub view: Option<ViewProtocolClient<BoxGrpcService>>,
     pub custody: CustodyProtocolClient<BoxGrpcService>,
     pub fvk: FullViewingKey,
     pub wallet: KeyStore,
@@ -40,11 +45,12 @@ pub struct App {
 
 impl App {
     pub fn view(&mut self) -> &mut impl ViewClient {
-        &mut self.view
+        self.view.as_mut().unwrap()
     }
 
     async fn sync(&mut self) -> Result<()> {
-        let mut status_stream = ViewClient::status_stream(&mut self.view, self.fvk.hash()).await?;
+        let mut status_stream =
+            ViewClient::status_stream(self.view.as_mut().unwrap(), self.fvk.hash()).await?;
 
         // Pull out the first message from the stream, which has the current state, and use
         // it to set up a progress bar.
@@ -92,6 +98,10 @@ async fn main() -> Result<()> {
     // that tracing is set up even for wallet commands that don't build the `App`.
     opt.init_tracing();
 
+    //Ensure that the data_path exists, in case this is a cold start
+    fs::create_dir_all(&opt.data_path)
+        .with_context(|| format!("Failed to create data directory {}", opt.data_path))?;
+
     // The keys command takes the data dir directly, since it may need to
     // create the client state, so handle it specially here so that we can have
     // common code for the other subcommands.
@@ -109,7 +119,7 @@ async fn main() -> Result<()> {
 
     let (mut app, cmd) = opt.into_app().await?;
 
-    if cmd.needs_sync() {
+    if !cmd.offline() {
         app.sync().await?;
     }
 
@@ -124,7 +134,7 @@ async fn main() -> Result<()> {
             let mut oblivious_client = app.oblivious_client().await?;
 
             view_cmd
-                .exec(&app.fvk, &mut app.view, &mut oblivious_client)
+                .exec(&app.fvk, app.view.as_mut(), &mut oblivious_client)
                 .await?
         }
         Command::Validator(cmd) => cmd.exec(&mut app).await?,

@@ -123,7 +123,7 @@ impl TransactionPlan {
         let mut memo_key: Option<PayloadKey> = None;
         if self.memo_plan.is_some() {
             let memo_plan = self.memo_plan.clone().unwrap();
-            state.update(&memo_plan.memo().0);
+            state.update(&memo_plan.memo().unwrap().0.as_ref());
             memo_key = Some(memo_plan.key);
         }
 
@@ -497,8 +497,8 @@ impl AuthorizingData for ICS20Withdrawal {
             blake2b_simd::Params::default().hash(self.destination_chain_address.as_bytes());
 
         state.update(destination_chain_id_hash.as_bytes());
-        state.update(&self.value.amount.to_le_bytes());
-        state.update(&self.value.asset_id.to_bytes());
+        state.update(&self.value().amount.to_le_bytes());
+        state.update(&self.value().asset_id.to_bytes());
         state.update(destination_chain_address_hash.as_bytes());
         //This is safe because the return address has a constant length of 80 bytes.
         state.update(&self.return_address.to_vec());
@@ -525,7 +525,6 @@ mod tests {
         asset,
         dex::{swap::SwapPlaintext, TradingPair},
         keys::{SeedPhrase, SpendKey},
-        memo::MemoPlaintext,
         transaction::Fee,
         Note, Value, STAKING_TOKEN_ASSET_ID,
     };
@@ -610,7 +609,7 @@ mod tests {
                 SwapPlan::new(&mut OsRng, swap_plaintext).into(),
             ],
             clue_plans: vec![CluePlan::new(&mut OsRng, addr, 1)],
-            memo_plan: Some(MemoPlan::new(&mut OsRng, MemoPlaintext::default())),
+            memo_plan: Some(MemoPlan::new(&mut OsRng, String::new()).unwrap()),
         };
 
         println!("{}", serde_json::to_string_pretty(&plan).unwrap());

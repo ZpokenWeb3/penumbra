@@ -42,7 +42,7 @@ impl TransactionPlan {
         let mut memo_key: Option<PayloadKey> = None;
         if self.memo_plan.is_some() {
             let memo_plan = self.memo_plan.clone().unwrap();
-            memo = Some(memo_plan.memo());
+            memo = memo_plan.memo().ok();
             memo_key = Some(memo_plan.key);
         }
 
@@ -73,7 +73,7 @@ impl TransactionPlan {
         // field with a dummy key.
         for output_plan in self.output_plans() {
             // Outputs subtract from the transaction's value balance.
-            synthetic_blinding_factor -= output_plan.value_blinding;
+            synthetic_blinding_factor += output_plan.value_blinding;
             actions.push(Action::Output(output_plan.output(
                 fvk.outgoing(),
                 memo_key.as_ref().unwrap_or(&dummy_payload_key),
@@ -82,7 +82,7 @@ impl TransactionPlan {
 
         // Build the transaction's swaps.
         for swap_plan in self.swap_plans() {
-            synthetic_blinding_factor -= swap_plan.fee_blinding;
+            synthetic_blinding_factor += swap_plan.fee_blinding;
             actions.push(Action::Swap(swap_plan.swap(fvk)));
         }
 
