@@ -5,7 +5,7 @@ use sqlx::Either;
 use std::{ops::Range, pin::Pin};
 
 use penumbra_tct::{
-    storage::{Read, StoredPosition, Write},
+    storage::{AsyncRead, AsyncWrite, StoredPosition},
     structure::Hash,
     Commitment, Forgotten, Position,
 };
@@ -13,7 +13,7 @@ use penumbra_tct::{
 pub struct TreeStore<'a, 'c: 'a>(pub &'a mut sqlx::Transaction<'c, sqlx::Sqlite>);
 
 #[async_trait]
-impl Read for TreeStore<'_, '_> {
+impl AsyncRead for TreeStore<'_, '_> {
     type Error = anyhow::Error;
 
     async fn position(&mut self) -> Result<StoredPosition, Self::Error> {
@@ -31,6 +31,27 @@ impl Read for TreeStore<'_, '_> {
             .await?
             .forgotten as u64)
             .into())
+    }
+
+    async fn hash(&mut self, position: Position, height: u8) -> Result<Option<Hash>, Self::Error> {
+        let position = u64::from(position) as i64;
+
+        let bytes = sqlx::query!(
+            "SELECT hash FROM nct_hashes WHERE position = ? AND height = ? LIMIT 1",
+            position,
+            height
+        )
+        .fetch_optional(&mut *self.0)
+        .await?
+        .map(|r| r.hash);
+
+        Ok(bytes
+            .map(|bytes| {
+                <[u8; 32]>::try_from(bytes)
+                    .map_err(|_| anyhow::anyhow!("hash was of incorrect length"))
+                    .and_then(|array| Hash::from_bytes(array).map_err(Into::into))
+            })
+            .transpose()?)
     }
 
     fn hashes(
@@ -60,6 +81,26 @@ impl Read for TreeStore<'_, '_> {
         )
     }
 
+    async fn commitment(&mut self, position: Position) -> Result<Option<Commitment>, Self::Error> {
+        let position = u64::from(position) as i64;
+
+        let bytes: Option<Vec<u8>> = sqlx::query!(
+            "SELECT commitment FROM nct_commitments WHERE position = ? LIMIT 1",
+            position,
+        )
+        .fetch_optional(&mut *self.0)
+        .await?
+        .map(|r| r.commitment);
+
+        Ok(bytes
+            .map(|bytes| {
+                <[u8; 32]>::try_from(bytes)
+                    .map_err(|_| anyhow::anyhow!("commitment was of incorrect length"))
+                    .and_then(|array| Commitment::try_from(array).map_err(Into::into))
+            })
+            .transpose()?)
+    }
+
     fn commitments(
         &mut self,
     ) -> Pin<Box<dyn Stream<Item = Result<(Position, Commitment), Self::Error>> + Send + '_>> {
@@ -86,7 +127,7 @@ impl Read for TreeStore<'_, '_> {
 }
 
 #[async_trait]
-impl Write for TreeStore<'_, '_> {
+impl AsyncWrite for TreeStore<'_, '_> {
     async fn set_position(&mut self, position: StoredPosition) -> Result<(), Self::Error> {
         let position = Option::from(position).map(|p: Position| u64::from(p) as i64);
         sqlx::query!("UPDATE nct_position SET position = ?", position)

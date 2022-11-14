@@ -13,7 +13,7 @@ pub use swap_claim_view::SwapClaimView;
 pub use swap_view::SwapView;
 
 use crate::action::{
-    Delegate, ICS20Withdrawal, PositionClose, PositionOpen, PositionRewardClaim, PositionWithdraw,
+    Delegate, Ics20Withdrawal, PositionClose, PositionOpen, PositionRewardClaim, PositionWithdraw,
     ProposalSubmit, ProposalWithdraw, Undelegate, ValidatorVote,
 };
 
@@ -38,7 +38,7 @@ pub enum ActionView {
     PositionClose(PositionClose),
     PositionWithdraw(PositionWithdraw),
     PositionRewardClaim(PositionRewardClaim),
-    ICS20Withdrawal(ICS20Withdrawal),
+    Ics20Withdrawal(Ics20Withdrawal),
 }
 
 impl Protobuf<pbt::ActionView> for ActionView {}
@@ -59,8 +59,8 @@ impl TryFrom<pbt::ActionView> for ActionView {
                 AV::Undelegate(x) => ActionView::Undelegate(x.try_into()?),
                 AV::Swap(x) => ActionView::Swap(x.try_into()?),
                 AV::SwapClaim(x) => ActionView::SwapClaim(x.try_into()?),
-                AV::ValidatorDefinition(x) => ActionView::ValidatorDefinition(x.try_into()?),
-                AV::IbcAction(x) => ActionView::IBCAction(x.try_into()?),
+                AV::ValidatorDefinition(x) => ActionView::ValidatorDefinition(x),
+                AV::IbcAction(x) => ActionView::IBCAction(x),
                 AV::ProposalSubmit(x) => ActionView::ProposalSubmit(x.try_into()?),
                 AV::ProposalWithdraw(x) => ActionView::ProposalWithdraw(x.try_into()?),
                 AV::ValidatorVote(x) => ActionView::ValidatorVote(x.try_into()?),
@@ -68,7 +68,7 @@ impl TryFrom<pbt::ActionView> for ActionView {
                 AV::PositionClose(x) => ActionView::PositionClose(x.try_into()?),
                 AV::PositionWithdraw(x) => ActionView::PositionWithdraw(x.try_into()?),
                 AV::PositionRewardClaim(x) => ActionView::PositionRewardClaim(x.try_into()?),
-                AV::Ics20Withdrawal(x) => ActionView::ICS20Withdrawal(x.try_into()?),
+                AV::Ics20Withdrawal(x) => ActionView::Ics20Withdrawal(x.try_into()?),
             },
         )
     }
@@ -85,8 +85,8 @@ impl From<ActionView> for pbt::ActionView {
                 ActionView::Spend(x) => AV::Spend(x.into()),
                 ActionView::Delegate(x) => AV::Delegate(x.into()),
                 ActionView::Undelegate(x) => AV::Undelegate(x.into()),
-                ActionView::ValidatorDefinition(x) => AV::ValidatorDefinition(x.into()),
-                ActionView::IBCAction(x) => AV::IbcAction(x.into()),
+                ActionView::ValidatorDefinition(x) => AV::ValidatorDefinition(x),
+                ActionView::IBCAction(x) => AV::IbcAction(x),
                 ActionView::ProposalSubmit(x) => AV::ProposalSubmit(x.into()),
                 ActionView::ProposalWithdraw(x) => AV::ProposalWithdraw(x.into()),
                 ActionView::ValidatorVote(x) => AV::ValidatorVote(x.into()),
@@ -94,7 +94,7 @@ impl From<ActionView> for pbt::ActionView {
                 ActionView::PositionClose(x) => AV::PositionClose(x.into()),
                 ActionView::PositionWithdraw(x) => AV::PositionWithdraw(x.into()),
                 ActionView::PositionRewardClaim(x) => AV::PositionRewardClaim(x.into()),
-                ActionView::ICS20Withdrawal(x) => AV::Ics20Withdrawal(x.into()),
+                ActionView::Ics20Withdrawal(x) => AV::Ics20Withdrawal(x.into()),
             }),
         }
     }

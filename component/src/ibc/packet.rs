@@ -1,7 +1,7 @@
-use crate::ibc::component::channel::View as _;
-use crate::ibc::component::client::View as _;
-use crate::ibc::component::connection::View as _;
-use crate::Context;
+use super::component::channel::StateReadExt as _;
+use super::component::channel::StateWriteExt as _;
+use super::component::client::StateReadExt as _;
+use super::component::connection::StateReadExt as _;
 use anyhow::Result;
 use async_trait::async_trait;
 use ibc::core::ics02_client::client_state::ClientState;
@@ -10,8 +10,8 @@ use ibc::core::ics04_channel::channel::State as ChannelState;
 use ibc::core::ics04_channel::packet::Packet;
 use ibc::core::ics24_host::identifier::ChannelId;
 use ibc::core::ics24_host::identifier::PortId;
-use penumbra_storage::StateExt;
-use penumbra_transaction::action::ICS20Withdrawal;
+use penumbra_storage::{StateRead, StateWrite};
+use penumbra_transaction::action::Ics20Withdrawal;
 
 pub trait CheckStatus: private::Sealed {}
 
@@ -54,13 +54,13 @@ impl IBCPacket<Unchecked> {
     }
 }
 
-impl From<ICS20Withdrawal> for IBCPacket<Unchecked> {
-    fn from(withdrawal: ICS20Withdrawal) -> Self {
+impl From<Ics20Withdrawal> for IBCPacket<Unchecked> {
+    fn from(withdrawal: Ics20Withdrawal) -> Self {
         Self {
             source_port: withdrawal.source_port.clone(),
-            source_channel: withdrawal.source_channel.clone(),
+            source_channel: withdrawal.source_channel,
             timeout_height: ibc::Height::zero().with_revision_height(withdrawal.timeout_height),
-            timeout_timestamp: withdrawal.timeout_time.into(),
+            timeout_timestamp: withdrawal.timeout_time,
             data: withdrawal.packet_data(),
 
             m: std::marker::PhantomData,
@@ -68,50 +68,10 @@ impl From<ICS20Withdrawal> for IBCPacket<Unchecked> {
     }
 }
 
-/// This trait, an extension of the Channel, Connection, and Client views, allows a component to
-/// send a packet.
 #[async_trait]
-pub trait SendPacket: StateExt {
-    /// Send a packet on a channel. This assumes that send_packet_check has already been called on
-    /// the provided packet.
-    async fn send_packet_execute(&mut self, _ctx: Context, packet: IBCPacket<Checked>) {
-        // increment the send sequence counter
-        let sequence = self
-            .get_send_sequence(&packet.source_channel, &packet.source_port)
-            .await
-            .unwrap();
-        self.put_send_sequence(&packet.source_channel, &packet.source_port, sequence + 1)
-            .await;
-
-        // store commitment to the packet data & packet timeout
-        let packet = Packet {
-            source_channel: packet.source_channel.clone(),
-            source_port: packet.source_port.clone(),
-            sequence: sequence.into(),
-
-            // NOTE: the packet commitment is solely a function of the source port and channel, so
-            // these fields do not affect the commitment. Thus, we can set them to empty values.
-            destination_port: PortId::default(),
-            destination_channel: ChannelId::default(),
-
-            timeout_height: packet.timeout_height,
-            timeout_timestamp: ibc::timestamp::Timestamp::from_nanoseconds(
-                packet.timeout_timestamp,
-            )
-            .unwrap(),
-
-            data: packet.data,
-        };
-
-        self.put_packet_commitment(&packet).await;
-    }
-
+pub trait SendPacketRead: StateRead {
     /// send_packet_check verifies that a packet can be sent using the provided parameters.
-    async fn send_packet_check(
-        &self,
-        _ctx: Context,
-        packet: IBCPacket<Unchecked>,
-    ) -> Result<IBCPacket<Checked>> {
+    async fn send_packet_check(&self, packet: IBCPacket<Unchecked>) -> Result<IBCPacket<Checked>> {
         let channel = self
             .get_channel(&packet.source_channel, &packet.source_port)
             .await?
@@ -162,7 +122,7 @@ pub trait SendPacket: StateExt {
 
         Ok(IBCPacket::<Checked> {
             source_port: packet.source_port.clone(),
-            source_channel: packet.source_channel.clone(),
+            source_channel: packet.source_channel,
             timeout_height: packet.timeout_height,
             timeout_timestamp: packet.timeout_timestamp,
             data: packet.data,
@@ -172,7 +132,47 @@ pub trait SendPacket: StateExt {
     }
 }
 
-impl<T: StateExt> SendPacket for T {}
+impl<T: StateRead> SendPacketRead for T {}
+
+/// This trait, an extension of the Channel, Connection, and Client views, allows a component to
+/// send a packet.
+#[async_trait]
+pub trait SendPacketWrite: StateWrite {
+    /// Send a packet on a channel. This assumes that send_packet_check has already been called on
+    /// the provided packet.
+    async fn send_packet_execute(&mut self, packet: IBCPacket<Checked>) {
+        // increment the send sequence counter
+        let sequence = self
+            .get_send_sequence(&packet.source_channel, &packet.source_port)
+            .await
+            .unwrap();
+        self.put_send_sequence(&packet.source_channel, &packet.source_port, sequence + 1);
+
+        // store commitment to the packet data & packet timeout
+        let packet = Packet {
+            source_channel: packet.source_channel,
+            source_port: packet.source_port.clone(),
+            sequence: sequence.into(),
+
+            // NOTE: the packet commitment is solely a function of the source port and channel, so
+            // these fields do not affect the commitment. Thus, we can set them to empty values.
+            destination_port: PortId::default(),
+            destination_channel: ChannelId::default(),
+
+            timeout_height: packet.timeout_height,
+            timeout_timestamp: ibc::timestamp::Timestamp::from_nanoseconds(
+                packet.timeout_timestamp,
+            )
+            .unwrap(),
+
+            data: packet.data,
+        };
+
+        self.put_packet_commitment(&packet);
+    }
+}
+
+impl<T: StateWrite> SendPacketWrite for T {}
 
 #[async_trait]
-pub trait WriteAcknowledgement: StateExt {}
+pub trait WriteAcknowledgement: StateWrite {}

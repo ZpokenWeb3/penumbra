@@ -1,5 +1,8 @@
+use crate::ibc::component::client::StateReadExt;
+
 use super::super::*;
 use ibc::clients::ics07_tendermint::client_state::ClientState as TendermintClientState;
+use ibc::core::ics02_client::client_state::ClientState;
 use ibc::core::ics04_channel::context::calculate_block_delay;
 use ibc::core::ics23_commitment::commitment::CommitmentPrefix;
 use ibc::core::ics23_commitment::commitment::CommitmentProofBytes;
@@ -18,7 +21,7 @@ use ibc_proto::ibc::core::commitment::v1::MerkleProof as RawMerkleProof;
 use prost::Message;
 
 use ibc::core::ics02_client::client_state::AnyClientState;
-use penumbra_chain::View as _;
+use penumbra_chain::StateReadExt as _;
 use sha2::{Digest, Sha256};
 
 // NOTE: this is underspecified.
@@ -72,7 +75,7 @@ fn verify_merkle_proof(
 }
 
 #[async_trait]
-pub trait ChannelProofVerifier: StateExt {
+pub trait ChannelProofVerifier: StateReadExt {
     async fn verify_channel_proof(
         &self,
         connection: &ConnectionEnd,
@@ -114,8 +117,10 @@ pub trait ChannelProofVerifier: StateExt {
     }
 }
 
+impl<T: StateRead> ChannelProofVerifier for T {}
+
 #[async_trait]
-pub trait PacketProofVerifier: StateExt + inner::Inner {
+pub trait PacketProofVerifier: StateReadExt + inner::Inner {
     async fn verify_packet_recv_proof(
         &self,
         connection: &ConnectionEnd,
@@ -246,11 +251,13 @@ pub trait PacketProofVerifier: StateExt + inner::Inner {
     }
 }
 
+impl<T: StateRead> PacketProofVerifier for T {}
+
 mod inner {
     use super::*;
 
     #[async_trait]
-    pub trait Inner: StateExt {
+    pub trait Inner: StateReadExt {
         async fn get_trusted_client_and_consensus_state(
             &self,
             client_id: &ClientId,
@@ -299,8 +306,5 @@ mod inner {
         }
     }
 
-    impl<T: StateExt> Inner for T {}
+    impl<T: StateReadExt> Inner for T {}
 }
-
-impl<T: StateExt> ChannelProofVerifier for T {}
-impl<T: StateExt> PacketProofVerifier for T {}

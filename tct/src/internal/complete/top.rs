@@ -4,15 +4,15 @@ use complete::Nested;
 
 /// A complete top-level tier of the tiered commitment tree, being an 8-deep sparse quad-tree.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Top<Item: GetHash + Height> {
+pub struct Top<Item: GetHash + Height + Clone> {
     pub(in super::super) inner: Nested<Item>,
 }
 
-impl<Item: GetHash + Height> Height for Top<Item> {
+impl<Item: GetHash + Height + Clone> Height for Top<Item> {
     type Height = <Nested<Item> as Height>::Height;
 }
 
-impl<Item: GetHash + Height> GetHash for Top<Item> {
+impl<Item: GetHash + Height + Clone> GetHash for Top<Item> {
     #[inline]
     fn hash(&self) -> Hash {
         self.inner.hash()
@@ -24,37 +24,33 @@ impl<Item: GetHash + Height> GetHash for Top<Item> {
     }
 }
 
-impl<Item: GetHash + Height> From<complete::Tier<Item>> for Top<Item> {
+impl<Item: GetHash + Height + Clone> From<complete::Tier<Item>> for Top<Item> {
     fn from(tier: complete::Tier<Item>) -> Self {
         Top { inner: tier.inner }
     }
 }
 
-impl<Item: Height + GetHash> GetPosition for Top<Item> {
+impl<Item: Height + GetHash + Clone> GetPosition for Top<Item> {
     fn position(&self) -> Option<u64> {
         None
     }
 }
 
-impl<'tree, Item: Height + structure::Any<'tree>> structure::Any<'tree> for Top<Item> {
+impl<'tree, Item: Height + structure::Any<'tree> + Clone> structure::Any<'tree> for Top<Item> {
     fn kind(&self) -> Kind {
         self.inner.kind()
-    }
-
-    fn global_position(&self) -> Option<Position> {
-        <Self as GetPosition>::position(self).map(Into::into)
     }
 
     fn forgotten(&self) -> Forgotten {
         (&self.inner as &dyn structure::Any).forgotten()
     }
 
-    fn children(&self) -> Vec<Node<'_, 'tree>> {
+    fn children(&'tree self) -> Vec<HashOrNode<'tree>> {
         (&self.inner as &dyn structure::Any).children()
     }
 }
 
-impl<Item: GetHash + Height + OutOfOrderOwned> OutOfOrderOwned for Top<Item> {
+impl<Item: GetHash + Height + OutOfOrderOwned + Clone> OutOfOrderOwned for Top<Item> {
     fn uninitialized_out_of_order_insert_commitment_owned(
         this: Insert<Self>,
         index: u64,
@@ -70,7 +66,7 @@ impl<Item: GetHash + Height + OutOfOrderOwned> OutOfOrderOwned for Top<Item> {
     }
 }
 
-impl<Item: GetHash + UncheckedSetHash> UncheckedSetHash for Top<Item> {
+impl<Item: GetHash + UncheckedSetHash + Clone> UncheckedSetHash for Top<Item> {
     fn unchecked_set_hash(&mut self, index: u64, height: u8, hash: Hash) {
         self.inner.unchecked_set_hash(index, height, hash)
     }

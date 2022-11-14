@@ -1,12 +1,14 @@
-use penumbra_chain::View as _;
-use penumbra_component::dex::View as _;
-use penumbra_component::shielded_pool::View as _;
-use penumbra_component::stake::View as _;
+use penumbra_chain::StateReadExt as _;
+use penumbra_component::dex::StateReadExt as _;
+use penumbra_component::shielded_pool::{StateReadExt as _, SupplyRead as _};
+use penumbra_component::stake::StateReadExt as _;
+use penumbra_crypto::asset::{self, Asset};
 use penumbra_proto::{
     self as proto,
     client::v1alpha1::{
-        specific_query_server::SpecificQuery, BatchSwapOutputDataRequest, KeyValueRequest,
-        KeyValueResponse, StubCpmmReservesRequest, ValidatorStatusRequest,
+        specific_query_server::SpecificQuery, AssetInfoRequest, AssetInfoResponse,
+        BatchSwapOutputDataRequest, KeyValueRequest, KeyValueResponse, StubCpmmReservesRequest,
+        ValidatorStatusRequest,
     },
     core::{
         chain::v1alpha1::NoteSource,
@@ -30,11 +32,83 @@ use super::Info;
 #[tonic::async_trait]
 impl SpecificQuery for Info {
     #[instrument(skip(self, request))]
+    async fn key_value(
+        &self,
+        request: tonic::Request<KeyValueRequest>,
+    ) -> Result<tonic::Response<KeyValueResponse>, Status> {
+        let state = self.storage.state();
+        state.check_chain_id(&request.get_ref().chain_id).await?;
+
+        let request = request.into_inner();
+        tracing::debug!(?request);
+
+        if request.key.is_empty() {
+            return Err(Status::invalid_argument("key is empty"));
+        }
+
+        // TODO: how does this align with the ABCI k/v implementation?
+        // why do we have two different implementations?
+        let (value, proof) = state
+            .get_with_proof(request.key)
+            .await
+            .map_err(|e| tonic::Status::internal(e.to_string()))?;
+
+        let commitment_proof = ics23::CommitmentProof {
+            proof: Some(ics23::commitment_proof::Proof::Exist(proof)),
+        };
+
+        Ok(tonic::Response::new(KeyValueResponse {
+            value,
+            proof: if request.proof {
+                Some(commitment_proof)
+            } else {
+                None
+            },
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn asset_info(
+        &self,
+        request: tonic::Request<AssetInfoRequest>,
+    ) -> Result<tonic::Response<AssetInfoResponse>, Status> {
+        let state = self.storage.state();
+        state.check_chain_id(&request.get_ref().chain_id).await?;
+
+        let request = request.into_inner();
+        let id: asset::Id = request
+            .asset_id
+            .ok_or_else(|| Status::invalid_argument("missing asset_id"))?
+            .try_into()
+            .map_err(|e| Status::invalid_argument(format!("could not parse asset_id: {}", e)))?;
+
+        let denom = state
+            .denom_by_asset(&id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let rsp = match denom {
+            Some(denom) => {
+                tracing::debug!(?id, ?denom, "found denom");
+                AssetInfoResponse {
+                    asset: Some(Asset { id, denom }.into()),
+                }
+            }
+            None => {
+                tracing::debug!(?id, "unknown asset id");
+                Default::default()
+            }
+        };
+
+        Ok(tonic::Response::new(rsp))
+    }
+
+    #[instrument(skip(self, request))]
     async fn transaction_by_note(
         &self,
         request: tonic::Request<NoteCommitment>,
     ) -> Result<tonic::Response<NoteSource>, Status> {
-        let state = self.state_tonic().await?;
+        let state = self.storage.state();
         let cm = request
             .into_inner()
             .try_into()
@@ -54,7 +128,7 @@ impl SpecificQuery for Info {
         &self,
         request: tonic::Request<ValidatorStatusRequest>,
     ) -> Result<tonic::Response<ValidatorStatus>, Status> {
-        let state = self.state_tonic().await?;
+        let state = self.storage.state();
         state.check_chain_id(&request.get_ref().chain_id).await?;
 
         let id = request
@@ -79,7 +153,7 @@ impl SpecificQuery for Info {
         &self,
         request: tonic::Request<BatchSwapOutputDataRequest>,
     ) -> Result<tonic::Response<BatchSwapOutputData>, Status> {
-        let state = self.state_tonic().await?;
+        let state = self.storage.state();
         let request_inner = request.into_inner();
         let height = request_inner.height;
         let trading_pair = request_inner
@@ -105,7 +179,7 @@ impl SpecificQuery for Info {
         &self,
         request: tonic::Request<StubCpmmReservesRequest>,
     ) -> Result<tonic::Response<Reserves>, Status> {
-        let state = self.state_tonic().await?;
+        let state = self.storage.state();
         let request_inner = request.into_inner();
         let trading_pair = request_inner
             .trading_pair
@@ -129,7 +203,7 @@ impl SpecificQuery for Info {
         &self,
         request: tonic::Request<proto::core::crypto::v1alpha1::IdentityKey>,
     ) -> Result<tonic::Response<proto::core::stake::v1alpha1::RateData>, Status> {
-        let state = self.state_tonic().await?;
+        let state = self.storage.state();
         let identity_key = request
             .into_inner()
             .try_into()
@@ -144,41 +218,5 @@ impl SpecificQuery for Info {
             Some(r) => Ok(tonic::Response::new(r.into())),
             None => Err(Status::not_found("next validator rate not found")),
         }
-    }
-
-    #[instrument(skip(self, request))]
-    async fn key_value(
-        &self,
-        request: tonic::Request<KeyValueRequest>,
-    ) -> Result<tonic::Response<KeyValueResponse>, Status> {
-        let state = self.state_tonic().await?;
-        state.check_chain_id(&request.get_ref().chain_id).await?;
-
-        let request = request.into_inner();
-        tracing::debug!(?request);
-
-        if request.key.is_empty() {
-            return Err(Status::invalid_argument("key is empty"));
-        }
-
-        let (value, proof) = state
-            .read()
-            .await
-            .get_with_proof(request.key)
-            .await
-            .map_err(|e| tonic::Status::internal(e.to_string()))?;
-
-        let commitment_proof = ics23::CommitmentProof {
-            proof: Some(ics23::commitment_proof::Proof::Exist(proof)),
-        };
-
-        Ok(tonic::Response::new(KeyValueResponse {
-            value,
-            proof: if request.proof {
-                Some(commitment_proof)
-            } else {
-                None
-            },
-        }))
     }
 }

@@ -19,13 +19,16 @@ pub fn index(tree: &Tree) -> Result<(), IndexMalformed> {
     // A reverse index from positions back to the commitments that are supposed to map to their
     // hashes
     let reverse_index: BTreeMap<Position, Commitment> = tree
-        .commitments()
+        .commitments_unordered()
         .map(|(commitment, position)| (position, commitment))
         .collect();
 
     let mut errors = vec![];
 
-    structure::traverse(tree.structure(), &mut |node| {
+    let mut stack = vec![tree.structure()];
+    while let Some(node) = stack.pop() {
+        stack.extend(node.children());
+
         if let Kind::Leaf {
             commitment: Some(actual_commitment),
         } = node.kind()
@@ -58,7 +61,7 @@ pub fn index(tree: &Tree) -> Result<(), IndexMalformed> {
                 });
             };
         }
-    });
+    }
 
     // Return an error if any were discovered
     if errors.is_empty() {
@@ -124,7 +127,7 @@ pub fn all_proofs(tree: &Tree) -> Result<(), InvalidWitnesses> {
 
     let mut errors = vec![];
 
-    for (commitment, position) in tree.commitments() {
+    for (commitment, position) in tree.commitments_unordered() {
         if let Some(proof) = tree.witness(commitment) {
             if proof.verify(root).is_err() {
                 errors.push(WitnessError::InvalidProof {
@@ -270,7 +273,7 @@ pub fn forgotten(tree: &Tree) -> Result<(), InvalidForgotten> {
         let actual_max = node
             .children()
             .iter()
-            .map(Any::forgotten)
+            .map(Node::forgotten)
             .max()
             .unwrap_or_default();
 

@@ -82,10 +82,11 @@ pub mod stateless {
 }
 
 pub mod stateful {
-    use super::super::View as _;
+
+    use super::super::StateReadExt as _;
     use super::*;
-    use crate::stake::View as _;
-    use penumbra_chain::View as _;
+    use crate::stake::StateReadExt as _;
+    use penumbra_chain::StateReadExt as _;
     use penumbra_crypto::{GovernanceKey, IdentityKey, STAKING_TOKEN_DENOM};
     use penumbra_storage::State;
     use penumbra_transaction::{action::ProposalPayload, AuthHash};

@@ -37,7 +37,16 @@ pub struct State {
     pub(crate) unwritten_changes: BTreeMap<String, Option<Vec<u8>>>,
     // A `None` value represents deletion.
     pub(crate) nonconsensus_changes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
-    pub(crate) ephemeral_objects: BTreeMap<String, Box<dyn Any + Send + Sync>>,
+    pub(crate) ephemeral_objects: BTreeMap<&'static str, Box<dyn Any + Send + Sync>>,
+}
+
+impl std::fmt::Debug for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("State")
+            .field("snapshot", &self.snapshot)
+            .field("dirty", &self.is_dirty())
+            .finish_non_exhaustive()
+    }
 }
 
 impl State {
@@ -99,6 +108,33 @@ impl State {
             })?
             .await?
     }
+
+    /// Returns the root hash of this `State`.
+    ///
+    /// If the `State` is empty, the all-zeros hash will be returned as a placeholder value.
+    ///
+    /// This method may only be used on a clean [`State`] fork, and will error
+    /// if [`is_dirty`] returns `true`.
+    pub async fn root_hash(&self) -> Result<crate::RootHash> {
+        if self.is_dirty() {
+            return Err(anyhow::anyhow!("requested root_hash on dirty State"));
+        }
+        let span = Span::current();
+        let snapshot = self.snapshot.clone();
+
+        tokio::task::Builder::new()
+            .name("State::root_hash")
+            .spawn_blocking(move || {
+                span.in_scope(|| {
+                    let tree = jmt::JellyfishMerkleTree::new(&snapshot);
+                    let root = tree
+                        .get_root_hash_option(snapshot.version())?
+                        .unwrap_or(crate::RootHash([0; 32]));
+                    Ok(root)
+                })
+            })?
+            .await?
+    }
 }
 
 #[async_trait]
@@ -113,14 +149,14 @@ impl StateRead for State {
         self.snapshot.get_raw(key).await
     }
 
-    async fn get_nonconsensus(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    async fn nonconsensus_get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         // If the key is available in the nonconsensus cache, return it.
         if let Some(v) = self.nonconsensus_changes.get(key) {
             return Ok(v.clone());
         }
 
         // Otherwise, if the key is available in the snapshot, return it.
-        self.snapshot.get_nonconsensus(key).await
+        self.snapshot.nonconsensus_get_raw(key).await
     }
 
     fn prefix_raw<'a>(
@@ -130,24 +166,9 @@ impl StateRead for State {
         prefix_raw_with_cache(&self.snapshot, &self.unwritten_changes, prefix)
     }
 
-    fn get_ephemeral<T: Any + Send + Sync>(&self, key: &str) -> Option<&T> {
+    fn object_get<T: Any + Send + Sync>(&self, key: &str) -> Option<&T> {
         self.ephemeral_objects
             .get(key)
             .and_then(|object| object.downcast_ref())
-    }
-
-    fn prefix_ephemeral<'a, T: Any + Send + Sync>(
-        &'a self,
-        prefix: &'a str,
-    ) -> Box<dyn Iterator<Item = (&'a str, &'a T)> + 'a> {
-        Box::new(
-            self.ephemeral_objects
-                .range(prefix.to_string()..)
-                .take_while(move |(k, _)| k.starts_with(prefix))
-                .filter_map(|(k, v)| match v.downcast_ref() {
-                    Some(v) => Some((k.as_str(), v)),
-                    None => None,
-                }),
-        )
     }
 }

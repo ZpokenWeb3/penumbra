@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use penumbra_storage2::*;
+use penumbra_storage::*;
 
 #[tokio::test]
 async fn simple_flow() -> anyhow::Result<()> {
@@ -37,10 +37,10 @@ async fn simple_flow() -> anyhow::Result<()> {
     // Create tx00
     let mut tx00 = state_init.begin_transaction();
     tx00.put_raw("test".to_owned(), b"test".to_vec());
-    tx00.put_ephemeral("c/aa".to_owned(), 0u64);
-    tx00.put_ephemeral("c/ab".to_owned(), 1u64);
-    tx00.put_ephemeral("c/ac".to_owned(), 2u64);
-    tx00.put_ephemeral("c/ad".to_owned(), 3u64);
+    tx00.object_put("c/aa", 0u64);
+    tx00.object_put("c/ab", 1u64);
+    tx00.object_put("c/ac", 2u64);
+    tx00.object_put("c/ad", 3u64);
 
     // Check reads against tx00:
     //     This is present in tx00
@@ -48,15 +48,16 @@ async fn simple_flow() -> anyhow::Result<()> {
     //     This is missing in tx00 and state_init and tree is empty
     assert_eq!(tx00.get_raw("a/aa").await?, None);
     //     Present in tx00 object store
-    assert_eq!(tx00.get_ephemeral("c/aa"), Some(&0u64));
-    assert_eq!(tx00.get_ephemeral("c/ab"), Some(&1u64));
-    assert_eq!(tx00.get_ephemeral("c/ac"), Some(&2u64));
-    assert_eq!(tx00.get_ephemeral("c/ad"), Some(&3u64));
+    assert_eq!(tx00.object_get("c/aa"), Some(&0u64));
+    assert_eq!(tx00.object_get("c/ab"), Some(&1u64));
+    assert_eq!(tx00.object_get("c/ac"), Some(&2u64));
+    assert_eq!(tx00.object_get("c/ad"), Some(&3u64));
     //     Present in tx00 object store but requested with wrong type
-    assert_eq!(tx00.get_ephemeral::<bool>("c/aa"), None);
+    assert_eq!(tx00.object_get::<bool>("c/aa"), None);
     //     Missing in tx00 object store
-    assert_eq!(tx00.get_ephemeral::<bool>("nonexist"), None);
+    assert_eq!(tx00.object_get::<bool>("nonexist"), None);
     //     Object store range checks
+    /*
     let mut range = tx00.prefix_ephemeral::<u64>("c/");
     assert_eq!(range.next(), Some(("c/aa", &0u64)));
     assert_eq!(range.next(), Some(("c/ab", &1u64)));
@@ -67,21 +68,23 @@ async fn simple_flow() -> anyhow::Result<()> {
     let mut range = tx00.prefix_ephemeral::<bool>("c/");
     assert_eq!(range.next(), None);
     std::mem::drop(range);
+    */
 
     // Now apply the transaction to state_init
     tx00.apply();
     assert_eq!(state_init.get_raw("test").await?, Some(b"test".to_vec()));
     assert_eq!(state_init.get_raw("a/aa").await?, None);
     //     Present in state_init object store
-    assert_eq!(state_init.get_ephemeral("c/aa"), Some(&0u64));
-    assert_eq!(state_init.get_ephemeral("c/ab"), Some(&1u64));
-    assert_eq!(state_init.get_ephemeral("c/ac"), Some(&2u64));
-    assert_eq!(state_init.get_ephemeral("c/ad"), Some(&3u64));
+    assert_eq!(state_init.object_get("c/aa"), Some(&0u64));
+    assert_eq!(state_init.object_get("c/ab"), Some(&1u64));
+    assert_eq!(state_init.object_get("c/ac"), Some(&2u64));
+    assert_eq!(state_init.object_get("c/ad"), Some(&3u64));
     //     Present in state_init object store but requested with wrong type
-    assert_eq!(state_init.get_ephemeral::<bool>("c/aa"), None);
+    assert_eq!(state_init.object_get::<bool>("c/aa"), None);
     //     Missing in state_init object store
-    assert_eq!(state_init.get_ephemeral::<bool>("nonexist"), None);
+    assert_eq!(state_init.object_get::<bool>("nonexist"), None);
     //     Object store range checks
+    /*
     let mut range = state_init.prefix_ephemeral::<u64>("c/");
     assert_eq!(range.next(), Some(("c/aa", &0u64)));
     assert_eq!(range.next(), Some(("c/ab", &1u64)));
@@ -92,6 +95,7 @@ async fn simple_flow() -> anyhow::Result<()> {
     let mut range = state_init.prefix_ephemeral::<bool>("c/");
     assert_eq!(range.next(), None);
     std::mem::drop(range);
+    */
 
     // Create a transaction writing the other keys.
     let mut tx01 = state_init.begin_transaction();
@@ -99,8 +103,8 @@ async fn simple_flow() -> anyhow::Result<()> {
     tx01.put_raw("a/aaa".to_owned(), b"aaa".to_vec());
     tx01.put_raw("a/ab".to_owned(), b"ab".to_vec());
     tx01.put_raw("a/z".to_owned(), b"z".to_vec());
-    tx01.put_ephemeral("c/ab".to_owned(), 10u64);
-    tx01.delete_ephemeral("c/ac".to_owned());
+    tx01.object_put("c/ab", 10u64);
+    tx01.object_delete("c/ac");
 
     // Check reads against tx01:
     //    This is missing in tx01 and reads through to state_init
@@ -132,12 +136,14 @@ async fn simple_flow() -> anyhow::Result<()> {
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
     //     Object store range checks
+    /*
     let mut range = tx01.prefix_ephemeral::<u64>("c/");
     assert_eq!(range.next(), Some(("c/aa", &0u64)));
     assert_eq!(range.next(), Some(("c/ab", &10u64)));
     assert_eq!(range.next(), Some(("c/ad", &3u64)));
     assert_eq!(range.next(), None);
     std::mem::drop(range);
+    */
 
     // Now apply the transaction to state_init
     tx01.apply();
@@ -171,12 +177,14 @@ async fn simple_flow() -> anyhow::Result<()> {
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
     //     Object store range checks
+    /*
     let mut range = state_init.prefix_ephemeral::<u64>("c/");
     assert_eq!(range.next(), Some(("c/aa", &0u64)));
     assert_eq!(range.next(), Some(("c/ab", &10u64)));
     assert_eq!(range.next(), Some(("c/ad", &3u64)));
     assert_eq!(range.next(), None);
     std::mem::drop(range);
+    */
 
     // Now commit state_init to storage
     storage.commit(state_init).await?;

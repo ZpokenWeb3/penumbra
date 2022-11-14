@@ -1,7 +1,9 @@
-use std::fmt::{Debug, Display};
+use std::{
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 
 use decaf377::{FieldExt, Fq};
-use hash_hasher::HashedMap;
 use penumbra_proto::{core::crypto::v1alpha1 as pb, Protobuf};
 
 use crate::error::*;
@@ -17,14 +19,14 @@ pub(crate) use epoch::block;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tree {
     index: HashedMap<Commitment, index::within::Tree>,
-    inner: frontier::Top<frontier::Tier<frontier::Tier<frontier::Item>>>,
+    inner: Arc<frontier::Top<frontier::Tier<frontier::Tier<frontier::Item>>>>,
 }
 
 impl Default for Tree {
     fn default() -> Self {
         Self {
             index: HashedMap::default(),
-            inner: frontier::Top::new(frontier::TrackForgotten::Yes),
+            inner: Arc::new(frontier::Top::new(frontier::TrackForgotten::Yes)),
         }
     }
 }
@@ -85,7 +87,7 @@ impl Protobuf<pb::MerkleRoot> for Root {}
 
 impl Display for Root {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(&Fq::from(self.0).to_bytes()))
+        write!(f, "{}", hex::encode(Fq::from(self.0).to_bytes()))
     }
 }
 
@@ -152,7 +154,10 @@ impl Tree {
         index: HashedMap<Commitment, index::within::Tree>,
         inner: frontier::Top<frontier::Tier<frontier::Tier<frontier::Item>>>,
     ) -> Self {
-        Self { index, inner }
+        Self {
+            index,
+            inner: Arc::new(inner),
+        }
     }
 
     /// Get the root hash of this [`Tree`].
@@ -196,7 +201,7 @@ impl Tree {
         let position = (self.inner.position().ok_or(InsertError::Full)?).into();
 
         // Try to insert the commitment into the latest block
-        self.inner
+        Arc::make_mut(&mut self.inner)
             .update(|epoch| {
                 epoch
                     .update(|block| {
@@ -229,7 +234,7 @@ impl Tree {
             // If the latest epoch was finalized already or doesn't exist, create a new epoch and
             // insert into that epoch
             .unwrap_or_else(|| {
-                self.inner
+                Arc::make_mut(&mut self.inner)
                     .insert(frontier::Tier::new(frontier::Tier::new(item)))
                     .expect("inserting a commitment must succeed because we already checked that the tree is not full");
                 Ok(())
@@ -244,7 +249,7 @@ impl Tree {
             if let Some(replaced) = self.index.insert(commitment, position) {
                 // This case is handled for completeness, but should not happen in
                 // practice because commitments should be unique
-                let forgotten = self.inner.forget(replaced);
+                let forgotten = Arc::make_mut(&mut self.inner).forget(replaced);
                 debug_assert!(forgotten);
             }
         }
@@ -298,7 +303,7 @@ impl Tree {
             // We forgot something
             forgotten = true;
             // Forget the index for this element in the tree
-            let forgotten = self.inner.forget(within_epoch);
+            let forgotten = Arc::make_mut(&mut self.inner).forget(within_epoch);
             debug_assert!(forgotten);
             // Remove this entry from the index
             self.index.remove(&commitment);
@@ -374,16 +379,14 @@ impl Tree {
 
         // Finalize the latest block, if it exists and is not yet finalized -- this means that
         // position calculations will be correct, since they will start at the next block
-        self.inner
-            .update(|epoch| epoch.update(|block| block.finalize()));
+        Arc::make_mut(&mut self.inner).update(|epoch| epoch.update(|block| block.finalize()));
 
         // Get the epoch and block index of the next insertion
         let position = self.inner.position();
 
         // Insert the block into the latest epoch, or create a new epoch for it if the latest epoch
         // does not exist or is finalized
-        let block_root = self
-            .inner
+        let block_root = Arc::make_mut(&mut self.inner)
             .update(|epoch| {
                 // If the epoch is finalized, create a new one (below) to insert the block into
                 if epoch.is_finalized() {
@@ -426,7 +429,7 @@ impl Tree {
                 let block_root = block::Root(inner.hash());
 
                 // Create a new epoch and insert the block into it
-                self.inner
+                Arc::make_mut(&mut self.inner)
                     .insert(frontier::Tier::new(inner))
                     .expect("inserting a new epoch must succeed when the tree is not full");
 
@@ -453,7 +456,7 @@ impl Tree {
             ) {
                 // This case is handled for completeness, but should not happen in practice because
                 // commitments should be unique
-                let forgotten = self.inner.forget(replaced);
+                let forgotten = Arc::make_mut(&mut self.inner).forget(replaced);
                 debug_assert!(forgotten);
             }
         }
@@ -467,8 +470,7 @@ impl Tree {
     pub fn end_block(&mut self) -> Result<block::Root, InsertBlockError> {
         // Check to see if the latest block is already finalized, and finalize it if
         // it is not
-        let (already_finalized, finalized_root) = self
-            .inner
+        let (already_finalized, finalized_root) = Arc::make_mut(&mut self.inner)
             .update(|epoch| {
                 epoch.update(|tier| match tier.finalize() {
                     true => (true, block::Finalized::default().root()),
@@ -574,7 +576,7 @@ impl Tree {
 
         // Finalize the latest epoch, if it exists and is not yet finalized -- this means that
         // position calculations will be correct, since they will start at the next epoch
-        self.inner.update(|epoch| epoch.finalize());
+        Arc::make_mut(&mut self.inner).update(|epoch| epoch.finalize());
 
         // Get the epoch index of the next insertion
         let index::within::Tree { epoch, .. } = self
@@ -587,7 +589,7 @@ impl Tree {
         let epoch_root = epoch::Root(inner.hash());
 
         // Insert the inner tree of the epoch into the global tree
-        self.inner
+        Arc::make_mut(&mut self.inner)
             .insert(inner)
             .expect("inserting an epoch must succeed when tree is not full");
 
@@ -605,7 +607,7 @@ impl Tree {
             ) {
                 // This case is handled for completeness, but should not happen in practice because
                 // commitments should be unique
-                let forgotten = self.inner.forget(replaced);
+                let forgotten = Arc::make_mut(&mut self.inner).forget(replaced);
                 debug_assert!(forgotten);
             }
         }
@@ -619,8 +621,7 @@ impl Tree {
     pub fn end_epoch(&mut self) -> Result<epoch::Root, InsertEpochError> {
         // Check to see if the latest block is already finalized, and finalize it if
         // it is not
-        let (already_finalized, finalized_root) = self
-            .inner
+        let (already_finalized, finalized_root) = Arc::make_mut(&mut self.inner)
             .update(|tier| match tier.finalize() {
                 true => (true, epoch::Finalized::default().root()),
                 false => (false, epoch::Root(tier.hash())),
@@ -713,23 +714,25 @@ impl Tree {
         is_empty
     }
 
-    /// Get an iterator over all commitments currently witnessed in the tree.
-    ///
-    /// Unlike [`commitments_ordered`](Tree::commitments_ordered), this **does not** guarantee that
-    /// commitments will be returned in order, but it may be faster by a constant factor.
-    #[instrument(level = "trace", skip(self))]
-    pub fn commitments(&self) -> impl Iterator<Item = (Commitment, Position)> + '_ {
-        self.index.iter().map(|(c, p)| (*c, Position(*p)))
-    }
-
     /// Get an iterator over all commitments currently witnessed in the tree, **ordered by
     /// position**.
     ///
-    /// Unlike [`commitments`](Tree::commitments), this guarantees that commitments will be returned
-    /// in order, but it may be slower by a constant factor.
+    /// Unlike [`commitments_unordered`](Tree::commitments_unordered), this guarantees that
+    /// commitments will be returned in order, but it may be slower by a constant factor.
     #[instrument(level = "trace", skip(self))]
-    pub fn commitments_ordered(&self) -> impl Iterator<Item = (Position, Commitment)> + '_ {
-        crate::storage::serialize::Serializer::default().commitments_iter(self)
+    pub fn commitments(&self) -> impl Iterator<Item = (Position, Commitment)> + Send + Sync + '_ {
+        crate::storage::serialize::Serializer::default().commitments(self)
+    }
+
+    /// Get an iterator over all commitments currently witnessed in the tree.
+    ///
+    /// Unlike [`commitments`](Tree::commitments), this **does not** guarantee that commitments will
+    /// be returned in order, but it may be faster by a constant factor.
+    #[instrument(level = "trace", skip(self))]
+    pub fn commitments_unordered(
+        &self,
+    ) -> impl Iterator<Item = (Commitment, Position)> + Send + Sync + '_ {
+        self.index.iter().map(|(c, p)| (*c, Position(*p)))
     }
 
     /// Get a dynamic representation of the internal structure of the tree, which can be traversed
@@ -737,27 +740,109 @@ impl Tree {
     pub fn structure(&self) -> structure::Node {
         let _structure_span = trace_span!("structure");
         // TODO: use the structure span for instrumenting methods of the structure, as it is traversed
-        Node::root(&self.inner)
+        Node::root(&*self.inner)
     }
 
-    /// Deserialize a tree from a [`storage::Read`] backend.
+    /// Deserialize a tree from a [`storage::Read`] of its contents, without checking for internal
+    /// consistency.
     ///
-    /// While trees can be [`serialize`]d incrementally, they can only be deserialized all at once.
-    pub async fn deserialize<R: Read>(reader: &mut R) -> Result<Tree, R::Error> {
-        storage::from_reader(reader).await
+    /// This can be more convenient than [`Tree::load`], since it is able to internally query the
+    /// storage for the last position and forgotten count.
+    ///
+    /// ⚠️ **WARNING:** Do not deserialize trees you did not serialize yourself, or risk violating
+    /// internal invariants.
+    pub fn from_reader<R: Read>(reader: &mut R) -> Result<Tree, R::Error> {
+        storage::deserialize::from_reader(reader)
     }
 
-    /// Serialize the tree incrementally to a [`storage::Write`] backend.
+    /// Serialize the tree incrementally from the last stored [`Position`] and [`Forgotten`]
+    /// specified, into a [`storage::Write`], performing only the operations necessary to serialize
+    /// the changes to the tree.
     ///
-    /// This performs only the operations necessary to serialize the changes to the tree,
+    /// This can be more convenient than using [`Tree::updates`], because it is able to internally
+    /// query the storage for the last position and forgotten count, and drive the storage
+    /// operations itself.
+    pub fn to_writer<W: Write>(&self, writer: &mut W) -> Result<(), W::Error> {
+        storage::serialize::to_writer(writer, self)
+    }
+
+    /// Deserialize a tree from a [`storage::AsyncRead`] of its contents, without checking for
+    /// internal consistency.
+    ///
+    /// This can be more convenient than [`Tree::load`], since it is able to internally query the
+    /// storage for the last position and forgotten count.
+    ///
+    /// ⚠️ **WARNING:** Do not deserialize trees you did not serialize yourself, or risk violating
+    /// internal invariants.
+    pub async fn from_async_reader<R: AsyncRead>(reader: &mut R) -> Result<Tree, R::Error> {
+        storage::deserialize::from_async_reader(reader).await
+    }
+
+    /// Serialize the tree incrementally from the last stored [`Position`] and [`Forgotten`]
+    /// specified, into a [`storage::AsyncWrite`], performing only the operations necessary to
+    /// serialize the changes to the tree.
+    ///
+    /// This can be more convenient than using [`Tree::updates`], because it is able to internally
+    /// query the storage for the last position and forgotten count, and drive the storage
+    /// operations itself.
+    pub async fn to_async_writer<W: AsyncWrite>(&self, writer: &mut W) -> Result<(), W::Error> {
+        storage::serialize::to_async_writer(writer, self).await
+    }
+
+    /// Deserialize a tree using externally driven iteration, without checking for internal
+    /// consistency.
+    ///
+    /// Reconstructing a [`Tree`] using this method requires stepping through a series of states, as
+    /// follows:
+    ///
+    /// 1. [`Tree::load`] returns an object [`LoadCommitments`](storage::LoadCommitments) which can
+    ///    be used to [`insert`](storage::LoadCommitments::insert) positioned commitments.
+    /// 2. When all commitments have been inserted, call
+    ///    [`.load_hashes()`](storage::LoadCommitments::load_hashes) to get an object
+    ///    [`LoadHashes`](storage::LoadHashes).
+    /// 3. [`LoadHashes`](storage::LoadHashes) can be used to
+    ///    [`insert`](storage::LoadHashes::insert) positioned, heighted hashes.
+    /// 4. Finally, call [`.finish()`](storage::LoadHashes::finish) on the
+    ///    [`LoadHashes`](storage::LoadHashes) to get the [`Tree`].
+    ///
+    /// ⚠️ **WARNING:** Do not deserialize trees you did not serialize yourself, or risk violating
+    /// internal invariants. You *must* insert all the commitments and hashes corresponding to the
+    /// stored tree, or the reconstructed tree will not match what was serialized, and further, it
+    /// may have internal inconsistencies that will mean that the proofs it produces will not
+    /// verify.
+    ///
+    /// ℹ️ **NOTE:** You may prefer to use [`from_reader`](Tree::from_reader) or
+    /// [`from_async_reader`](Tree::from_async_reader), which drive the iteration over the
+    /// underlying storage *internally* rather than requiring the caller to drive the iteration.
+    /// [`Tree::load`] is predominanly useful in circumstances when this inversion of control does
+    /// not make sense.
+    pub fn load(
+        last_position: impl Into<StoredPosition>,
+        last_forgotten: Forgotten,
+    ) -> storage::deserialize::LoadCommitments {
+        storage::deserialize::LoadCommitments::new(last_position, last_forgotten)
+    }
+
+    /// Serialize the tree incrementally from the last stored [`Position`] and [`Forgotten`]
+    /// specified, into an iterator of [`storage::Update`]s.
+    ///
+    /// This returns only the operations necessary to serialize the changes to the tree,
     /// synchronizing the in-memory representation with what is stored.
     ///
-    /// # Errors
+    /// The iterator of updates may be [`.collect()`](Iterator::collect)ed into a
+    /// [`storage::Updates`], which is more compact in-memory than
+    /// [`.collect()`](Iterator::collect)ing into a [`Vec<Update>`](Vec).
     ///
-    /// If the tree stored in the writer is not a prior version of this tree, the writer may throw
-    /// errors, in addition to any backend-specific errors related to the storage medium.
-    pub async fn serialize<W: Write>(&self, writer: &mut W) -> Result<(), W::Error> {
-        storage::to_writer(writer, self).await
+    /// ℹ️ **NOTE:** You may prefer to use [`to_writer`](Tree::to_writer) or
+    /// [`to_async_writer`](Tree::to_async_writer), which drive the operations on the underlying
+    /// storage *internally* rather than requiring the caller to drive iteration. [`Tree::updates`]
+    /// is predominantly useful in circumstances when this inversion of control does not make sense.
+    pub fn updates(
+        &self,
+        last_position: impl Into<StoredPosition>,
+        last_forgotten: Forgotten,
+    ) -> impl Iterator<Item = Update> + Send + Sync + '_ {
+        storage::serialize::updates(last_position.into(), last_forgotten, self)
     }
 }
 
@@ -766,15 +851,21 @@ impl From<frontier::Top<frontier::Tier<frontier::Tier<frontier::Item>>>> for Tre
         let mut index = HashedMap::default();
 
         // Traverse the tree to reconstruct the index
-        structure::traverse(Node::root(&inner), &mut |node: Node| {
+        let mut stack = vec![Node::root(&inner)];
+        while let Some(node) = stack.pop() {
+            stack.extend(node.children());
+
             if let structure::Kind::Leaf {
                 commitment: Some(commitment),
             } = node.kind()
             {
                 index.insert(commitment, node.position().0);
             }
-        });
+        }
 
-        Self { inner, index }
+        Self {
+            inner: Arc::new(inner),
+            index,
+        }
     }
 }

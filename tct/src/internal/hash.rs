@@ -2,7 +2,10 @@
 //! [`GetHash`] trait for computing and caching hashes of things, and the [`CachedHash`] type, which
 //! is used internally for lazy evaluation of hashes.
 
-use std::{fmt::Debug, ops::RangeInclusive};
+use std::{
+    fmt::{self, Debug, Formatter},
+    ops::RangeInclusive,
+};
 
 use ark_ff::{fields::PrimeField, BigInteger256, Fp256, One, Zero};
 use decaf377::FieldExt;
@@ -85,8 +88,10 @@ impl Debug for Hash {
             write!(f, "0")
         } else if *self == Hash::one() {
             write!(f, "1")
+        } else if *self == Hash::uninitialized() {
+            write!(f, "!")
         } else {
-            write!(f, "{}", hex::encode(&self.to_bytes()))
+            write!(f, "{}", hex::encode(self.to_bytes()))
         }
     }
 }
@@ -218,15 +223,21 @@ impl Hash {
     Deserialize,
     Default,
 )]
-#[derivative(Debug = "transparent")]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(proptest_derive::Arbitrary))]
-pub struct Forgotten(u64);
+#[serde(from = "u64", into = "u64")]
+pub struct Forgotten([u8; 6]);
+
+impl Debug for Forgotten {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", u64::from(*self))
+    }
+}
 
 impl Forgotten {
     /// Get the next forgotten-version after this one.
     pub fn next(&self) -> Self {
-        Self(
-            self.0
+        Self::from(
+            u64::from(*self)
                 .checked_add(1)
                 .expect("forgotten should never overflow"),
         )
@@ -235,13 +246,25 @@ impl Forgotten {
 
 impl From<Forgotten> for u64 {
     fn from(forgotten: Forgotten) -> Self {
-        forgotten.0
+        let mut eight_bytes = <[u8; 8]>::default();
+        for (in_byte, out_byte) in eight_bytes.iter_mut().zip(forgotten.0) {
+            *in_byte = out_byte;
+        }
+
+        u64::from_le_bytes(eight_bytes)
     }
 }
 
 impl From<u64> for Forgotten {
     fn from(u: u64) -> Self {
-        Self(u)
+        let bytes = u.to_le_bytes();
+
+        let mut six_bytes = [0; 6];
+        for (in_byte, out_byte) in six_bytes.iter_mut().zip(&bytes[..6]) {
+            *in_byte = *out_byte;
+        }
+
+        Self(six_bytes)
     }
 }
 
@@ -282,6 +305,21 @@ mod arbitrary {
             Ok(proptest::strategy::Just(Hash(decaf377::Fq::new(
                 ark_ff::BigInteger256(parts),
             ))))
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn forgotten_increments() {
+        use super::Forgotten;
+
+        let mut last = Forgotten::default();
+        for _ in 0..10 {
+            let next = last.next();
+            assert_eq!(u64::from(next), u64::from(last) + 1);
+            last = next;
         }
     }
 }

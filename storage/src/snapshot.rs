@@ -22,7 +22,16 @@ use rocks_wrapper::RocksDbSnapshot;
 #[derive(Clone)]
 pub struct Snapshot(Arc<Inner>);
 
+impl std::fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Snapshot")
+            .field("version", &self.0.version)
+            .finish_non_exhaustive()
+    }
+}
+
 // We don't want to expose the `TreeReader` implementation outside of this crate.
+#[derive(Debug)]
 struct Inner {
     snapshot: RocksDbSnapshot,
     version: jmt::Version,
@@ -89,12 +98,12 @@ impl StateRead for Snapshot {
     }
 
     /// Fetch a key from the nonconsensus column family.
-    async fn get_nonconsensus(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    async fn nonconsensus_get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let span = Span::current();
         let inner = self.0.clone();
         let key: Vec<u8> = key.to_vec();
         tokio::task::Builder::new()
-            .name("Snapshot::get_nonconsensus")
+            .name("Snapshot::nonconsensus_get_raw")
             .spawn_blocking(move || {
                 span.in_scope(|| {
                     let nonconsensus_cf = inner
@@ -155,17 +164,9 @@ impl StateRead for Snapshot {
         Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
     }
 
-    fn get_ephemeral<T: Any + Send + Sync>(&self, _key: &str) -> Option<&T> {
+    fn object_get<T: Any + Send + Sync>(&self, _key: &str) -> Option<&T> {
         // No-op -- this will never be called internally, and `Snapshot` is not exposed in public API
         None
-    }
-
-    fn prefix_ephemeral<'a, T: Any + Send + Sync>(
-        &'a self,
-        _prefix: &'a str,
-    ) -> Box<dyn Iterator<Item = (&'a str, &'a T)> + 'a> {
-        // No-op -- this will never be called internally, and `Snapshot` is not exposed in public API
-        Box::new(std::iter::empty())
     }
 }
 
