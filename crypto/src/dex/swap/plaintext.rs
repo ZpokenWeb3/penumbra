@@ -2,7 +2,7 @@ use crate::transaction::Fee;
 use crate::{asset, ka, Address, Amount, Value};
 use anyhow::{anyhow, Error, Result};
 use ark_ff::PrimeField;
-use decaf377::Fq;
+use decaf377::{FieldExt, Fq};
 use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, core::dex::v1alpha1 as pb, Protobuf};
 use poseidon377::{hash_4, hash_6};
 
@@ -23,6 +23,8 @@ pub struct SwapPlaintext {
     pub claim_fee: Fee,
     // Address to receive the Swap NFT and SwapClaim outputs
     pub claim_address: Address,
+    // Swap blinding factor
+    pub blinding_factor: Fq,
 }
 
 impl SwapPlaintext {
@@ -86,6 +88,7 @@ impl SwapPlaintext {
         delta_2_i: Amount,
         claim_fee: Fee,
         claim_address: Address,
+        blinding_factor: Fq,
     ) -> Result<Self, Error> {
         Ok(SwapPlaintext {
             trading_pair,
@@ -93,6 +96,7 @@ impl SwapPlaintext {
             delta_2_i,
             claim_fee,
             claim_address,
+            blinding_factor,
         })
     }
 }
@@ -124,6 +128,10 @@ impl TryFrom<pb::SwapPlaintext> for SwapPlaintext {
                 .trading_pair
                 .ok_or_else(|| anyhow::anyhow!("missing trading pair in SwapPlaintext"))?
                 .try_into()?,
+            blinding_factor: plaintext
+                .blinding_factor
+                .ok_or_else(|| anyhow::anyhow!("missing blinding factor in SwapPlaintext"))?
+                .try_into()?,
         })
     }
 }
@@ -136,6 +144,7 @@ impl From<SwapPlaintext> for pb::SwapPlaintext {
             claim_fee: Some(plaintext.claim_fee.into()),
             claim_address: Some(plaintext.claim_address.into()),
             trading_pair: Some(plaintext.trading_pair.into()),
+            blinding_factor: plaintext.blinding_factor.to_bytes().to_vec(),
         }
     }
 }
@@ -215,6 +224,7 @@ impl TryFrom<[u8; SWAP_LEN_BYTES]> for SwapPlaintext {
 
 #[cfg(test)]
 mod tests {
+    use ark_ff::UniformRand;
     use rand_core::OsRng;
 
     use super::*;
@@ -247,6 +257,7 @@ mod tests {
                 asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
             }),
             claim_address: dest,
+            blinding_factor: Fq::rand(&mut rng),
         };
         let esk = ka::Secret::new(&mut rng);
 
