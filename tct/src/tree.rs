@@ -523,7 +523,7 @@ impl Tree {
     ///
     /// 1. to insert an [`epoch::Root`] into the tree as a stand-in for an entire un-witnessed block,
     ///    or
-    /// 2. to insert an [`epoch::Builder`] into the tree that was constructed separately.
+    /// 2. to insert an [`epoch::Builder`] into the tree that was constructed separately
     ///
     /// The latter [`epoch::Builder`] API only accelerates tree construction when used in parallel,
     /// but the former [`epoch::Root`] insertion can be used to accelerate the construction of a
