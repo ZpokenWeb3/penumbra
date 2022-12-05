@@ -9,10 +9,12 @@ use anyhow::Error;
 use hex::FromHex;
 
 
+
 use wasm_bindgen::prelude::*;
 use penumbra_crypto::keys::{SeedPhrase, SpendKey};
 use penumbra_tct::{Forgotten, Tree};
 use penumbra_tct::storage::{StoredPosition, Updates};
+use penumbra_transaction::Transaction;
 
 
 #[cfg(feature = "wee_alloc")]
@@ -65,43 +67,52 @@ pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
 }
 
 #[wasm_bindgen]
-pub fn nct_insert_empty_block(stored_position: JsValue,
-                              last_forgotten: JsValue,
-                              height: u64,
-                              epoch_duration: u64 ) -> Result<JsValue, JsValue> {
-    let position: StoredPosition = serde_wasm_bindgen::from_value(stored_position)?;
-    let forgotten: Forgotten = serde_wasm_bindgen::from_value(last_forgotten)?;
+pub fn decode_transaction(tx_bytes: &str) -> JsValue {
+    let transaction = Transaction::try_from(tx_bytes.as_bytes()).unwrap();
 
-
-    let load_c = Tree::load(position, forgotten);
-    let load_h = load_c.load_hashes();
-    let mut nct = load_h.finish();
-
-    nct.end_block().unwrap();
-    if Epoch::from_height(height, epoch_duration).is_epoch_end(height) {
-        nct
-            .end_epoch()
-            .expect("ending the epoch must succeed");
-    }
-
-    let updates = nct.updates(position, forgotten).collect::<Updates>();
-
-
-    Ok(serde_wasm_bindgen::to_value(&updates)?)}
-
-pub fn deserialize_nct(stored_position: JsValue,
-                       last_forgotten: JsValue) -> Tree {
-    let position: StoredPosition = serde_wasm_bindgen::from_value(stored_position)?;
-    let forgotten: Forgotten = serde_wasm_bindgen::from_value(last_forgotten)?;
-
-
-    let load_c = Tree::load(position, forgotten);
-    let load_h = load_c.load_hashes();
-    let nct = load_h.finish();
-
-    return nct;
+    return JsValue::from_serde(&transaction).unwrap();
 }
 
 
-
-
+//
+// #[wasm_bindgen]
+// pub fn nct_insert_empty_block(stored_position: JsValue,
+//                               last_forgotten: JsValue,
+//                               height: u64,
+//                               epoch_duration: u64 ) -> Result<JsValue, JsValue> {
+//     let position: StoredPosition = serde_wasm_bindgen::from_value(stored_position)?;
+//     let forgotten: Forgotten = serde_wasm_bindgen::from_value(last_forgotten)?;
+//
+//
+//     let load_c = Tree::load(position, forgotten);
+//     let load_h = load_c.load_hashes();
+//     let mut nct = load_h.finish();
+//
+//     nct.end_block().unwrap();
+//     if Epoch::from_height(height, epoch_duration).is_epoch_end(height) {
+//         nct
+//             .end_epoch()
+//             .expect("ending the epoch must succeed");
+//     }
+//
+//     let updates = nct.updates(position, forgotten).collect::<Updates>();
+//
+//
+//     Ok(serde_wasm_bindgen::to_value(&updates)?)}
+//
+// pub fn deserialize_nct(stored_position: JsValue,
+//                        last_forgotten: JsValue) -> Tree {
+//     let position: StoredPosition = serde_wasm_bindgen::from_value(stored_position)?;
+//     let forgotten: Forgotten = serde_wasm_bindgen::from_value(last_forgotten)?;
+//
+//
+//     let load_c = Tree::load(position, forgotten);
+//     let load_h = load_c.load_hashes();
+//     let nct = load_h.finish();
+//
+//     return nct;
+// }
+//
+//
+//
+//

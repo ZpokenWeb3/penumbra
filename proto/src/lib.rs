@@ -56,26 +56,26 @@ pub mod core {
         }
     }
 //
-//     /// Transaction structures.
-//     pub mod transaction {
-//         pub mod v1alpha1 {
-//             include!("gen/penumbra.core.transaction.v1alpha1.rs");
-//         }
-//     }
+    /// Transaction structures.
+    pub mod transaction {
+        pub mod v1alpha1 {
+            include!("gen/penumbra.core.transaction.v1alpha1.rs");
+        }
+    }
 //
-//     /// Chain-related structures.
-//     pub mod chain {
-//         pub mod v1alpha1 {
-//             include!("gen/penumbra.core.chain.v1alpha1.rs");
-//         }
-//     }
-//
-//     /// IBC protocol structures.
-//     pub mod ibc {
-//         pub mod v1alpha1 {
-//             include!("gen/penumbra.core.ibc.v1alpha1.rs");
-//         }
-//     }
+    /// Chain-related structures.
+    pub mod chain {
+        pub mod v1alpha1 {
+            include!("gen/penumbra.core.chain.v1alpha1.rs");
+        }
+    }
+
+    /// IBC protocol structures.
+    pub mod ibc {
+        pub mod v1alpha1 {
+            include!("gen/penumbra.core.ibc.v1alpha1.rs");
+        }
+    }
 //
     /// Transparent proofs.
     ///

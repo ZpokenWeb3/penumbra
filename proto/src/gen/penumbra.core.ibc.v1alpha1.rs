@@ -9,40 +9,40 @@ pub mod ibc_action {
     #[derive(::serde::Deserialize, ::serde::Serialize)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Action {
-        #[prost(message, tag="1")]
-        ConnectionOpenInit(::ibc_proto::ibc::core::connection::v1::MsgConnectionOpenInit),
-        #[prost(message, tag="2")]
-        ConnectionOpenTry(::ibc_proto::ibc::core::connection::v1::MsgConnectionOpenTry),
-        #[prost(message, tag="3")]
-        ConnectionOpenAck(::ibc_proto::ibc::core::connection::v1::MsgConnectionOpenAck),
-        #[prost(message, tag="4")]
-        ConnectionOpenConfirm(::ibc_proto::ibc::core::connection::v1::MsgConnectionOpenConfirm),
-        #[prost(message, tag="5")]
-        ChannelOpenInit(::ibc_proto::ibc::core::channel::v1::MsgChannelOpenInit),
-        #[prost(message, tag="6")]
-        ChannelOpenTry(::ibc_proto::ibc::core::channel::v1::MsgChannelOpenTry),
-        #[prost(message, tag="7")]
-        ChannelOpenAck(::ibc_proto::ibc::core::channel::v1::MsgChannelOpenAck),
-        #[prost(message, tag="8")]
-        ChannelOpenConfirm(::ibc_proto::ibc::core::channel::v1::MsgChannelOpenConfirm),
-        #[prost(message, tag="9")]
-        ChannelCloseInit(::ibc_proto::ibc::core::channel::v1::MsgChannelCloseInit),
-        #[prost(message, tag="10")]
-        ChannelCloseConfirm(::ibc_proto::ibc::core::channel::v1::MsgChannelCloseConfirm),
-        #[prost(message, tag="11")]
-        RecvPacket(::ibc_proto::ibc::core::channel::v1::MsgRecvPacket),
-        #[prost(message, tag="12")]
-        Timeout(::ibc_proto::ibc::core::channel::v1::MsgTimeout),
-        #[prost(message, tag="13")]
-        Acknowledgement(::ibc_proto::ibc::core::channel::v1::MsgAcknowledgement),
-        #[prost(message, tag="14")]
-        CreateClient(::ibc_proto::ibc::core::client::v1::MsgCreateClient),
-        #[prost(message, tag="15")]
-        UpdateClient(::ibc_proto::ibc::core::client::v1::MsgUpdateClient),
-        #[prost(message, tag="16")]
-        UpgradeClient(::ibc_proto::ibc::core::client::v1::MsgUpgradeClient),
-        #[prost(message, tag="17")]
-        SubmitMisbehaviour(::ibc_proto::ibc::core::client::v1::MsgSubmitMisbehaviour),
+        // #[prost(message, tag="1")]
+        // ConnectionOpenInit(::ibc_proto::ibc::core::connection::v1::MsgConnectionOpenInit),
+        // #[prost(message, tag="2")]
+        // ConnectionOpenTry(::ibc_proto::ibc::core::connection::v1::MsgConnectionOpenTry),
+        // #[prost(message, tag="3")]
+        // ConnectionOpenAck(::ibc_proto::ibc::core::connection::v1::MsgConnectionOpenAck),
+        // #[prost(message, tag="4")]
+        // ConnectionOpenConfirm(::ibc_proto::ibc::core::connection::v1::MsgConnectionOpenConfirm),
+        // #[prost(message, tag="5")]
+        // ChannelOpenInit(::ibc_proto::ibc::core::channel::v1::MsgChannelOpenInit),
+        // #[prost(message, tag="6")]
+        // ChannelOpenTry(::ibc_proto::ibc::core::channel::v1::MsgChannelOpenTry),
+        // #[prost(message, tag="7")]
+        // ChannelOpenAck(::ibc_proto::ibc::core::channel::v1::MsgChannelOpenAck),
+        // #[prost(message, tag="8")]
+        // ChannelOpenConfirm(::ibc_proto::ibc::core::channel::v1::MsgChannelOpenConfirm),
+        // #[prost(message, tag="9")]
+        // ChannelCloseInit(::ibc_proto::ibc::core::channel::v1::MsgChannelCloseInit),
+        // #[prost(message, tag="10")]
+        // ChannelCloseConfirm(::ibc_proto::ibc::core::channel::v1::MsgChannelCloseConfirm),
+        // #[prost(message, tag="11")]
+        // RecvPacket(::ibc_proto::ibc::core::channel::v1::MsgRecvPacket),
+        // #[prost(message, tag="12")]
+        // Timeout(::ibc_proto::ibc::core::channel::v1::MsgTimeout),
+        // #[prost(message, tag="13")]
+        // Acknowledgement(::ibc_proto::ibc::core::channel::v1::MsgAcknowledgement),
+        // #[prost(message, tag="14")]
+        // CreateClient(::ibc_proto::ibc::core::client::v1::MsgCreateClient),
+        // #[prost(message, tag="15")]
+        // UpdateClient(::ibc_proto::ibc::core::client::v1::MsgUpdateClient),
+        // #[prost(message, tag="16")]
+        // UpgradeClient(::ibc_proto::ibc::core::client::v1::MsgUpgradeClient),
+        // #[prost(message, tag="17")]
+        // SubmitMisbehaviour(::ibc_proto::ibc::core::client::v1::MsgSubmitMisbehaviour),
     }
 }
 /// FungibleTokenPacketData defines a struct for the packet payload
@@ -119,11 +119,11 @@ pub struct ConsensusState {
     #[prost(message, optional, tag="1")]
     pub consensus_state: ::core::option::Option<::prost_types::Any>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct VerifiedHeights {
-    #[prost(message, repeated, tag="1")]
-    pub heights: ::prost::alloc::vec::Vec<::ibc_proto::ibc::core::client::v1::Height>,
-}
+// #[derive(Clone, PartialEq, ::prost::Message)]
+// pub struct VerifiedHeights {
+//     #[prost(message, repeated, tag="1")]
+//     pub heights: ::prost::alloc::vec::Vec<::ibc_proto::ibc::core::client::v1::Height>,
+// }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ConnectionCounter {
     #[prost(uint64, tag="1")]

@@ -1,6 +1,6 @@
 [package]
 name = "penumbra-web-assembly"
-version = "0.34.5"
+version = "0.36.1-decodetransaction"
 authors = ["Valentine <valentine@zpoken.io>"]
 edition = "2018"
 
@@ -18,6 +18,8 @@ anyhow = "1"
 
 penumbra-crypto = { path = "../crypto" }
 penumbra-tct = { path = "../tct/" }
+penumbra-transaction = { path = "../transaction" }
+
 
 
 hex = "0.4"

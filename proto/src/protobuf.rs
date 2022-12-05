@@ -34,6 +34,7 @@ where
 
 use crate::core::crypto::v1alpha1::{BindingSignature, SpendAuthSignature, SpendVerificationKey};
 use decaf377_rdsa::{Binding, Signature, SpendAuth, VerificationKey};
+use prost::Message;
 
 impl Protobuf<SpendAuthSignature> for Signature<SpendAuth> {}
 impl Protobuf<BindingSignature> for Signature<Binding> {}
