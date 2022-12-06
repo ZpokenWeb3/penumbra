@@ -19,6 +19,8 @@ anyhow = "1"
 penumbra-crypto = { path = "../crypto" }
 penumbra-tct = { path = "../tct/" }
 penumbra-transaction = { path = "../transaction" }
+penumbra-proto = { path = "../proto" }
+
 
 
 

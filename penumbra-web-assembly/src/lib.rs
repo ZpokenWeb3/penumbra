@@ -1,5 +1,8 @@
+extern crate core;
+
 mod utils;
 
+use penumbra_proto::{Protobuf};
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -7,7 +10,6 @@ use penumbra_crypto::{FullViewingKey, IdentityKey, ka, Note, NotePayload, Nullif
 use anyhow::Context;
 use anyhow::Error;
 use hex::FromHex;
-
 
 
 use wasm_bindgen::prelude::*;
@@ -68,8 +70,7 @@ pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
 
 #[wasm_bindgen]
 pub fn decode_transaction(tx_bytes: &str) -> JsValue {
-    let transaction = Transaction::try_from(tx_bytes.as_bytes()).unwrap();
-
+    let transaction = Transaction::decode(tx_bytes.as_bytes()).unwrap();
     return JsValue::from_serde(&transaction).unwrap();
 }
 

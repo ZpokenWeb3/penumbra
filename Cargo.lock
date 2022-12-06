@@ -3747,6 +3747,7 @@ dependencies = [
  "indexmap",
  "js-sys",
  "penumbra-crypto",
+ "penumbra-proto",
  "penumbra-tct",
  "penumbra-transaction",
  "serde",
