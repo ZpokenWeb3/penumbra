@@ -10,6 +10,7 @@ use penumbra_crypto::{FullViewingKey, IdentityKey, ka, Note, NotePayload, Nullif
 use anyhow::Context;
 use anyhow::Error;
 use hex::FromHex;
+use base64::decode;
 
 
 use wasm_bindgen::prelude::*;
@@ -70,7 +71,7 @@ pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
 
 #[wasm_bindgen]
 pub fn decode_transaction(tx_bytes: &str) -> JsValue {
-    let transaction = Transaction::decode(tx_bytes.as_bytes()).unwrap();
+    let transaction = Transaction::decode(base64::decode(tx_bytes).unwrap().as_slice()).unwrap();
     return JsValue::from_serde(&transaction).unwrap();
 }
 

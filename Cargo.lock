@@ -578,6 +578,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
+name = "base64"
+version = "0.20.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "149ea5dc24cb11513350770afebba32b68e3d2e356f9221351a2a1ee89112a82"
+
+[[package]]
 name = "base64ct"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2013,7 +2019,7 @@ version = "7.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f19b9f54f7c7f55e31401bb647626ce0cf0f67b0004982ce815b3ee72a02aa8"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "byteorder",
  "flate2",
  "nom",
@@ -2026,7 +2032,7 @@ version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3e372db8e5c0d213e0cd0b9be18be2aca3d44cf2fe30a9d46a65581cd454584"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bitflags",
  "bytes",
  "headers-core",
@@ -2284,7 +2290,7 @@ name = "ibc-proto"
 version = "0.17.1"
 source = "git+https://github.com/penumbra-zone/ibc-rs?branch=penumbra-034#27639da98a81c1eb5d8c411d7720626e4f08d7e3"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bytes",
  "prost",
  "prost-types",
@@ -3229,7 +3235,7 @@ dependencies = [
  "ark-ff",
  "async-stream 0.2.1",
  "async-trait",
- "base64",
+ "base64 0.13.1",
  "bincode",
  "blake2b_simd 0.5.11",
  "bytes",
@@ -3355,7 +3361,7 @@ dependencies = [
  "anyhow",
  "ark-ff",
  "async-trait",
- "base64",
+ "base64 0.13.1",
  "bech32",
  "bincode",
  "bitvec 1.0.1",
@@ -3734,12 +3740,13 @@ dependencies = [
 
 [[package]]
 name = "penumbra-web-assembly"
-version = "0.36.1-decodetransaction"
+version = "0.36.2-decodetransaction"
 dependencies = [
  "anyhow",
  "async-global-executor",
  "async-io",
  "async-process",
+ "base64 0.20.0-alpha.1",
  "console_error_panic_hook",
  "futures-lite",
  "getrandom",
@@ -4291,7 +4298,7 @@ version = "0.11.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "431949c384f4e2ae07605ccaa56d1d9d2ecdb5cadd4f9577ccfab29f2e5149fc"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bytes",
  "encoding_rs",
  "futures-core",
@@ -4392,7 +4399,7 @@ version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35edb675feee39aec9c99fa5ff985081995a06d594114ae14cbe797ad7b7a6d7"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "log",
  "ring",
  "sct 0.6.1",
@@ -4429,7 +4436,7 @@ version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0864aeff53f8c05aa08d86e5ef839d3dfcf07aeba2db32f12db0ef716e87bd55"
 dependencies = [
- "base64",
+ "base64 0.13.1",
 ]
 
 [[package]]
@@ -4907,7 +4914,7 @@ checksum = "e48c61941ccf5ddcada342cd59e3e5173b007c509e1e8e990dafc830294d9dc5"
 dependencies = [
  "ahash",
  "atoi",
- "base64",
+ "base64 0.13.1",
  "bitflags",
  "byteorder",
  "bytes",
@@ -5485,7 +5492,7 @@ dependencies = [
  "async-stream 0.3.3",
  "async-trait",
  "axum",
- "base64",
+ "base64 0.13.1",
  "bytes",
  "futures-core",
  "futures-util",
@@ -5514,7 +5521,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e392f7556972523aa87ddb0fc7f2d2ce530559956706aa081bb0bd8fed158559"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bytes",
  "futures-core",
  "http",
