@@ -1,6 +1,6 @@
 [package]
 name = "penumbra-web-assembly"
-version = "0.36.2-decodetransaction"
+version = "0.37.0-signplan"
 authors = ["Valentine <valentine@zpoken.io>"]
 edition = "2018"
 
@@ -35,6 +35,8 @@ async-io = { version = "1.0.1", optional = true }
 futures-lite = { version = "1.0.0", optional = true }
 async-process = { version = "1.0.1", optional = true }
 indexmap = "=1.6.2"
+rand_core = "0.6"
+
 
 
 

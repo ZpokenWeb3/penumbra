@@ -11,12 +11,15 @@ use anyhow::Context;
 use anyhow::Error;
 use hex::FromHex;
 use base64::decode;
+use rand_core::OsRng;
+
 
 
 use wasm_bindgen::prelude::*;
 use penumbra_crypto::keys::{SeedPhrase, SpendKey};
 use penumbra_tct::{Forgotten, Tree};
 use penumbra_tct::storage::{StoredPosition, Updates};
+use penumbra_transaction::plan::TransactionPlan;
 use penumbra_transaction::Transaction;
 
 
@@ -74,6 +77,18 @@ pub fn decode_transaction(tx_bytes: &str) -> JsValue {
     let transaction = Transaction::decode(base64::decode(tx_bytes).unwrap().as_slice()).unwrap();
     return JsValue::from_serde(&transaction).unwrap();
 }
+
+#[wasm_bindgen]
+pub fn sign_plan(spend_key_str: &str,
+                 transaction_plan: JsValue) -> JsValue {
+    let spend_key = SpendKey::from_str(spend_key_str).unwrap();
+    let plan: TransactionPlan = serde_wasm_bindgen::from_value(transaction_plan).unwrap();
+
+    let authorization_data = plan.authorize(OsRng, &spend_key).to_proto();
+    return JsValue::from_serde(&authorization_data).unwrap();
+
+}
+
 
 #[wasm_bindgen]
 pub fn send(full_viewing_key: &str,

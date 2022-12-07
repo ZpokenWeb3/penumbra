@@ -407,6 +407,7 @@ pub struct DelegatorVoteBody {
 }
 /// The data required to authorize a transaction plan.
 #[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct AuthorizationData {
     /// The computed auth hash for the approved transaction plan.
     #[prost(message, optional, tag="1")]

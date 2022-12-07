@@ -1,6 +1,7 @@
 use penumbra_crypto::rdsa::{Signature, SpendAuth};
 use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
 
+
 use crate::AuthHash;
 
 /// Authorization data returned in response to a
