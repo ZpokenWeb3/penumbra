@@ -75,15 +75,23 @@ pub fn decode_transaction(tx_bytes: &str) -> JsValue {
     return JsValue::from_serde(&transaction).unwrap();
 }
 
+#[wasm_bindgen]
+pub fn send(full_viewing_key: &str,
+            amount: u64,
+            asset_id: &str,
+            fee: u64,
+            dest_address: &str) -> JsValue {
+    return JsValue::null();
+}
 
-//
+
 // #[wasm_bindgen]
 // pub fn nct_insert_empty_block(stored_position: JsValue,
 //                               last_forgotten: JsValue,
 //                               height: u64,
-//                               epoch_duration: u64 ) -> Result<JsValue, JsValue> {
-//     let position: StoredPosition = serde_wasm_bindgen::from_value(stored_position)?;
-//     let forgotten: Forgotten = serde_wasm_bindgen::from_value(last_forgotten)?;
+//                               epoch_duration: u64) -> Result<JsValue, JsValue> {
+//     let position: StoredPosition = serde_wasm_bindgen::from_value(stored_position).unwrap();
+//     let forgotten: Forgotten = serde_wasm_bindgen::from_value(last_forgotten).unwrap();
 //
 //
 //     let load_c = Tree::load(position, forgotten);
@@ -98,7 +106,8 @@ pub fn decode_transaction(tx_bytes: &str) -> JsValue {
 //     }
 //
 //     let updates = nct.updates(position, forgotten).collect::<Updates>();
-//
+// }
+
 //
 //     Ok(serde_wasm_bindgen::to_value(&updates)?)}
 //
