@@ -6,15 +6,12 @@ use penumbra_proto::{Protobuf};
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::str::FromStr;
-use penumbra_crypto::{FullViewingKey, IdentityKey, ka, Note, NotePayload, Nullifier};
+use penumbra_crypto::{FullViewingKey, ka, Note, Nullifier};
 use anyhow::Context;
 use anyhow::Error;
 use hex::FromHex;
 use base64::decode;
 use rand_core::OsRng;
-
-
-
 use wasm_bindgen::prelude::*;
 use penumbra_crypto::keys::{SeedPhrase, SpendKey};
 use penumbra_tct::{Forgotten, Tree};
