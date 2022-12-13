@@ -14,9 +14,9 @@ penumbra-tct = { path = "../tct" }
 # Git deps
 decaf377 = { git = "https://github.com/penumbra-zone/decaf377" }
 decaf377-rdsa = { git = "https://github.com/penumbra-zone/decaf377-rdsa" }
-poseidon377 = { git = "https://github.com/penumbra-zone/poseidon377", branch="main" }
-ibc = { git = "https://github.com/penumbra-zone/ibc-rs", branch = "penumbra-034" }
-#ibc-proto = { git = "https://github.com/penumbra-zone/ibc-rs", branch = "penumbra-034" }
+poseidon377 = { git = "https://github.com/penumbra-zone/poseidon377", branch = "main" }
+ibc = "0.23.0"
+ibc-proto = { version = "0.22.0", features = ["std"] }
 
 
 # Crates.io deps

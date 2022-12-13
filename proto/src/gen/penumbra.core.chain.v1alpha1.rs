@@ -17,12 +17,12 @@ pub struct ChainParameters {
     /// The base reward rate, expressed in basis points of basis points
     #[prost(uint64, tag="9")]
     pub base_reward_rate: u64,
-    /// The penalty for slashing due to misbehavior, expressed in basis points.
-    #[prost(uint64, tag="5")]
-    pub slashing_penalty_misbehavior_bps: u64,
-    /// The penalty for slashing due to downtime, expressed in basis points.
-    #[prost(uint64, tag="10")]
-    pub slashing_penalty_downtime_bps: u64,
+    /// The penalty for slashing due to misbehavior.
+    #[prost(message, optional, tag="5")]
+    pub slashing_penalty_misbehavior: ::core::option::Option<super::super::stake::v1alpha1::Penalty>,
+    /// The penalty for slashing due to downtime.
+    #[prost(message, optional, tag="10")]
+    pub slashing_penalty_downtime: ::core::option::Option<super::super::stake::v1alpha1::Penalty>,
     /// The number of blocks in the window to check for downtime.
     #[prost(uint64, tag="11")]
     pub signed_blocks_window_len: u64,
@@ -96,9 +96,9 @@ pub struct AssetInfo {
 pub struct CompactBlock {
     #[prost(uint64, tag="1")]
     pub height: u64,
-    /// NotePayloads describing new notes.
+    /// State payloads describing new state fragments.
     #[prost(message, repeated, tag="2")]
-    pub note_payloads: ::prost::alloc::vec::Vec<AnnotatedNotePayload>,
+    pub state_payloads: ::prost::alloc::vec::Vec<StatePayload>,
     /// Nullifiers identifying spent notes.
     #[prost(message, repeated, tag="3")]
     pub nullifiers: ::prost::alloc::vec::Vec<super::super::crypto::v1alpha1::Nullifier>,
@@ -106,29 +106,58 @@ pub struct CompactBlock {
     #[prost(message, optional, tag="4")]
     pub block_root: ::core::option::Option<super::super::crypto::v1alpha1::MerkleRoot>,
     /// The epoch root of this epoch (only present when the block is the last in an epoch).
-    #[prost(message, optional, tag="5")]
+    #[prost(message, optional, tag="17")]
     pub epoch_root: ::core::option::Option<super::super::crypto::v1alpha1::MerkleRoot>,
-    /// Newly quarantined things in this block.
-    #[prost(message, optional, tag="6")]
-    pub quarantined: ::core::option::Option<Quarantined>,
-    /// Validators slashed in this block.
-    #[prost(message, repeated, tag="16")]
-    pub slashed: ::prost::alloc::vec::Vec<super::super::crypto::v1alpha1::IdentityKey>,
     /// If a proposal started voting in this block, this is set to `true`.
     #[prost(bool, tag="20")]
     pub proposal_started: bool,
     /// Latest Fuzzy Message Detection parameters.
     #[prost(message, optional, tag="100")]
     pub fmd_parameters: ::core::option::Option<FmdParameters>,
+    /// Price data for swaps executed in this block.
+    #[prost(message, repeated, tag="5")]
+    pub swap_outputs: ::prost::alloc::vec::Vec<super::super::dex::v1alpha1::BatchSwapOutputData>,
 }
-/// A note payload, annotated with the note source.
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AnnotatedNotePayload {
-    #[prost(message, optional, tag="1")]
-    pub payload: ::core::option::Option<super::super::crypto::v1alpha1::NotePayload>,
-    #[prost(message, optional, tag="2")]
-    pub source: ::core::option::Option<NoteSource>,
+pub struct StatePayload {
+    #[prost(oneof="state_payload::StatePayload", tags="1, 2, 3")]
+    pub state_payload: ::core::option::Option<state_payload::StatePayload>,
+}
+/// Nested message and enum types in `StatePayload`.
+pub mod state_payload {
+    #[derive(::serde::Deserialize, ::serde::Serialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct RolledUp {
+        #[prost(message, optional, tag="1")]
+        pub commitment: ::core::option::Option<super::super::super::crypto::v1alpha1::StateCommitment>,
+    }
+    #[derive(::serde::Deserialize, ::serde::Serialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Note {
+        #[prost(message, optional, tag="1")]
+        pub source: ::core::option::Option<super::NoteSource>,
+        #[prost(message, optional, tag="2")]
+        pub note: ::core::option::Option<super::super::super::crypto::v1alpha1::EncryptedNote>,
+    }
+    #[derive(::serde::Deserialize, ::serde::Serialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Swap {
+        #[prost(message, optional, tag="1")]
+        pub source: ::core::option::Option<super::NoteSource>,
+        #[prost(message, optional, tag="2")]
+        pub swap: ::core::option::Option<super::super::super::dex::v1alpha1::SwapPayload>,
+    }
+    #[derive(::serde::Deserialize, ::serde::Serialize)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum StatePayload {
+        #[prost(message, tag="1")]
+        RolledUp(RolledUp),
+        #[prost(message, tag="2")]
+        Note(Note),
+        #[prost(message, tag="3")]
+        Swap(Swap),
+    }
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[serde(transparent)]
@@ -145,12 +174,6 @@ pub struct NoteSource {
     #[prost(bytes="vec", tag="1")]
     #[serde(with = "crate::serializers::hexstr")]
     pub inner: ::prost::alloc::vec::Vec<u8>,
-}
-/// A spicier transaction ID: one which can be missing
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DelibleNoteSource {
-    #[prost(message, optional, tag="1")]
-    pub source: ::core::option::Option<NoteSource>,
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -174,48 +197,4 @@ pub mod genesis_app_state {
         #[prost(message, optional, tag="3")]
         pub address: ::core::option::Option<super::super::super::crypto::v1alpha1::Address>,
     }
-}
-#[derive(::serde::Deserialize, ::serde::Serialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Quarantined {
-    #[prost(message, repeated, tag="1")]
-    pub per_epoch: ::prost::alloc::vec::Vec<quarantined::EpochEntry>,
-}
-/// Nested message and enum types in `Quarantined`.
-pub mod quarantined {
-    #[derive(::serde::Deserialize, ::serde::Serialize)]
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Unbonding {
-        #[prost(message, repeated, tag="1")]
-        pub note_payloads: ::prost::alloc::vec::Vec<super::AnnotatedNotePayload>,
-        #[prost(message, repeated, tag="2")]
-        pub nullifiers: ::prost::alloc::vec::Vec<super::super::super::crypto::v1alpha1::Nullifier>,
-    }
-    #[derive(::serde::Deserialize, ::serde::Serialize)]
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct ValidatorEntry {
-        #[prost(message, optional, tag="1")]
-        pub identity_key: ::core::option::Option<super::super::super::crypto::v1alpha1::IdentityKey>,
-        #[prost(message, optional, tag="2")]
-        pub unbonding: ::core::option::Option<Unbonding>,
-    }
-    #[derive(::serde::Deserialize, ::serde::Serialize)]
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Scheduled {
-        #[prost(message, repeated, tag="1")]
-        pub per_validator: ::prost::alloc::vec::Vec<ValidatorEntry>,
-    }
-    #[derive(::serde::Deserialize, ::serde::Serialize)]
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct EpochEntry {
-        #[prost(uint64, tag="1")]
-        pub unbonding_epoch: u64,
-        #[prost(message, optional, tag="2")]
-        pub scheduled: ::core::option::Option<Scheduled>,
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Slashed {
-    #[prost(message, repeated, tag="1")]
-    pub validators: ::prost::alloc::vec::Vec<super::super::crypto::v1alpha1::IdentityKey>,
 }

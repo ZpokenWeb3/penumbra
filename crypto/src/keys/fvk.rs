@@ -9,12 +9,15 @@ use serde::{Deserialize, Serialize};
 
 use super::{DiversifierKey, IncomingViewingKey, NullifierKey, OutgoingViewingKey};
 use crate::{
-    ka, note, prf,
+    ka,
+    note::Commitment,
+    prf,
     rdsa::{SpendAuth, VerificationKey},
     Fq, Fr, Note, Nullifier,
 };
 
-static IVK_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| Fq::from_le_bytes_mod_order(b"penumbra.derive.ivk"));
+pub(crate) static IVK_DOMAIN_SEP: Lazy<Fq> =
+    Lazy::new(|| Fq::from_le_bytes_mod_order(b"penumbra.derive.ivk"));
 
 static ACCOUNT_ID_DOMAIN_SEP: Lazy<Fq> =
     Lazy::new(|| Fq::from_le_bytes_mod_order(b"Penumbra_HashFVK"));
@@ -86,14 +89,14 @@ impl FullViewingKey {
         &self.nk
     }
 
-    /// Derive the [`Nullifier`] for a positioned note given its [`merkle::Position`] and
-    /// [`note::Commitment`].
+    /// Derive the [`Nullifier`] for a positioned note or swap given its [`merkle::Position`]
+    /// and [`Commitment`].
     pub fn derive_nullifier(
         &self,
         pos: penumbra_tct::Position,
-        note_commitment: &note::Commitment,
+        state_commitment: &Commitment,
     ) -> Nullifier {
-        self.nk.derive_nullifier(pos, note_commitment)
+        self.nk.derive_nullifier(pos, state_commitment)
     }
 
     /// Returns the spend verification key contained in this full viewing key.
@@ -207,13 +210,13 @@ impl From<AccountID> for pb::AccountId {
 impl std::fmt::Debug for AccountID {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_tuple("AccountID")
-            .field(&hex::encode(&self.0))
+            .field(&hex::encode(self.0))
             .finish()
     }
 }
 
 impl std::fmt::Display for AccountID {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(&hex::encode(&self.0))
+        f.write_str(&hex::encode(self.0))
     }
 }

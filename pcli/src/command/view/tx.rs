@@ -221,7 +221,6 @@ impl TxCmd {
                 actions_table.add_row(match av {
                     penumbra_transaction::ActionView::Swap(SwapView::Visible {
                         swap: _,
-                        swap_nft: _,
                         swap_plaintext,
                     }) => [
                         "Swap".to_string(),
@@ -276,6 +275,9 @@ impl TxCmd {
                     }
                     penumbra_transaction::ActionView::Undelegate(_) => {
                         ["Undelegation".to_string(), "".to_string()]
+                    }
+                    penumbra_transaction::ActionView::UndelegateClaim(_) => {
+                        ["Undelegation Claim".to_string(), "".to_string()]
                     }
                     penumbra_transaction::ActionView::ValidatorDefinition(_) => {
                         ["Upload Validator Definition".to_string(), "".to_string()]

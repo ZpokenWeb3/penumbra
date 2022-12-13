@@ -1,18 +1,26 @@
 use std::{fs::File, io::Write};
 
 use anyhow::{anyhow, Context, Result};
+use ark_ff::UniformRand;
+use decaf377::Fr;
+use penumbra_chain::Epoch;
 use penumbra_component::stake::rate::RateData;
 use penumbra_crypto::{
-    asset, dex::BatchSwapOutputData, transaction::Fee, Address, DelegationToken, IdentityKey,
-    Value, STAKING_TOKEN_ASSET_ID,
+    asset,
+    stake::{DelegationToken, IdentityKey, Penalty, UnbondingToken},
+    transaction::Fee,
+    Address, Value, STAKING_TOKEN_ASSET_ID,
 };
 use penumbra_proto::{
-    client::v1alpha1::{BatchSwapOutputDataRequest, KeyValueRequest},
+    client::v1alpha1::{KeyValueRequest, ValidatorPenaltyRequest},
     Protobuf,
 };
-use penumbra_transaction::action::Proposal;
+use penumbra_transaction::{
+    action::Proposal,
+    plan::{SwapClaimPlan, UndelegateClaimPlan},
+};
 use penumbra_view::ViewClient;
-use penumbra_wallet::plan;
+use penumbra_wallet::plan::{self, Planner};
 use rand_core::OsRng;
 
 use crate::App;
@@ -66,6 +74,13 @@ pub enum TxCmd {
         /// Optional. Only spend funds originally received by the given address index.
         #[clap(long)]
         source: Option<u64>,
+    },
+    /// Claim any undelegations that have finished unbonding.
+    #[clap(display_order = 200)]
+    UndelegateClaim {
+        /// The transaction fee (paid in upenumbra).
+        #[clap(long, default_value = "0")]
+        fee: u64,
     },
     /// Redelegate stake from one validator's delegation pool to another.
     #[clap(display_order = 200)]
@@ -133,6 +148,7 @@ impl TxCmd {
             TxCmd::Swap { .. } => false,
             TxCmd::Delegate { .. } => false,
             TxCmd::Undelegate { .. } => false,
+            TxCmd::UndelegateClaim { .. } => false,
             TxCmd::Redelegate { .. } => false,
             TxCmd::Proposal(proposal_cmd) => proposal_cmd.offline(),
         }
@@ -201,73 +217,53 @@ impl TxCmd {
 
                 // Since the swap command consists of two transactions (the swap and the swap claim),
                 // the fee is split equally over both for now.
-                let swap_fee = fee / 2;
-                let swap_claim_fee = fee / 2;
+                let swap_fee = Fee::from_staking_token_amount((fee / 2).into());
+                let swap_claim_fee = Fee::from_staking_token_amount((fee / 2).into());
 
-                let swap_plan = plan::swap(
-                    &app.fvk,
-                    app.view.as_mut().unwrap(),
-                    OsRng,
-                    input,
-                    into,
-                    Fee::from_staking_token_amount(swap_fee.into()),
-                    Fee::from_staking_token_amount(swap_claim_fee.into()),
-                    *source,
-                )
-                .await?;
-                let swap_plan_inner = swap_plan
+                let fvk = app.fvk.clone();
+                let account_id = fvk.hash();
+
+                // If a source address was specified, use it for the swap, otherwise,
+                // use the default address.
+                let (claim_address, _dtk_d) =
+                    fvk.incoming().payment_address(source.unwrap_or(0).into());
+
+                let mut planner = Planner::new(OsRng);
+                planner.fee(swap_fee);
+                planner.swap(input, into, swap_claim_fee.clone(), claim_address)?;
+                let plan = planner
+                    .plan(app.view(), &fvk, source.map(Into::into))
+                    .await
+                    .context("can't plan swap transaction")?;
+
+                // Hold on to the swap plaintext to be able to claim.
+                let swap_plaintext = plan
                     .swap_plans()
                     .next()
-                    .expect("expected swap plan")
+                    .expect("swap plan must be present")
+                    .swap_plaintext
                     .clone();
 
-                // Submit the `Swap` transaction.
-                app.build_and_submit_transaction(swap_plan).await?;
+                // Submit the `Swap` transaction, waiting for confirmation,
+                // at which point the swap will be available for claiming.
+                app.build_and_submit_transaction(plan).await?;
 
-                // Wait for detection of the note commitment containing the Swap NFT.
-                let account_id = app.fvk.hash();
-                let note_commitment = swap_plan_inner.swap_body(&app.fvk).swap_nft.note_commitment;
-                // Find the swap NFT note associated with the swap plan.
-                let swap_nft_record = tokio::time::timeout(
-                    std::time::Duration::from_secs(20),
-                    app.view()
-                        .await_note_by_commitment(account_id, note_commitment),
-                )
-                .await
-                .context("timeout waiting to detect commitment of submitted transaction")?
-                .context("error while waiting for detection of submitted transaction")?;
+                // Fetch the SwapRecord with the claimable swap.
+                let swap_record = app
+                    .view()
+                    .swap_by_commitment(account_id, swap_plaintext.swap_commitment())
+                    .await?;
 
-                // Now that the note commitment is detected, we can submit the `SwapClaim` transaction.
-                let swap_plaintext = swap_plan_inner.swap_plaintext;
+                let asset_cache = app.view().assets().await?;
 
-                // Fetch the batch swap output data associated with the block height
-                // and trading pair of the swap action.
-                //
-                // This batch swap output data comes from the client, it's necessary because
-                // the client has to encrypt the SwapPlaintext, however the validators *must*
-                // validate that the BatchSwapOutputData is correct when processing the SwapClaim!
-                let mut client = app.specific_client().await?;
-                let output_data: BatchSwapOutputData = client
-                    .batch_swap_output_data(BatchSwapOutputDataRequest {
-                        height: swap_nft_record.height_created,
-                        trading_pair: Some(swap_plaintext.trading_pair.into()),
-                    })
-                    .await?
-                    .into_inner()
-                    .try_into()
-                    .context("cannot parse batch swap output data")?;
-
-                let view_client: &mut dyn ViewClient = app.view.as_mut().unwrap();
-                let asset_cache = view_client.assets().await?;
-
-                let pro_rata_outputs = output_data.pro_rata_outputs((
+                let pro_rata_outputs = swap_record.output_data.pro_rata_outputs((
                     swap_plaintext.delta_1_i.into(),
                     swap_plaintext.delta_2_i.into(),
                 ));
                 println!("Swap submitted and batch confirmed!");
                 println!(
                     "Swap was: {}",
-                    if output_data.success {
+                    if swap_record.output_data.success {
                         "successful"
                     } else {
                         "unsuccessful"
@@ -277,30 +273,33 @@ impl TxCmd {
                     "You will receive outputs of {} and {}. Claiming now...",
                     Value {
                         amount: pro_rata_outputs.0.into(),
-                        asset_id: output_data.trading_pair.asset_1()
+                        asset_id: swap_record.output_data.trading_pair.asset_1()
                     }
                     .format(&asset_cache),
                     Value {
                         amount: pro_rata_outputs.1.into(),
-                        asset_id: output_data.trading_pair.asset_2()
+                        asset_id: swap_record.output_data.trading_pair.asset_2()
                     }
                     .format(&asset_cache),
                 );
 
-                let claim_plan = plan::swap_claim(
-                    &app.fvk,
-                    app.view.as_mut().unwrap(),
-                    OsRng,
-                    swap_plaintext,
-                    swap_nft_record.note,
-                    swap_nft_record.position,
-                    output_data,
-                )
-                .await?;
+                let params = app.view.as_mut().unwrap().chain_params().await?;
+
+                let mut planner = Planner::new(OsRng);
+                let plan = planner
+                    .swap_claim(SwapClaimPlan {
+                        swap_plaintext,
+                        position: swap_record.position,
+                        output_data: swap_record.output_data,
+                        epoch_duration: params.epoch_duration,
+                    })
+                    .plan(app.view(), &fvk, source.map(Into::into))
+                    .await
+                    .context("can't plan swap claim")?;
 
                 // Submit the `SwapClaim` transaction. TODO: should probably wait for the output notes
                 // of a SwapClaim to sync.
-                app.build_and_submit_transaction(claim_plan).await?;
+                app.build_and_submit_transaction(plan).await?;
             }
             TxCmd::Delegate {
                 to,
@@ -344,17 +343,13 @@ impl TxCmd {
                 fee,
                 source,
             } => {
-                let (self_address, _dtk) = app
-                    .fvk
-                    .incoming()
-                    .payment_address(source.unwrap_or(0).into());
-
                 let delegation_value @ Value {
                     amount: _,
                     asset_id,
                 } = amount.parse::<Value>()?;
                 let fee = Fee::from_staking_token_amount((*fee as u64).into());
 
+                // TODO: it's awkward that we can't just pull the denom out of the `amount` string we were already given
                 let delegation_token: DelegationToken = app
                     .view()
                     .assets()
@@ -374,78 +369,113 @@ impl TxCmd {
                     .into_inner()
                     .try_into()?;
 
-                // first, split the input notes into exact change
-                let split_plan = plan::send(
-                    &app.fvk,
-                    app.view.as_mut().unwrap(),
-                    OsRng,
-                    &[delegation_value],
-                    fee.clone(),
-                    self_address,
-                    *source,
-                    None,
-                )
-                .await?;
+                let params = app.view.as_mut().unwrap().chain_params().await?;
 
-                // find the note commitment corresponding to the delegation value within the split
-                // plan, so that we can use it to create the undelegate plan
-                let delegation_note_commitment = split_plan
-                    .output_plans()
-                    .find_map(|output| {
-                        let note = output.output_note();
-                        // grab the note commitment of whichever output in the spend plan has
-                        // exactly the right amount and asset id, and is also addressed to us
-                        if note.value() == delegation_value
-                        // this check is not necessary currently, because we never construct
-                        // undelegations to a different address than ourselves, but it's good to
-                        // leave it in here so that if we ever change that invariant, it will fail
-                        // here rather than after already executing the plan
-                            && app.fvk.incoming().views_address(&output.dest_address)
-                        {
-                            Some(note.commit())
-                        } else {
-                            None
+                let end_epoch_index = rate_data.epoch_index + params.unbonding_epochs;
+
+                let mut planner = Planner::new(OsRng);
+
+                let plan = planner
+                    .fee(fee)
+                    .undelegate(delegation_value.amount, rate_data, end_epoch_index)
+                    .plan(app.view.as_mut().unwrap(), &app.fvk, source.map(Into::into))
+                    .await
+                    .context("can't build undelegate plan")?;
+
+                app.build_and_submit_transaction(plan).await?;
+            }
+            TxCmd::UndelegateClaim { fee } => {
+                let fee = Fee::from_staking_token_amount((*fee as u64).into());
+
+                let account_id = app.fvk.hash(); // this should be optional? or saved in the client statefully?
+
+                let mut specific_client = app.specific_client().await?;
+                let view: &mut dyn ViewClient = app.view.as_mut().unwrap();
+
+                let params = view.chain_params().await?;
+                let current_height = view.status(account_id).await?.sync_height;
+                let current_epoch = Epoch::from_height(current_height, params.epoch_duration);
+                let asset_cache = view.assets().await?;
+
+                // Query the view client for the list of undelegations that are ready to be claimed.
+                // We want to claim them into the same address index that currently holds the tokens.
+                let notes = view.unspent_notes_by_address_and_asset(account_id).await?;
+                std::mem::drop(view);
+
+                for (address_index, notes_by_asset) in notes.into_iter() {
+                    for (token, notes) in notes_by_asset
+                        .into_iter()
+                        .filter_map(|(asset_id, notes)| {
+                            // Filter for notes that are unbonding tokens.
+                            let denom = asset_cache.get(&asset_id).unwrap().clone();
+                            match UnbondingToken::try_from(denom) {
+                                Ok(token) => Some((token, notes)),
+                                Err(_) => None,
+                            }
+                        })
+                        .filter_map(|(token, notes)| {
+                            // Filter for notes that are ready to be claimed.
+                            if token.end_epoch_index() <= current_epoch.index {
+                                Some((token, notes))
+                            } else {
+                                println!(
+                                    "skipping {} because it is not yet ready to be claimed",
+                                    token.denom().default_unit(),
+                                );
+                                None
+                            }
+                        })
+                    {
+                        println!("claiming {}", token.denom().default_unit());
+                        let validator_identity = token.validator();
+                        let start_epoch_index = token.start_epoch_index();
+                        let end_epoch_index = token.end_epoch_index();
+
+                        let penalty: Penalty = specific_client
+                            .validator_penalty(tonic::Request::new(ValidatorPenaltyRequest {
+                                chain_id: params.chain_id.to_string(),
+                                identity_key: Some(validator_identity.into()),
+                                start_epoch_index,
+                                end_epoch_index,
+                            }))
+                            .await?
+                            .into_inner()
+                            .penalty
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "no penalty returned for validator {}",
+                                    validator_identity
+                                )
+                            })?
+                            .try_into()?;
+
+                        let mut planner = Planner::new(OsRng);
+                        let unbonding_amount = notes.iter().map(|n| n.note.amount()).sum();
+                        for note in notes {
+                            planner.spend(note.note, note.position);
                         }
-                    })
-                    .expect("there must be an exact output for the amount we are expecting");
 
-                // we submit the split transaction before building the undelegate plan, because we
-                // need to await the note created by its output
-                app.build_and_submit_transaction(split_plan).await?;
-
-                // await the receipt of the exact note we wish to undelegate (this should complete
-                // immediately, because the spend in the split plan is awaited when we submit the
-                // transaction)
-                let delegation_notes = vec![
-                    app.view
-                        .as_mut()
-                        .unwrap()
-                        .await_note_by_commitment(app.fvk.hash(), delegation_note_commitment)
-                        .await?,
-                ];
-
-                // now we can plan and submit an exact-change undelegation
-                let undelegate_plan = plan::undelegate(
-                    &app.fvk,
-                    app.view.as_mut().unwrap(),
-                    OsRng,
-                    rate_data,
-                    delegation_notes,
-                    fee,
-                    *source,
-                )
-                .await?;
-
-                // Pass None as the change to await, since the change will be quarantined, so we won't detect it.
-                // But it's not spendable anyways, so we don't need to detect it.
-                let tx = app.build_transaction(undelegate_plan).await?;
-                app.submit_transaction(&tx, None).await?;
+                        let plan = planner
+                            .undelegate_claim(UndelegateClaimPlan {
+                                validator_identity,
+                                start_epoch_index,
+                                end_epoch_index,
+                                penalty,
+                                unbonding_amount,
+                                balance_blinding: Fr::rand(&mut OsRng),
+                            })
+                            .fee(fee.clone())
+                            .plan(app.view.as_mut().unwrap(), &app.fvk, Some(address_index))
+                            .await?;
+                        app.build_and_submit_transaction(plan).await?;
+                    }
+                }
             }
             TxCmd::Redelegate { .. } => {
                 println!("Sorry, this command is not yet implemented");
             }
             TxCmd::Proposal(ProposalCmd::Submit { file, fee, source }) => {
-                let proposal: Proposal = serde_json::from_reader(File::open(&file)?)?;
+                let proposal: Proposal = serde_json::from_reader(File::open(file)?)?;
                 let fee = Fee::from_staking_token_amount((*fee as u64).into());
                 let plan = plan::proposal_submit(
                     &app.fvk,
@@ -477,7 +507,7 @@ impl TxCmd {
                             chain_id,
                             key: penumbra_component::governance::state_key::proposal_deposit_refund_address(
                                 *proposal_id,
-                            ).into(),
+                            ),
                             proof: false,
                         })
                         .await?

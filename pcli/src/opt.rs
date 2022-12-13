@@ -7,14 +7,15 @@ use camino::Utf8PathBuf;
 use clap::Parser;
 use directories::ProjectDirs;
 use penumbra_crypto::FullViewingKey;
-use penumbra_custody::SoftHSM;
+use penumbra_custody::SoftKms;
 use penumbra_proto::{
     custody::v1alpha1::{
-        custody_protocol_client::CustodyProtocolClient,
-        custody_protocol_server::CustodyProtocolServer,
+        custody_protocol_service_client::CustodyProtocolServiceClient,
+        custody_protocol_service_server::CustodyProtocolServiceServer,
     },
     view::v1alpha1::{
-        view_protocol_client::ViewProtocolClient, view_protocol_server::ViewProtocolServer,
+        view_protocol_service_client::ViewProtocolServiceClient,
+        view_protocol_service_server::ViewProtocolServiceServer,
     },
 };
 use penumbra_view::ViewService;
@@ -39,9 +40,6 @@ pub struct Opt {
         parse(try_from_str = url::Host::parse)
     )]
     node: url::Host,
-    /// The port to use to speak to tendermint's RPC server.
-    #[clap(long, default_value_t = 26657, env = "PENUMBRA_TENDERMINT_PORT")]
-    tendermint_port: u16,
     /// The port to use to speak to pd's gRPC server.
     #[clap(long, default_value_t = 8080, env = "PENUMBRA_PD_PORT")]
     pd_port: u16,
@@ -73,14 +71,14 @@ impl Opt {
         // - the legacy wallet file exists
         // - the new wallet file does not exist
         if legacy_wallet_path.exists() && !custody_path.exists() {
-            legacy::migrate(&legacy_wallet_path, &custody_path.as_path())?;
+            legacy::migrate(&legacy_wallet_path, custody_path.as_path())?;
         }
 
         // Build the custody service...
         let wallet = KeyStore::load(custody_path)?;
-        let soft_hsm = SoftHSM::new(vec![wallet.spend_key.clone()]);
-        let custody_svc = CustodyProtocolServer::new(soft_hsm);
-        let custody = CustodyProtocolClient::new(box_grpc_svc::local(custody_svc));
+        let soft_kms = SoftKms::new(vec![wallet.spend_key.clone()]);
+        let custody_svc = CustodyProtocolServiceServer::new(soft_kms);
+        let custody = CustodyProtocolServiceClient::new(box_grpc_svc::local(custody_svc));
 
         let fvk = wallet.spend_key.full_viewing_key().clone();
 
@@ -91,16 +89,12 @@ impl Opt {
             None
         };
 
-        let mut tendermint_url = format!("http://{}", self.node)
+        let mut pd_url = format!("http://{}", self.node)
             .parse::<Url>()
             .with_context(|| format!("Invalid node URL: {}", self.node))?;
-        let mut pd_url = tendermint_url.clone();
         pd_url
             .set_port(Some(self.pd_port))
             .expect("pd URL will not be `file://`");
-        tendermint_url
-            .set_port(Some(self.tendermint_port))
-            .expect("tendermint URL will not be `file://`");
 
         let app = App {
             view,
@@ -108,16 +102,15 @@ impl Opt {
             fvk,
             wallet,
             pd_url,
-            tendermint_url,
         };
         Ok((app, self.cmd))
     }
 
-    /// Constructs a [`ViewProtocolClient`] based on the command-line options.
+    /// Constructs a [`ViewProtocolServiceClient`] based on the command-line options.
     async fn view_client(
         &self,
         fvk: &FullViewingKey,
-    ) -> Result<ViewProtocolClient<BoxGrpcService>> {
+    ) -> Result<ViewProtocolServiceClient<BoxGrpcService>> {
         let svc = if let Some(address) = self.view_address {
             // Use a remote view service.
             tracing::info!(%address, "using remote view service");
@@ -129,21 +122,16 @@ impl Opt {
             let path = self.data_path.join(crate::VIEW_FILE_NAME);
             tracing::info!(%path, "using local view service");
 
-            let svc = ViewService::load_or_initialize(
-                path,
-                fvk,
-                self.node.to_string(),
-                self.pd_port,
-                self.tendermint_port,
-            )
-            .await?;
+            let svc =
+                ViewService::load_or_initialize(path, fvk, self.node.to_string(), self.pd_port)
+                    .await?;
 
             // Now build the view and custody clients, doing gRPC with ourselves
-            let svc = ViewProtocolServer::new(svc);
+            let svc = ViewProtocolServiceServer::new(svc);
             box_grpc_svc::local(svc)
         };
 
-        Ok(ViewProtocolClient::new(svc))
+        Ok(ViewProtocolServiceClient::new(svc))
     }
 }
 

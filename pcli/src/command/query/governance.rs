@@ -1,18 +1,16 @@
 use std::{
     collections::BTreeMap,
     io::{stdout, Write},
+    str::FromStr,
 };
 
-use anyhow::Result;
-use futures::TryStreamExt;
-use penumbra_component::{
-    governance::{
-        proposal::{self, ProposalList},
-        state_key::*,
-    },
-    stake::validator,
+use anyhow::{Context, Result};
+use futures::{StreamExt, TryStreamExt};
+use penumbra_component::governance::{
+    proposal::{self, chain_params::MutableParam, ProposalList},
+    state_key::*,
 };
-use penumbra_crypto::IdentityKey;
+use penumbra_crypto::stake::IdentityKey;
 use penumbra_proto::client::v1alpha1::MutableParametersRequest;
 use penumbra_transaction::action::{Proposal, ProposalPayload, Vote};
 use penumbra_view::ViewClient;
@@ -74,6 +72,11 @@ impl GovernanceCmd {
                     .try_collect::<Vec<_>>()
                     .await?;
 
+                let params: Result<Vec<MutableParam>, _> =
+                    params.into_iter().map(TryInto::try_into).collect();
+
+                let params = params?;
+
                 json(&params)?;
             }
             GovernanceCmd::ListProposals { inactive } => {
@@ -131,16 +134,24 @@ impl GovernanceCmd {
                     json(&period)?;
                 }
                 ValidatorVotes => {
-                    let voting_validators: validator::List =
-                        client.key_domain(voting_validators(*proposal_id)).await?;
-
                     let mut votes: BTreeMap<IdentityKey, Vote> = BTreeMap::new();
-                    for identity_key in voting_validators.0.iter() {
-                        let vote: Vote = client
-                            .key_domain(validator_vote(*proposal_id, *identity_key))
-                            .await?;
-                        votes.insert(*identity_key, vote);
-                    }
+                    client
+                        .prefix_domain::<Vote, _>(voting_validators_list(*proposal_id))
+                        .await?
+                        .next()
+                        .await
+                        .into_iter()
+                        .try_for_each(|r| {
+                            let r = r?;
+                            votes.insert(
+                                IdentityKey::from_str(
+                                    r.0.rsplit('/').next().context("invalid key")?,
+                                )?,
+                                r.1,
+                            );
+                            Ok::<(), anyhow::Error>(())
+                        })?;
+
                     json(&votes)?;
                 }
                 Tally => {

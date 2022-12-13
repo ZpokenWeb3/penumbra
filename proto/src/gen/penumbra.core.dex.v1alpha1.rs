@@ -29,12 +29,15 @@ pub struct SwapClaim {
     /// Encapsulates the authorized fields of the SwapClaim action, used in signing.
     #[prost(message, optional, tag="2")]
     pub body: ::core::option::Option<SwapClaimBody>,
+    /// The epoch duration of the chain when the swap claim took place.
+    #[prost(uint64, tag="7")]
+    pub epoch_duration: u64,
 }
 /// Encapsulates the authorized fields of the SwapClaim action, used in signing.
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SwapClaimBody {
-    /// The nullifier for the Swap NFT to be consumed.
+    /// The nullifier for the Swap commitment to be consumed.
     #[prost(message, optional, tag="1")]
     pub nullifier: ::core::option::Option<super::super::crypto::v1alpha1::Nullifier>,
     /// The fee allows `SwapClaim` without an additional `Spend`.
@@ -42,32 +45,13 @@ pub struct SwapClaimBody {
     pub fee: ::core::option::Option<super::super::crypto::v1alpha1::Fee>,
     /// Note output for asset 1.
     #[prost(message, optional, tag="3")]
-    pub output_1: ::core::option::Option<super::super::crypto::v1alpha1::NotePayload>,
+    pub output_1_commitment: ::core::option::Option<super::super::crypto::v1alpha1::StateCommitment>,
     /// Note output for asset 2.
     #[prost(message, optional, tag="4")]
-    pub output_2: ::core::option::Option<super::super::crypto::v1alpha1::NotePayload>,
+    pub output_2_commitment: ::core::option::Option<super::super::crypto::v1alpha1::StateCommitment>,
     /// Input and output amounts, and asset IDs for the assets in the swap.
     #[prost(message, optional, tag="6")]
     pub output_data: ::core::option::Option<BatchSwapOutputData>,
-    /// The epoch duration of the chain when the swap claim took place.
-    #[prost(uint64, tag="7")]
-    pub epoch_duration: u64,
-}
-/// For storing the list of claimed swaps between the dex and shielded pool components.
-#[derive(::serde::Deserialize, ::serde::Serialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ClaimedSwapList {
-    #[prost(message, repeated, tag="1")]
-    pub claims: ::prost::alloc::vec::Vec<ClaimedSwap>,
-}
-/// Represents a swap claimed in a particular transaction.
-#[derive(::serde::Deserialize, ::serde::Serialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ClaimedSwap {
-    #[prost(message, optional, tag="1")]
-    pub claim: ::core::option::Option<SwapClaimBody>,
-    #[prost(bytes="vec", tag="2")]
-    pub txid: ::prost::alloc::vec::Vec<u8>,
 }
 /// The authorized data of a Swap transaction.
 #[derive(::serde::Deserialize, ::serde::Serialize)]
@@ -76,26 +60,32 @@ pub struct SwapBody {
     /// The trading pair to swap.
     #[prost(message, optional, tag="1")]
     pub trading_pair: ::core::option::Option<TradingPair>,
-    /// @exclude These will become commitments when flow encryption/ABCI++ are available
     /// The amount for asset 1.
     #[prost(message, optional, tag="2")]
     pub delta_1_i: ::core::option::Option<super::super::crypto::v1alpha1::Amount>,
     /// The amount for asset 2.
     #[prost(message, optional, tag="3")]
     pub delta_2_i: ::core::option::Option<super::super::crypto::v1alpha1::Amount>,
-    /// @exclude // Commitment to the amount for asset 1 (delta 1).
-    /// @exclude bytes delta_1_commitment = 2;
-    /// @exclude // Commitment to the amount for asset 2 (delta 2).
-    /// @exclude bytes delta_2_commitment = 3;
     /// A commitment to a prepaid fee for the future SwapClaim.
+    /// This is recorded separately from delta_j_i because it's shielded;
+    /// in the future we'll want separate commitments to each delta_j_i
+    /// anyways in order to prove consistency with flow encryption.
     #[prost(bytes="vec", tag="4")]
     pub fee_commitment: ::prost::alloc::vec::Vec<u8>,
-    /// Swap NFT recording the user's contribution.
+    /// The swap commitment and encryption of the swap data.
     #[prost(message, optional, tag="5")]
-    pub swap_nft: ::core::option::Option<super::super::crypto::v1alpha1::NotePayload>,
-    /// Encrypted version of the original `Swap`, symmetrically encrypted w/ viewing key.
-    #[prost(bytes="vec", tag="6")]
-    pub swap_ciphertext: ::prost::alloc::vec::Vec<u8>,
+    pub payload: ::core::option::Option<SwapPayload>,
+}
+#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SwapPayload {
+    #[prost(message, optional, tag="1")]
+    pub commitment: ::core::option::Option<super::super::crypto::v1alpha1::StateCommitment>,
+    /// TODO: replace with ovk-based encryption
+    #[prost(bytes="vec", tag="2")]
+    pub ephemeral_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="3")]
+    pub encrypted_swap: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -115,6 +105,9 @@ pub struct SwapPlaintext {
     /// Address that will claim the swap outputs via SwapClaim.
     #[prost(message, optional, tag="5")]
     pub claim_address: ::core::option::Option<super::super::crypto::v1alpha1::Address>,
+    /// Swap blinding factor
+    #[prost(bytes="vec", tag="6")]
+    pub swap_blinding: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[serde(transparent)]
@@ -124,9 +117,58 @@ pub struct MockFlowCiphertext {
     #[prost(uint64, tag="1")]
     pub value: u64,
 }
-/// Holds two asset IDs. Ordering doesn't reflect trading direction, however
-/// since the `AssetId` type is `Ord + PartialOrd`, there can be only one
-/// `TradingPair` per asset pair.
+#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SwapPlan {
+    /// The plaintext version of the swap to be performed.
+    #[prost(message, optional, tag="1")]
+    pub swap_plaintext: ::core::option::Option<SwapPlaintext>,
+    /// The blinding factor for the fee commitment. The fee in the SwapPlan is private to prevent linkability with the SwapClaim.
+    #[prost(bytes="vec", tag="2")]
+    #[serde(with = "crate::serializers::hexstr")]
+    pub fee_blinding: ::prost::alloc::vec::Vec<u8>,
+    /// The ephemeral secret used to encrypt the swap payload.
+    #[prost(bytes="vec", tag="3")]
+    #[serde(with = "crate::serializers::hexstr")]
+    pub esk: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SwapClaimPlan {
+    /// The plaintext version of the swap to be performed.
+    #[prost(message, optional, tag="1")]
+    pub swap_plaintext: ::core::option::Option<SwapPlaintext>,
+    /// The position of the swap commitment.
+    #[prost(uint64, tag="2")]
+    pub position: u64,
+    /// Input and output amounts for the Swap.
+    #[prost(message, optional, tag="3")]
+    pub output_data: ::core::option::Option<BatchSwapOutputData>,
+    /// The epoch duration, used in proving.
+    #[prost(uint64, tag="4")]
+    pub epoch_duration: u64,
+}
+#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SwapView {
+    #[prost(message, optional, tag="1")]
+    pub swap: ::core::option::Option<Swap>,
+    #[prost(message, optional, tag="3")]
+    pub swap_plaintext: ::core::option::Option<SwapPlaintext>,
+}
+#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SwapClaimView {
+    #[prost(message, optional, tag="1")]
+    pub swap_claim: ::core::option::Option<SwapClaim>,
+    #[prost(message, optional, tag="2")]
+    pub output_1: ::core::option::Option<super::super::crypto::v1alpha1::Note>,
+    #[prost(message, optional, tag="3")]
+    pub output_2: ::core::option::Option<super::super::crypto::v1alpha1::Note>,
+}
+/// Holds two asset IDs. Ordering doesn't reflect trading direction. Instead, we
+/// require `asset_1 < asset_2` as field elements, to ensure a canonical
+/// representation of an unordered pair.
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TradingPair {
@@ -172,22 +214,18 @@ pub struct BatchSwapOutputData {
 /// without specifying what those assets are, to avoid duplicating data (each
 /// asset ID alone is twice the size of the trading function).
 ///
-/// The trading function is `phi(R) = p*R_1 + q*R_2`.
-/// This is used as a CFMM with constant `k` and fee `fee` (gamma).
+/// The trading function is `phi(R) = p*R_1 + q*R_2`, with fee parameter `gamma = 1 - fee`.
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TradingFunction {
-    /// NOTE: the use of floats here is a placeholder, so we can stub out the
-    /// implementation and then decide what type of fixed-point, deterministic
-    /// arithmetic should be used.
-    #[prost(double, tag="2")]
-    pub fee: f64,
-    #[prost(double, tag="3")]
-    pub k: f64,
-    #[prost(double, tag="4")]
-    pub p: f64,
-    #[prost(double, tag="5")]
-    pub q: f64,
+    #[prost(uint32, tag="2")]
+    pub fee: u32,
+    /// This is not actually an amount, it's an integer the same width as an amount
+    #[prost(message, optional, tag="4")]
+    pub p: ::core::option::Option<super::super::crypto::v1alpha1::Amount>,
+    /// This is not actually an amount, it's an integer the same width as an amount
+    #[prost(message, optional, tag="5")]
+    pub q: ::core::option::Option<super::super::crypto::v1alpha1::Amount>,
 }
 /// The reserves of a position.
 ///
@@ -242,18 +280,19 @@ pub mod position_state {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PositionStateEnum {
+        Unspecified = 0,
         /// The position has been opened, is active, has reserves and accumulated
         /// fees, and can be traded against.
-        Opened = 0,
+        Opened = 1,
         /// The position has been closed, is inactive and can no longer be traded
         /// against, but still has reserves and accumulated fees.
-        Closed = 1,
+        Closed = 2,
         /// The final reserves and accumulated fees have been withdrawn, leaving an
         /// empty, inactive position awaiting (possible) retroactive rewards.
-        Withdrawn = 2,
+        Withdrawn = 3,
         /// Any retroactive rewards have been claimed. The position is now an inert,
         /// historical artefact.
-        Claimed = 3,
+        Claimed = 4,
     }
     impl PositionStateEnum {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -262,10 +301,11 @@ pub mod position_state {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                PositionStateEnum::Opened => "OPENED",
-                PositionStateEnum::Closed => "CLOSED",
-                PositionStateEnum::Withdrawn => "WITHDRAWN",
-                PositionStateEnum::Claimed => "CLAIMED",
+                PositionStateEnum::Unspecified => "POSITION_STATE_ENUM_UNSPECIFIED",
+                PositionStateEnum::Opened => "POSITION_STATE_ENUM_OPENED",
+                PositionStateEnum::Closed => "POSITION_STATE_ENUM_CLOSED",
+                PositionStateEnum::Withdrawn => "POSITION_STATE_ENUM_WITHDRAWN",
+                PositionStateEnum::Claimed => "POSITION_STATE_ENUM_CLAIMED",
             }
         }
     }

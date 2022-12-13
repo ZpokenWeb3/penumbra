@@ -1,24 +1,15 @@
-use std::{collections::BTreeSet, sync::Arc};
-
-use crate::stake::component::StateReadExt as _;
 use crate::Component;
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use penumbra_chain::{
-    genesis,
-    quarantined::{self, Slashed},
-    sync::{AnnotatedNotePayload, CompactBlock},
-    Epoch, NoteSource, StateReadExt as _,
-};
-use penumbra_crypto::{asset, note, IdentityKey, NotePayload, Nullifier, Value};
-use penumbra_storage::{State, StateRead, StateTransaction, StateWrite};
+use penumbra_chain::{genesis, sync::CompactBlock, Epoch, NoteSource, StateReadExt as _};
+use penumbra_crypto::{asset, note, Nullifier, Value};
+use penumbra_proto::{StateReadProto, StateWriteProto};
+use penumbra_storage::{StateRead, StateTransaction, StateWrite};
 use penumbra_tct as tct;
-use penumbra_transaction::{action::swap_claim::List as SwapClaimBodyList, Action, Transaction};
 use tct::Tree;
 use tendermint::abci;
-use tracing::instrument;
 
-use crate::shielded_pool::{consensus_rules, event, state_key};
+use crate::shielded_pool::state_key;
 
 use super::{NoteManager, SupplyWrite};
 
@@ -76,145 +67,6 @@ impl Component for ShieldedPool {
     // #[instrument(name = "shielded_pool", skip(_state, _begin_block))]
     async fn begin_block(_state: &mut StateTransaction, _begin_block: &abci::request::BeginBlock) {}
 
-    // #[instrument(name = "shielded_pool", skip(_ctx, tx))]
-    fn check_tx_stateless(tx: Arc<Transaction>) -> Result<()> {
-        // TODO: add a check that ephemeral_key is not identity to prevent scanning dos attack ?
-        let auth_hash = tx.transaction_body().auth_hash();
-
-        // 1. Check binding signature.
-        tx.binding_verification_key()
-            .verify(auth_hash.as_ref(), tx.binding_sig())
-            .context("binding signature failed to verify")?;
-
-        // 2. Check all spend auth signatures using provided spend auth keys
-        // and check all proofs verify. If any action does not verify, the entire
-        // transaction has failed.
-        let mut spent_nullifiers = BTreeSet::<Nullifier>::new();
-
-        for action in tx.transaction_body().actions {
-            match action {
-                Action::Output(output) => {
-                    if output
-                        .proof
-                        .verify(
-                            output.body.balance_commitment,
-                            output.body.note_payload.note_commitment,
-                            output.body.note_payload.ephemeral_key,
-                        )
-                        .is_err()
-                    {
-                        // TODO should the verification error be bubbled up here?
-                        return Err(anyhow::anyhow!("An output proof did not verify"));
-                    }
-                }
-                Action::Spend(spend) => {
-                    spend
-                        .body
-                        .rk
-                        .verify(auth_hash.as_ref(), &spend.auth_sig)
-                        .context("spend auth signature failed to verify")?;
-
-                    spend
-                        .proof
-                        .verify(
-                            tx.anchor,
-                            spend.body.balance_commitment,
-                            spend.body.nullifier,
-                            spend.body.rk,
-                        )
-                        .context("a spend proof did not verify")?;
-
-                    // Check nullifier has not been revealed already in this transaction.
-                    if spent_nullifiers.contains(&spend.body.nullifier.clone()) {
-                        return Err(anyhow::anyhow!("Double spend"));
-                    }
-
-                    spent_nullifiers.insert(spend.body.nullifier);
-                }
-                // other actions are handled by other components.
-                _ => {}
-            }
-        }
-
-        consensus_rules::stateless::num_clues_equal_to_num_outputs(&tx)?;
-        consensus_rules::stateless::check_memo_exists_if_outputs_absent_if_not(&tx)?;
-
-        Ok(())
-    }
-
-    // #[instrument(name = "shielded_pool", skip(state, tx))]
-    async fn check_tx_stateful(state: Arc<State>, tx: Arc<Transaction>) -> Result<()> {
-        state.check_claimed_anchor(tx.anchor).await?;
-
-        for spent_nullifier in tx.spent_nullifiers() {
-            state.check_nullifier_unspent(spent_nullifier).await?;
-        }
-
-        let previous_fmd_parameters = state
-            .get_previous_fmd_parameters()
-            .await
-            .expect("chain params request must succeed");
-        let current_fmd_parameters = state
-            .get_current_fmd_parameters()
-            .await
-            .expect("chain params request must succeed");
-        let height = state.get_block_height().await?;
-        consensus_rules::stateful::fmd_precision_within_grace_period(
-            &tx,
-            previous_fmd_parameters,
-            current_fmd_parameters,
-            height,
-        )?;
-
-        Ok(())
-    }
-
-    // #[instrument(name = "shielded_pool", skip(state, tx))]
-    async fn execute_tx(state: &mut StateTransaction, tx: Arc<Transaction>) -> Result<()> {
-        let source = NoteSource::Transaction { id: tx.id() };
-
-        if let Some((epoch, identity_key)) = state.should_quarantine(&tx).await {
-            for quarantined_output in tx.note_payloads().cloned() {
-                // Queue up scheduling this note to be unquarantined: the actual state-writing for
-                // all quarantined notes happens during end_block, to avoid state churn
-                state
-                    .schedule_note(epoch, identity_key, quarantined_output, source)
-                    .await;
-            }
-            for quarantined_spent_nullifier in tx.spent_nullifiers() {
-                state
-                    .quarantined_spend_nullifier(
-                        epoch,
-                        identity_key,
-                        quarantined_spent_nullifier,
-                        source,
-                    )
-                    .await;
-                state.record(event::quarantine_spend(quarantined_spent_nullifier));
-            }
-        } else {
-            for payload in tx.note_payloads().cloned() {
-                state
-                    .add_note(AnnotatedNotePayload { payload, source })
-                    .await;
-            }
-            for spent_nullifier in tx.spent_nullifiers() {
-                state.spend_nullifier(spent_nullifier, source).await;
-                state.record(event::spend(spent_nullifier));
-            }
-        }
-
-        // If there was any proposal submitted in the block, ensure we track this so that clients
-        // can retain state needed to vote as delegators
-        if tx.proposal_submits().next().is_some() {
-            let mut compact_block = state.stub_compact_block();
-            compact_block.proposal_started = true;
-            state.stub_put_compact_block(compact_block);
-        }
-
-        Ok(())
-    }
-
     // #[instrument(name = "shielded_pool", skip(state, _end_block))]
     async fn end_block(state: &mut StateTransaction, _end_block: &abci::request::EndBlock) {
         // Get the current block height
@@ -226,16 +78,6 @@ impl Component for ShieldedPool {
         state.stub_put_compact_block(compact_block);
 
         // TODO: execute any scheduled DAO spend transactions for this block
-
-        // Schedule all unquarantining that was set up in this block
-        state.schedule_unquarantined_notes().await;
-
-        // Handle any slashing that occurred in this block, unscheduling all affected notes and
-        // nullifiers from future unbonding
-        state.process_slashing().await;
-
-        // Process all unquarantining scheduled for this block
-        state.process_unquarantine().await;
 
         // We need to reload the compact block here, in case it was
         // edited during the preceding method calls.
@@ -293,19 +135,12 @@ pub trait StateReadExt: StateRead {
                 source,
             ));
         }
-
-        if let Some(source) = self
-            .get::<NoteSource, _>(&state_key::quarantined_spent_nullifier_lookup(nullifier))
-            .await?
-        {
-            return Err(anyhow!(
-                "nullifier {} was already spent in {:?} (currently quarantined)",
-                nullifier,
-                source,
-            ));
-        }
-
         Ok(())
+    }
+
+    /// Returns the NCT anchor for the given height.
+    async fn anchor_by_height(&self, height: u64) -> Result<Option<tct::Root>> {
+        self.get(&state_key::anchor_by_height(height)).await
     }
 
     /// Checks whether a claimed NCT anchor is a previous valid state root.
@@ -367,23 +202,12 @@ pub trait StateReadExt: StateRead {
             compact_block.epoch_root = Some(epoch_root);
         }
     }
-
-    async fn scheduled_to_apply(&self, epoch: u64) -> Result<quarantined::Scheduled> {
-        Ok(self
-            .get(&state_key::scheduled_to_apply(epoch))
-            .await?
-            .unwrap_or_default())
-    }
-
-    async fn claimed_swap_outputs(&self, height: u64) -> Result<Option<SwapClaimBodyList>> {
-        self.get(&state_key::claimed_swap_outputs(height)).await
-    }
 }
 
 impl<T: StateRead + ?Sized> StateReadExt for T {}
 
 #[async_trait]
-pub(super) trait StateWriteExt: StateWrite {
+pub(crate) trait StateWriteExt: StateWrite {
     // TODO: remove this entirely post-integration. This is slow but intended as
     // a drop-in replacement so we can avoid really major code changes.
     //
@@ -458,10 +282,6 @@ pub(super) trait StateWriteExt: StateWrite {
         );
     }
 
-    async fn set_claimed_swap_outputs(&mut self, height: u64, claims: SwapClaimBodyList) {
-        self.put(state_key::claimed_swap_outputs(height), claims);
-    }
-
     // #[instrument(skip(self))]
     async fn write_compactblock_and_nct(
         &mut self,
@@ -490,200 +310,11 @@ pub(super) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    // Returns whether the note was presently quarantined.
-    // TODO: seems weird to return an Option type here given that it should never be None as-implemented
-    async fn roll_back_note(&mut self, commitment: note::Commitment) -> Result<Option<NoteSource>> {
-        // Get the note source of the note (or empty vec if already applied or rolled back)
-        let source: NoteSource = self
-            .get(&state_key::note_source(&commitment))
-            .await?
-            .expect("can't roll back note that was never created");
-
-        // Delete the note from the set of all notes
-        self.delete(state_key::note_source(&commitment));
-
-        Ok(Some(source))
-    }
-
-    // Returns the source if the nullifier was in quarantine already
-    // TODO: seems weird to return an Option type here given that it should never be None as-implemented
-    #[instrument(skip(self))]
-    async fn unquarantine_nullifier(&mut self, nullifier: Nullifier) -> Result<Option<NoteSource>> {
-        tracing::debug!("removing quarantined nullifier");
-
-        // Get the note source of the nullifier (or empty vec if already applied or rolled back)
-        let source: NoteSource = self
-            .get(&state_key::quarantined_spent_nullifier_lookup(nullifier))
-            .await?
-            .expect("can't unquarantine nullifier that was never quarantined");
-
-        // Delete the nullifier from the quarantine set
-        self.delete(state_key::quarantined_spent_nullifier_lookup(nullifier));
-
-        Ok(Some(source))
-    }
-    async fn schedule_unquarantine(
-        &mut self,
-        epoch: u64,
-        scheduled: quarantined::Scheduled,
-    ) -> Result<()> {
-        let mut updated_quarantined = self.scheduled_to_apply(epoch).await?;
-        updated_quarantined.extend(scheduled);
-        self.put(state_key::scheduled_to_apply(epoch), updated_quarantined);
-        Ok(())
-    }
-
-    // Unschedule the unquarantining of all notes and nullifiers for the given validator, in any
-    // epoch which could possibly still be unbonding
-    async fn unschedule_all_slashed(&mut self) -> Result<Vec<IdentityKey>> {
-        let height = self.get_block_height().await?;
-        let epoch_duration = self.get_epoch_duration().await?;
-        let this_epoch = Epoch::from_height(height, epoch_duration);
-        let unbonding_epochs = self.get_chain_params().await?.unbonding_epochs;
-
-        // TODO: restore
-        /*
-        let slashed: Slashed = self
-            .get(&state_key::slashed_validators(height))
-            .await?
-            .unwrap_or_default();
-         */
-        let slashed = Slashed::default();
-
-        for epoch in this_epoch.index.saturating_sub(unbonding_epochs)..=this_epoch.index {
-            let mut updated_scheduled = self.scheduled_to_apply(epoch).await?;
-            for &identity_key in &slashed.validators {
-                let unbonding = updated_scheduled.unschedule_validator(identity_key);
-                // Now we also ought to remove these nullifiers and notes from quarantine without
-                // applying them:
-                for &nullifier in unbonding.nullifiers.iter() {
-                    self.unquarantine_nullifier(nullifier).await?;
-                }
-                for note_payload in unbonding.note_payloads.iter() {
-                    self.roll_back_note(note_payload.payload.note_commitment)
-                        .await?;
-                }
-            }
-            // We're removed all the scheduled notes and nullifiers for this epoch and identity key:
-            self.put(state_key::scheduled_to_apply(epoch), updated_scheduled);
-        }
-
-        Ok(slashed.validators)
-    }
-
-    #[instrument(skip(self, source, payload), fields(note_commitment = ?payload.note_commitment))]
-    async fn schedule_note(
-        &mut self,
-        epoch: u64,
-        identity_key: IdentityKey,
-        payload: NotePayload,
-        source: NoteSource,
-    ) {
-        tracing::debug!("scheduling note");
-
-        // 1. Record its source in the JMT
-        self.put(state_key::note_source(&payload.note_commitment), source);
-
-        // 2. Schedule it in the compact block
-        // TODO: port this over, quarantine logic is very complicated,
-        // but we have to replicate it exactly as-is, because it carries over
-        // to the client side
-        let mut compact_block = self.stub_compact_block();
-        compact_block.quarantined.schedule_note(
-            epoch,
-            identity_key,
-            AnnotatedNotePayload { payload, source },
-        );
-        self.stub_put_compact_block(compact_block);
-    }
-
-    #[instrument(skip(self, source))]
-    async fn quarantined_spend_nullifier(
-        &mut self,
-        epoch: u64,
-        identity_key: IdentityKey,
-        nullifier: Nullifier,
-        source: NoteSource,
-    ) {
-        // We need to record the nullifier as spent under quarantine in the JMT (to prevent
-        // double spends), as well as in the CompactBlock (so clients can learn their note
-        // was provisionally spent, pending quarantine period).
-        tracing::debug!("marking as spent (currently quarantined)");
-        self.put(
-            state_key::quarantined_spent_nullifier_lookup(nullifier),
-            // We don't use the value for validity checks, but writing the source
-            // here lets us find out what transaction spent the nullifier.
-            source,
-        );
-        // Queue up scheduling this nullifier to be unquarantined: the actual state-writing
-        // for all quarantined nullifiers happens during end_block, to avoid state churn
-        let mut compact_block = self.stub_compact_block();
-        compact_block
-            .quarantined
-            .schedule_nullifier(epoch, identity_key, nullifier);
-        self.stub_put_compact_block(compact_block);
-    }
-
     /// Get the current block height.
     async fn height(&self) -> u64 {
         self.get_block_height()
             .await
             .expect("block height must be set")
-    }
-
-    async fn schedule_unquarantined_notes(&mut self) {
-        // First, we group all the scheduled quarantined notes by unquarantine epoch, in the process
-        // resetting the quarantine field of the component
-        let compact_block = self.stub_compact_block();
-        for (&unbonding_epoch, scheduled) in compact_block.quarantined.iter() {
-            self.schedule_unquarantine(unbonding_epoch, scheduled.clone())
-                .await
-                .expect("scheduling unquarantine must succeed");
-        }
-    }
-
-    // Process any slashing that occrred in this block.
-    async fn process_slashing(&mut self) {
-        let mut compact_block = self.stub_compact_block();
-        compact_block.slashed.extend(
-            self.unschedule_all_slashed()
-                .await
-                .expect("can unschedule slashed"),
-        );
-        self.stub_put_compact_block(compact_block);
-    }
-
-    // Process any notes/nullifiers due to be unquarantined in this block, if it's an
-    // epoch-ending block
-    #[instrument(skip(self))]
-    async fn process_unquarantine(&mut self) {
-        let this_epoch = self.epoch().await.unwrap();
-
-        if this_epoch.is_epoch_end(self.height().await) {
-            for (_, per_validator) in self
-                .scheduled_to_apply(this_epoch.index)
-                .await
-                .expect("can look up quarantined for this epoch")
-            {
-                // For all the note payloads scheduled for unquarantine now, remove them from
-                // quarantine and add them to the proper notes for this block
-                for note_payload in per_validator.note_payloads {
-                    tracing::debug!(?note_payload, "unquarantining note");
-                    self.add_note(note_payload).await;
-                }
-                // For all the nullifiers scheduled for unquarantine now, remove them from
-                // quarantine and add them to the proper nullifiers for this block
-                for nullifier in per_validator.nullifiers {
-                    let note_source = self
-                        .unquarantine_nullifier(nullifier)
-                        .await
-                        .expect("can try to unquarantine nullifier")
-                        .expect("nullifier to unquarantine has source");
-                    tracing::debug!(?nullifier, "unquarantining nullifier");
-                    self.spend_nullifier(nullifier, note_source).await;
-                }
-            }
-        }
     }
 }
 

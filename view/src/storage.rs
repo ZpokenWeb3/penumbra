@@ -5,21 +5,23 @@ use parking_lot::Mutex;
 use penumbra_chain::params::{ChainParameters, FmdParameters};
 use penumbra_crypto::{
     asset::{self, Id},
-    Amount, Asset, FieldExt, FullViewingKey, Nullifier,
+    note, Address, Amount, Asset, FieldExt, Fq, FullViewingKey, Note, Nullifier, Value,
 };
 use penumbra_proto::{
-    client::v1alpha1::{oblivious_query_client::ObliviousQueryClient, ChainParamsRequest},
+    client::v1alpha1::{
+        oblivious_query_service_client::ObliviousQueryServiceClient, ChainParametersRequest,
+    },
     Protobuf,
 };
 use penumbra_tct as tct;
 use penumbra_transaction::Transaction;
 use sha2::Digest;
-use sqlx::{migrate::MigrateDatabase, query, Pool, Sqlite};
-use std::{num::NonZeroU64, sync::Arc};
+use sqlx::{migrate::MigrateDatabase, query, Pool, Row, Sqlite};
+use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 use tct::Commitment;
 use tokio::sync::broadcast::{self, error::RecvError};
 
-use crate::{sync::FilteredBlock, QuarantinedNoteRecord, SpendableNoteRecord};
+use crate::{sync::FilteredBlock, SpendableNoteRecord, SwapRecord};
 
 mod nct;
 use nct::TreeStore;
@@ -54,14 +56,16 @@ impl Storage {
             Self::load(storage_path.as_str()).await
         } else {
             let mut client =
-                ObliviousQueryClient::connect(format!("http://{}:{}", node, pd_port)).await?;
+                ObliviousQueryServiceClient::connect(format!("http://{}:{}", node, pd_port))
+                    .await?;
             let params = client
-                .chain_parameters(tonic::Request::new(ChainParamsRequest {
+                .chain_parameters(tonic::Request::new(ChainParametersRequest {
                     chain_id: String::new(),
                 }))
                 .await?
                 .into_inner()
                 .try_into()?;
+
             Self::initialize(storage_path, fvk.clone(), params).await
         }
     }
@@ -113,7 +117,7 @@ impl Storage {
         if storage_path.exists() {
             return Err(anyhow!("Database already exists at: {}", storage_path));
         } else {
-            std::fs::File::create(&storage_path)?;
+            std::fs::File::create(storage_path)?;
         }
         // Create the SQLite database
         sqlx::Sqlite::create_database(storage_path.as_str());
@@ -175,13 +179,13 @@ impl Storage {
                 format!(
                     "SELECT
                         notes.note_commitment,
-                        notes.height_created,
+                        spendable_notes.height_created,
                         notes.address,
                         notes.amount,
                         notes.asset_id,
                         notes.blinding_factor,
-                        notes.address_index,
-                        notes.source,
+                        spendable_notes.address_index,
+                        spendable_notes.source,
                         spendable_notes.height_spent,
                         spendable_notes.nullifier,
                         spendable_notes.position
@@ -227,6 +231,37 @@ impl Storage {
                         }
                     },
                 };
+            }
+        }
+    }
+
+    /// Query for a swap by its swap commitment, optionally waiting until the note is detected.
+    pub fn swap_by_commitment(
+        &self,
+        swap_commitment: tct::Commitment,
+        await_detection: bool,
+    ) -> impl Future<Output = anyhow::Result<SwapRecord>> {
+        // Clone the pool handle so that the returned future is 'static
+        let pool = self.pool.clone();
+        async move {
+            // Check if we already have the note
+            if let Some(record) = sqlx::query_as::<_, SwapRecord>(
+                format!(
+                    "SELECT * FROM swaps WHERE swaps.swap_commitment = x'{}'",
+                    hex::encode(swap_commitment.0.to_bytes())
+                )
+                .as_str(),
+            )
+            .fetch_optional(&pool)
+            .await?
+            {
+                return Ok(record);
+            }
+
+            if !await_detection {
+                return Err(anyhow!("swap commitment {} not found", swap_commitment));
+            } else {
+                return Err(anyhow!("swap commitment await_detection not implemented"));
             }
         }
     }
@@ -449,13 +484,13 @@ impl Storage {
                 format!(
                     "SELECT
                         notes.note_commitment,
-                        notes.height_created,
+                        spendable_notes.height_created,
                         notes.address,
                         notes.amount,
                         notes.asset_id,
                         notes.blinding_factor,
-                        notes.address_index,
-                        notes.source,
+                        spendable_notes.address_index,
+                        spendable_notes.source,
                         spendable_notes.height_spent,
                         spendable_notes.nullifier,
                         spendable_notes.position
@@ -548,25 +583,25 @@ impl Storage {
         // crypto.AssetId asset_id = 3;
 
         let asset_clause = asset_id
-            .map(|id| format!("x'{}'", hex::encode(&id.to_bytes())))
+            .map(|id| format!("x'{}'", hex::encode(id.to_bytes())))
             .unwrap_or_else(|| "asset_id".to_string());
 
         // If set, only return notes with the specified address index.
         // crypto.AddressIndex address_index = 4;
         let address_clause = address_index
-            .map(|d| format!("x'{}'", hex::encode(&d.to_bytes())))
+            .map(|d| format!("x'{}'", hex::encode(d.to_bytes())))
             .unwrap_or_else(|| "address_index".to_string());
 
         let result = sqlx::query_as::<_, SpendableNoteRecord>(
             format!(
                 "SELECT notes.note_commitment,
-                        notes.height_created,
+                        spendable_notes.height_created,
                         notes.address,
                         notes.amount,
                         notes.asset_id,
                         notes.blinding_factor,
-                        notes.address_index,
-                        notes.source,
+                        spendable_notes.address_index,
+                        spendable_notes.source,
                         spendable_notes.height_spent,
                         spendable_notes.nullifier,
                         spendable_notes.position
@@ -574,7 +609,7 @@ impl Storage {
             JOIN spendable_notes ON notes.note_commitment = spendable_notes.note_commitment
             WHERE spendable_notes.height_spent IS {}
             AND notes.asset_id IS {}
-            AND notes.address_index IS {}",
+            AND spendable_notes.address_index IS {}",
                 spent_clause, asset_clause, address_clause
             )
             .as_str(),
@@ -615,28 +650,6 @@ impl Storage {
         }
 
         Ok(output)
-    }
-
-    pub async fn quarantined_notes(&self) -> anyhow::Result<Vec<QuarantinedNoteRecord>> {
-        let result = sqlx::query_as::<_, QuarantinedNoteRecord>(
-            "SELECT notes.note_commitment,
-                        notes.height_created,
-                        notes.address,
-                        notes.amount,
-                        notes.asset_id,
-                        notes.blinding_factor,
-                        notes.address_index,
-                        notes.source,
-                        quarantined_notes.unbonding_epoch,
-                        quarantined_notes.identity_key
-                        FROM notes
-                        JOIN quarantined_notes
-                        ON quarantined_notes.note_commitment = notes.note_commitment",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(result)
     }
 
     pub async fn record_asset(&self, asset: Asset) -> anyhow::Result<()> {
@@ -684,6 +697,97 @@ impl Storage {
         Ok(())
     }
 
+    pub async fn give_advice(&self, note: Note) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let note_commitment = note.commit().0.to_bytes().to_vec();
+        let address = note.address().to_vec();
+        let amount = u64::from(note.amount()) as i64;
+        let asset_id = note.asset_id().to_bytes().to_vec();
+        let blinding_factor = note.note_blinding().to_bytes().to_vec();
+
+        sqlx::query!(
+            "INSERT INTO notes
+                    (
+                        note_commitment,
+                        address,
+                        amount,
+                        asset_id,
+                        blinding_factor
+                    )
+                    VALUES
+                    (?, ?, ?, ?, ?)",
+            note_commitment,
+            address,
+            amount,
+            asset_id,
+            blinding_factor,
+        )
+        .execute(&mut tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Return advice about note contents for use in scanning.
+    ///
+    /// Given a list of note commitments, this method checks whether any of them
+    /// correspond to notes that have been recorded in the database but not yet
+    /// observed during scanning.
+    pub async fn scan_advice(
+        &self,
+        note_commitments: Vec<note::Commitment>,
+    ) -> anyhow::Result<BTreeMap<note::Commitment, Note>> {
+        if note_commitments.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let rows = sqlx::query(
+            format!(
+                "SELECT notes.address,
+                        notes.amount,
+                        notes.asset_id,
+                        notes.blinding_factor
+                FROM notes
+                LEFT OUTER JOIN spendable_notes ON notes.note_commitment = spendable_notes.note_commitment
+                WHERE (spendable_notes.note_commitment IS NULL) AND (notes.note_commitment IN ({}))",
+                note_commitments
+                    .iter()
+                    .map(|cm| format!("x'{}'", hex::encode(cm.0.to_bytes())))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .as_str(),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut notes = BTreeMap::new();
+        for row in rows {
+            let address = Address::try_from(row.get::<&[u8], _>("address"))?;
+            let amount = (row.get::<i64, _>("amount") as u64).into();
+            let asset_id = asset::Id(Fq::from_bytes(
+                row.get::<&[u8], _>("asset_id")
+                    .try_into()
+                    .expect("32 bytes"),
+            )?);
+            let blinding_factor = Fq::from_bytes(
+                row.get::<&[u8], _>("blinding_factor")
+                    .try_into()
+                    .expect("32 bytes"),
+            )?;
+
+            let note =
+                Note::from_parts(address, Value { amount, asset_id }, blinding_factor).unwrap();
+
+            notes.insert(note.commit(), note);
+        }
+
+        Ok(notes)
+    }
+
     /// Filters for nullifiers whose notes we control
     pub async fn filter_nullifiers(
         &self,
@@ -692,24 +796,16 @@ impl Storage {
         if nullifiers.is_empty() {
             return Ok(Vec::new());
         }
-        // pub note_commitment: note::Commitment,
-        //     pub note: Note,
-        //     pub address_index: AddressIndex,
-        //     pub nullifier: Nullifier,
-        //     pub height_created: u64,
-        //     pub height_spent: Option<u64>,
-        //     pub position: tct::Position,
-        //     pub source: NoteSource,
         Ok(sqlx::query_as::<_, SpendableNoteRecord>(
             format!(
                 "SELECT notes.note_commitment,
-                        notes.height_created,
+                        spendable_notes.height_created,
                         notes.address,
                         notes.amount,
                         notes.asset_id,
                         notes.blinding_factor,
-                        notes.address_index,
-                        notes.source,
+                        spendable_notes.address_index,
+                        spendable_notes.source,
                         spendable_notes.height_spent,
                         spendable_notes.nullifier,
                         spendable_notes.position
@@ -756,68 +852,6 @@ impl Storage {
         }
         let mut dbtx = self.pool.begin().await?;
 
-        // Insert all quarantined note commitments into storage
-        for quarantined_note_record in &filtered_block.new_quarantined_notes {
-            let note_commitment = quarantined_note_record
-                .note_commitment
-                .0
-                .to_bytes()
-                .to_vec();
-            let height_created = filtered_block.height as i64;
-            let address = quarantined_note_record.note.address().to_vec();
-            let amount = u64::from(quarantined_note_record.note.amount()) as i64;
-            let asset_id = quarantined_note_record.note.asset_id().to_bytes().to_vec();
-            let blinding_factor = quarantined_note_record
-                .note
-                .note_blinding()
-                .to_bytes()
-                .to_vec();
-            let address_index = quarantined_note_record.address_index.to_bytes().to_vec();
-            let unbonding_epoch = quarantined_note_record.unbonding_epoch as i64;
-            let identity_key = quarantined_note_record.identity_key.encode_to_vec();
-            let source = quarantined_note_record.source.to_bytes().to_vec();
-
-            sqlx::query!(
-                "INSERT INTO notes
-                    (
-                        note_commitment,
-                        height_created,
-                        address,
-                        amount,
-                        asset_id,
-                        blinding_factor,
-                        address_index,
-                        source
-                    )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                note_commitment,
-                height_created,
-                address,
-                amount,
-                asset_id,
-                blinding_factor,
-                address_index,
-                source,
-            )
-            .execute(&mut dbtx)
-            .await?;
-
-            sqlx::query!(
-                "INSERT INTO quarantined_notes
-                    (
-                        note_commitment,
-                        unbonding_epoch,
-                        identity_key
-                    )
-                VALUES (?, ?, ?)",
-                note_commitment,
-                unbonding_epoch,
-                identity_key,
-            )
-            .execute(&mut dbtx)
-            .await?;
-        }
-
         // Insert new note records into storage
         for note_record in &filtered_block.new_notes {
             // https://github.com/launchbadge/sqlx/issues/1430
@@ -836,126 +870,73 @@ impl Storage {
             let position = (u64::from(note_record.position)) as i64;
             let source = note_record.source.to_bytes().to_vec();
 
-            // If this note corresponded to a previously quarantined note, delete it from quarantine
-            // also, because it is now applied
-            let was_quarantined = sqlx::query!(
-                "DELETE FROM quarantined_notes WHERE note_commitment = ?",
-                note_commitment,
-            )
-            .execute(&mut dbtx)
-            .await?
-            .rows_affected()
-                > 0;
-
-            if was_quarantined {
-                // If the note was quarantined, that means it's already present in the notes table,
-                // so instead of inserting it again (which would conflict with the uniqueness
-                // constraint), we check to make sure that the update *would have been* a no-op (if
-                // it wouldn't, that's a bug in our implementation or a malicious server):
-                let existing = sqlx::query!(
-                    "SELECT * FROM notes WHERE note_commitment = ?",
-                    note_commitment
-                )
-                .fetch_one(&mut dbtx)
-                .await?;
-                if existing.address != address
-                    || existing.amount != amount
-                    || existing.asset_id != asset_id
-                    || existing.blinding_factor != blinding_factor
-                    || existing.address_index != address_index
-                    || existing.source != source
-                // note: we don't check the height created because that will be different;
-                // however, we use the *original* height created when it comes out of
-                // quarantine, which is a difference from previous behavior, where
-                // unquarantining notes would get the height set to the block where they come
-                // out of quarantine
-                {
-                    anyhow::bail!(
-                        "unquarantined note with commitment {:?} did not match note quarantined at height {}", note_commitment, height_created
-                    );
-                }
-            } else {
-                sqlx::query!(
-                    "INSERT INTO notes
+            // We might have already seen the notes in the form of advice,
+            // so we use ON CONFLICT DO NOTHING to skip re-inserting them
+            // in that case.
+            sqlx::query!(
+                "INSERT INTO notes
                     (
                         note_commitment,
-                        height_created,
                         address,
                         amount,
                         asset_id,
-                        blinding_factor,
-                        address_index,
-                        source
+                        blinding_factor
                     )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    note_commitment,
-                    height_created,
-                    address,
-                    amount,
-                    asset_id,
-                    blinding_factor,
-                    address_index,
-                    source,
-                )
-                .execute(&mut dbtx)
-                .await?;
-            }
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING",
+                note_commitment,
+                address,
+                amount,
+                asset_id,
+                blinding_factor,
+            )
+            .execute(&mut dbtx)
+            .await?;
 
             sqlx::query!(
                 "INSERT INTO spendable_notes
                     (
                         note_commitment,
-                        height_spent,
                         nullifier,
-                        position
+                        position,
+                        height_created,
+                        address_index,
+                        source,
+                        height_spent
                     )
                     VALUES
-                    (
-                        ?,
-                        NULL,
-                        ?,
-                        ?
-                    )",
+                    (?, ?, ?, ?, ?, ?, NULL)",
                 note_commitment,
-                // height_spent is NULL
                 nullifier,
-                position
+                position,
+                height_created,
+                address_index,
+                source,
+                // height_spent is NULL
             )
             .execute(&mut dbtx)
             .await?;
         }
 
-        // Add all quarantined nullifiers to storage and mark notes as spent, *without* forgetting
-        // them from the NCT (because they could be rolled back)
-        for (identity_key, quarantined_nullifiers) in &filtered_block.spent_quarantined_nullifiers {
-            let identity_key = identity_key.encode_to_vec();
-            for quarantined_nullifier in quarantined_nullifiers {
-                let height_spent = filtered_block.height as i64;
-                let nullifier = quarantined_nullifier.to_bytes().to_vec();
+        for swap in &filtered_block.new_swaps {
+            let swap_commitment = swap.swap_commitment.0.to_bytes().to_vec();
+            let swap_bytes = swap.swap.encode_to_vec();
+            let position = (u64::from(swap.position)) as i64;
+            let nullifier = swap.nullifier.to_bytes().to_vec();
+            let source = swap.source.to_bytes().to_vec();
+            let output_data = swap.output_data.encode_to_vec();
 
-                // Track the quarantined nullifier
-                sqlx::query!(
-                    "INSERT INTO quarantined_nullifiers
-                        (
-                            identity_key,
-                            nullifier
-                        )
-                    VALUES (?, ?)",
-                    identity_key,
-                    nullifier,
-                )
-                .execute(&mut dbtx)
-                .await?;
-
-                // Mark the note as spent
-                sqlx::query!(
-                    "UPDATE spendable_notes SET height_spent = ? WHERE nullifier = ?",
-                    height_spent,
-                    nullifier,
-                )
-                .execute(&mut dbtx)
-                .await?;
-            }
+            sqlx::query!(
+                "INSERT INTO swaps (swap_commitment, swap, position, nullifier, output_data, height_claimed, source)
+                VALUES (?, ?, ?, ?, ?, NULL, ?)",
+                swap_commitment,
+                swap_bytes,
+                position,
+                nullifier,
+                output_data,
+                // height_claimed is NULL
+                source,
+            ).execute(&mut dbtx).await?;
         }
 
         // Update any rows of the table with matching nullifiers to have height_spent
@@ -974,56 +955,12 @@ impl Storage {
             )
             .fetch_optional(&mut dbtx)
             .await?;
+            // TODO: mark spent swaps as spent
 
             if let Some(bytes) = spent_commitment_bytes {
                 // Forget spent note commitments from the NCT
                 let spent_commitment = Commitment::try_from(bytes.note_commitment.as_slice())?;
                 nct.forget(spent_commitment);
-            }
-
-            // If the nullifier was previously quarantined, remove it from the list of quarantined
-            // nullifiers, because it has now been spent
-            sqlx::query!(
-                "DELETE FROM quarantined_nullifiers WHERE nullifier = ?",
-                nullifier,
-            )
-            .execute(&mut dbtx)
-            .await?;
-        }
-
-        // For any slashed validator, remove all quarantined notes and nullifiers for that
-        // validator, and un-spend all spent notes that were referred to by all rolled back
-        // nullifiers
-        for identity_key in &filtered_block.slashed_validators {
-            let identity_key = identity_key.encode_to_vec();
-
-            // Delete all quarantined notes for this validator
-            sqlx::query!(
-                "DELETE FROM quarantined_notes WHERE identity_key = ?",
-                identity_key,
-            )
-            .execute(&mut dbtx)
-            .await?;
-
-            // Collect all the currently quarantined nullifiers for this validator, deleting them in
-            // the process
-            let rolled_back_nullifiers = sqlx::query!(
-                "DELETE FROM quarantined_nullifiers WHERE identity_key = ? RETURNING nullifier",
-                identity_key,
-            )
-            .fetch_all(&mut dbtx)
-            .await?;
-
-            // For each such nullifier, roll back the spend of the note associated with it, marking
-            // that note as spendable again
-            for rolled_back_nullifier in rolled_back_nullifiers {
-                let rolled_back_nullifier = rolled_back_nullifier.nullifier.to_vec();
-                sqlx::query!(
-                    "UPDATE spendable_notes SET height_spent = NULL WHERE nullifier = ?",
-                    rolled_back_nullifier,
-                )
-                .execute(&mut dbtx)
-                .await?;
             }
         }
 
@@ -1096,12 +1033,7 @@ impl Storage {
             let _ = self.scanned_notes_tx.send(note_record.clone());
         }
 
-        for nullifier in filtered_block.spent_nullifiers.iter().chain(
-            filtered_block
-                .spent_quarantined_nullifiers
-                .values()
-                .flatten(),
-        ) {
+        for nullifier in filtered_block.spent_nullifiers.iter() {
             // This will fail to be broadcast if there is no active receiver (such as on initial sync)
             // The error is ignored, as this isn't a problem, because if there is no active receiver there is nothing to do
             let _ = self.scanned_nullifiers_tx.send(*nullifier);

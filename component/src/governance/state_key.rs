@@ -1,4 +1,4 @@
-use penumbra_crypto::IdentityKey;
+use penumbra_crypto::stake::IdentityKey;
 
 pub fn latest_proposal_id() -> &'static str {
     "governance/latest_proposal_id"
@@ -48,8 +48,8 @@ pub fn proposal_withdrawal_key(proposal_id: u64) -> String {
     format!("governance/proposal/{}/withdraw_key", proposal_id)
 }
 
-pub fn voting_validators(proposal_id: u64) -> String {
-    format!("governance/proposal/{}/voting_validators", proposal_id)
+pub fn voting_validators_list(proposal_id: u64) -> String {
+    format!("governance/proposal/{}/validator_vote/", proposal_id)
 }
 
 pub fn validator_vote(proposal_id: u64, identity_key: IdentityKey) -> String {

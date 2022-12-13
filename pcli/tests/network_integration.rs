@@ -9,20 +9,17 @@
 //! where no tokens have been delegated, and the address with index 0
 //! was distributed 1cube.
 
+use std::path::PathBuf;
 use std::{thread, time};
 
 use assert_cmd::Command;
+use directories::UserDirs;
 use predicates::prelude::*;
 use regex::Regex;
-use tempfile::{tempdir, TempDir};
+use serde_json::Value;
+use tempfile::{tempdir, NamedTempFile, TempDir};
 
-// This address is for test purposes, allocations were added beginning with
-// the 016-Pandia testnet.
-const TEST_SEED_PHRASE: &str = "benefit cherry cannon tooth exhibit law avocado spare tooth that amount pumpkin scene foil tape mobile shine apology add crouch situate sun business explain";
-
-// These addresses both correspond to the test wallet above.
-const TEST_ADDRESS_0: &str = "penumbrav2t13vh0fkf3qkqjacpm59g23ufea9n5us45e4p5h6hty8vg73r2t8g5l3kynad87u0n9eragf3hhkgkhqe5vhngq2cw493k48c9qg9ms4epllcmndd6ly4v4dw2jcnxaxzjqnlvnw";
-const TEST_ADDRESS_1: &str = "penumbrav2t1gl609fq6xzjcqn3hz3crysw2s0nkt330lyhaq403ztmrm3yygsgdklt9uxfs0gedwp6sypp5k5ln9t62lvs9t0a990q832wnxak8r939g5u6uz5aessd8saxvv7ewlz4hhqnws";
+use penumbra_chain::test_keys::{ADDRESS_0_STR, ADDRESS_1_STR, SEED_PHRASE};
 
 const TEST_ASSET: &str = "1cube";
 
@@ -37,13 +34,13 @@ fn load_wallet_into_tmpdir() -> TempDir {
 
     let mut setup_cmd = Command::cargo_bin("pcli").unwrap();
     setup_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "keys",
             "import",
             "phrase",
-            TEST_SEED_PHRASE,
+            SEED_PHRASE,
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     setup_cmd
@@ -51,6 +48,31 @@ fn load_wallet_into_tmpdir() -> TempDir {
         .stdout(predicate::str::contains("Saving backup wallet"));
 
     tmpdir
+}
+
+/// Look up a currently active validator on the testnet.
+/// Will return the most bonded, which means the Penumbra Labs CI validator.
+fn get_validator() -> String {
+    let tmpdir = load_wallet_into_tmpdir();
+    let mut validator_cmd = Command::cargo_bin("pcli").unwrap();
+    validator_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "query",
+            "validator",
+            "list",
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    validator_cmd.assert().success();
+
+    // Pull out one of the validators from stdout.
+    let stdout_vec = validator_cmd.unwrap().stdout;
+    let validator_regex = Regex::new(r"penumbravalid1\w{58}").unwrap();
+    let captures = validator_regex.captures(std::str::from_utf8(&stdout_vec).unwrap());
+
+    // We retrieve the first match via index 0, which results in most trusted.
+    captures.unwrap()[0].to_string()
 }
 
 #[ignore]
@@ -62,14 +84,14 @@ fn transaction_send_from_addr_0_to_addr_1() {
     // we'll send `TEST_ASSET` to `TEST_ADDRESS_1` and then check our balance.
     let mut send_cmd = Command::cargo_bin("pcli").unwrap();
     send_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "tx",
             "send",
             TEST_ASSET,
             "--to",
-            TEST_ADDRESS_1,
+            ADDRESS_1_STR,
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     send_cmd.assert().success();
@@ -80,7 +102,7 @@ fn transaction_send_from_addr_0_to_addr_1() {
 
     let mut balance_cmd = Command::cargo_bin("pcli").unwrap();
     balance_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "view",
@@ -98,14 +120,14 @@ fn transaction_send_from_addr_0_to_addr_1() {
     // from the original state.
     let mut send_cmd = Command::cargo_bin("pcli").unwrap();
     send_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "tx",
             "send",
             TEST_ASSET,
             "--to",
-            TEST_ADDRESS_0,
+            ADDRESS_0_STR,
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
 
@@ -121,7 +143,7 @@ fn transaction_sweep() {
 
     let mut sweep_cmd = Command::cargo_bin("pcli").unwrap();
     sweep_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "tx",
@@ -140,29 +162,13 @@ fn transaction_sweep() {
 fn delegate_and_undelegate() {
     let tmpdir = load_wallet_into_tmpdir();
 
-    // Get the list of validators.
-    let mut validator_cmd = Command::cargo_bin("pcli").unwrap();
-    validator_cmd
-        .args(&[
-            "--data-path",
-            tmpdir.path().to_str().unwrap(),
-            "query",
-            "validator",
-            "list",
-        ])
-        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
-    validator_cmd.assert().success();
-
-    // Pull out one of the validators from stdout.
-    let stdout_vec = validator_cmd.unwrap().stdout;
-    let validator_regex = Regex::new(r"penumbravalid1\w{58}").unwrap();
-    let captures = validator_regex.captures(std::str::from_utf8(&stdout_vec).unwrap());
-    let validator = captures.unwrap()[0].to_string();
+    // Get a validator from the testnet.
+    let validator = get_validator();
 
     // Delegate a tiny bit of penumbra to the validator.
     let mut delegate_cmd = Command::cargo_bin("pcli").unwrap();
     delegate_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "tx",
@@ -181,7 +187,7 @@ fn delegate_and_undelegate() {
     // Check we have some of the delegation token for that validator now.
     let mut balance_cmd = Command::cargo_bin("pcli").unwrap();
     balance_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "view",
@@ -199,7 +205,7 @@ fn delegate_and_undelegate() {
         let amount_to_undelegate = format!("0.99delegation_{}", validator.as_str());
         let mut undelegate_cmd = Command::cargo_bin("pcli").unwrap();
         undelegate_cmd
-            .args(&[
+            .args([
                 "--data-path",
                 tmpdir.path().to_str().unwrap(),
                 "tx",
@@ -226,7 +232,7 @@ fn delegate_and_undelegate() {
     // Now sync.
     let mut sync_cmd = Command::cargo_bin("pcli").unwrap();
     sync_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "view",
@@ -244,7 +250,7 @@ fn swap() {
     // Swap 1penumbra for some gn.
     let mut swap_cmd = Command::cargo_bin("pcli").unwrap();
     swap_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "tx",
@@ -263,7 +269,7 @@ fn swap() {
     // Cleanup: Swap the gn back (will fail if we received no gn in the above swap).
     let mut swap_back_cmd = Command::cargo_bin("pcli").unwrap();
     swap_back_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "tx",
@@ -288,7 +294,7 @@ fn governance_submit_proposal() {
     // Get template for signaling proposal.
     let mut template_cmd = Command::cargo_bin("pcli").unwrap();
     template_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "tx",
@@ -305,7 +311,7 @@ fn governance_submit_proposal() {
     // Submit signaling proposal.
     let mut submit_cmd = Command::cargo_bin("pcli").unwrap();
     submit_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "tx",
@@ -324,7 +330,7 @@ fn governance_submit_proposal() {
     // Now list the proposals.
     let mut proposals_cmd = Command::cargo_bin("pcli").unwrap();
     proposals_cmd
-        .args(&[
+        .args([
             "--data-path",
             tmpdir.path().to_str().unwrap(),
             "query",
@@ -333,4 +339,171 @@ fn governance_submit_proposal() {
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     proposals_cmd.assert().success();
+}
+
+#[ignore]
+#[test]
+fn duplicate_consensus_key_forbidden() {
+    // Look up validator, so we have known-good data to munge.
+    let validator = get_validator();
+    let tmpdir = load_wallet_into_tmpdir();
+    let mut query_cmd = Command::cargo_bin("pcli").unwrap();
+    let validator_list_filepath = NamedTempFile::new().unwrap();
+    query_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "query",
+            "validator",
+            "definition",
+            validator.as_str(),
+            "--file",
+            (validator_list_filepath.path().to_str().unwrap()),
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    query_cmd.assert().success();
+    let query_result = std::fs::read_to_string(&validator_list_filepath)
+        .expect("Could not read validator list output file");
+    let original_validator_def: Value = serde_json::from_str(&query_result)
+        .expect("Could not parse validator definition query as JSON");
+    let consensus_key = original_validator_def
+        .get("consensus_key")
+        .expect("Validator definition missing consensus_key field");
+
+    // Get template for promoting our node to validator.
+    // We use a named tempfile so we can get a filepath for pcli cli.
+    let validator_filepath = NamedTempFile::new().unwrap();
+    let mut template_cmd = Command::cargo_bin("pcli").unwrap();
+    template_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "validator",
+            "definition",
+            "template",
+            "--file",
+            (validator_filepath.path().to_str().unwrap()),
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    template_cmd.assert().success();
+    let template_content =
+        std::fs::read_to_string(&validator_filepath).expect("Could not read validator config file");
+    let mut new_validator_def: Value = serde_json::from_str(&template_content)
+        .expect("Could not parse validator config file as JSON");
+
+    // Overwrite randomly generated consensus key with one taken from
+    // a real validator.
+    new_validator_def["consensus_key"] = consensus_key.to_owned();
+
+    // Write out new, intentionally broken validator definition.
+    std::fs::write(
+        &validator_filepath,
+        serde_json::to_string_pretty(&new_validator_def)
+            .expect("Could not marshall new validator config as JSON"),
+    )
+    .expect("Could not overwrite validator config file with new definition");
+
+    // Submit (intentionally broken) validator definition.
+    let mut submit_cmd = Command::cargo_bin("pcli").unwrap();
+    submit_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "validator",
+            "definition",
+            "upload",
+            "--file",
+            validator_filepath.path().to_str().unwrap(),
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    submit_cmd.assert().failure();
+}
+
+#[ignore]
+#[test]
+/// Ensures that attempting to modify an existing validator's consensus key fails.
+fn mismatched_consensus_key_update_fails() {
+    // Get template for promoting our node to validator.
+    // We use a named tempfile so we can get a filepath for pcli cli.
+    let validator_filepath = NamedTempFile::new().unwrap();
+    let tmpdir = load_wallet_into_tmpdir();
+    let mut template_cmd = Command::cargo_bin("pcli").unwrap();
+    template_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "validator",
+            "definition",
+            "template",
+            "--file",
+            (validator_filepath.path().to_str().unwrap()),
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    template_cmd.assert().success();
+    let template_content = std::fs::read_to_string(&validator_filepath)
+        .expect("Could not read initial validator config file");
+    let mut new_validator_def: Value = serde_json::from_str(&template_content)
+        .expect("Could not parse initial validator template as JSON");
+
+    // Now we retrieve the actual tendermint consensus key from the testnet data dir.
+    // Doing so assumes that the testnet-generated data was previously but in place,
+    // which is a reasonable assumption in the context of running smoketest suite.
+    let userdir = UserDirs::new().unwrap();
+    let homedir = userdir
+        .home_dir()
+        .as_os_str()
+        .to_str()
+        .expect("Could not find home directory");
+    let tm_key_filepath: PathBuf = [
+        homedir,
+        ".penumbra",
+        "testnet_data",
+        "node0",
+        "tendermint",
+        "config",
+        "priv_validator_key.json",
+    ]
+    .iter()
+    .collect();
+    let tm_key_config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&tm_key_filepath).unwrap())
+            .expect("Could not read tendermint key config file");
+    let tm_key = &tm_key_config["pub_key"]["value"];
+    // Modify initial validator definition template to use actual tm key.
+    new_validator_def["consensus_key"] = tm_key.to_owned();
+    // Mark validator definition as "active".
+    new_validator_def["enabled"] = Value::from(true);
+    // Modify our local validator config to contain a different consensus key
+    let seq_num: Value = new_validator_def["sequence_number"].to_owned();
+    new_validator_def["sequence_number"] = Value::from(seq_num.as_i64().unwrap() + 1);
+
+    // Write out revised (and incorrect!) validator definition.
+    std::fs::write(
+        &validator_filepath,
+        serde_json::to_string_pretty(&new_validator_def)
+            .expect("Could not marshall revised validator config as JSON"),
+    )
+    .expect("Could not overwrite validator config file with revised definition");
+
+    // Run by itself, this test would need to munge the validator
+    // definition and submit twice, once to create the validator,
+    // and a second time to POST known-bad data. In the context
+    // of the single-threaded smoketest suite, however, we previously
+    // created a validator in [duplicate_consensus_key_forbidden].
+    // Here, we reuse that validator's existence on the test-only chain
+    // to confirm that subsequent validator updates fail.
+    let mut resubmit_cmd = Command::cargo_bin("pcli").unwrap();
+    resubmit_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "validator",
+            "definition",
+            "upload",
+            "--file",
+            validator_filepath.path().to_str().unwrap(),
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    // Ensure that command fails.
+    resubmit_cmd.assert().failure();
 }

@@ -11,7 +11,11 @@ use tokio::sync::watch;
 use tracing::Span;
 
 use crate::snapshot::Snapshot;
+use crate::snapshot_cache::SnapshotCache;
 use crate::State;
+
+mod temp;
+pub use temp::TempStorage;
 
 /// A handle for a storage instance, backed by RocksDB.
 ///
@@ -28,7 +32,7 @@ impl std::fmt::Debug for Storage {
 // A private inner element to prevent the `TreeWriter` implementation
 // from leaking outside of this crate.
 struct Inner {
-    latest_snapshot: RwLock<Snapshot>,
+    snapshots: RwLock<SnapshotCache>,
     db: Arc<DB>,
     state_tx: watch::Sender<StateNotification>,
 }
@@ -62,18 +66,20 @@ impl Storage {
                         ["jmt", "nonconsensus", "jmt_keys"],
                     )?);
 
-                    let jmt_version = latest_version(db.as_ref())?
-                        // TODO: PRE_GENESIS_VERSION ?
-                        .unwrap_or(u64::MAX);
+                    // TODO: For compatibility reasons with Tendermint, we set the "pre-genesis"
+                    // jmt version to be u64::MAX, corresponding to -1 mod 2^64.
+                    let jmt_version = latest_version(db.as_ref())?.unwrap_or(u64::MAX);
 
-                    let latest_snapshot = RwLock::new(Snapshot::new(db.clone(), jmt_version));
+                    let latest_snapshot = Snapshot::new(db.clone(), jmt_version);
 
                     // We discard the receiver here, because we'll construct new ones in subscribe()
                     let (snapshot_tx, _) =
-                        watch::channel(StateNotification(latest_snapshot.read().clone()));
+                        watch::channel(StateNotification(latest_snapshot.clone()));
+
+                    let snapshots = RwLock::new(SnapshotCache::new(latest_snapshot, 10));
 
                     Ok(Self(Arc::new(Inner {
-                        latest_snapshot,
+                        snapshots,
                         db,
                         state_tx: snapshot_tx,
                     })))
@@ -87,7 +93,7 @@ impl Storage {
     ///
     /// If the tree is empty and has not been initialized, returns `u64::MAX`.
     pub fn latest_version(&self) -> jmt::Version {
-        self.0.latest_snapshot.read().version()
+        self.latest_state().version()
     }
 
     /// Returns a [`watch::Receiver`] that can be used to subscribe to new state versions.
@@ -99,8 +105,14 @@ impl Storage {
     }
 
     /// Returns a new [`State`] on top of the latest version of the tree.
-    pub fn state(&self) -> State {
-        State::new(self.0.latest_snapshot.read().clone())
+    pub fn latest_state(&self) -> State {
+        State::new(self.0.snapshots.read().latest())
+    }
+
+    /// Fetches the [`State`] snapshot corresponding to the supplied `jmt::Version`
+    /// from [`SnapshotCache`], or returns `None` if no match was found (cache-miss).
+    pub fn state(&self, version: jmt::Version) -> Option<State> {
+        self.0.snapshots.read().get(version).map(State::new)
     }
 
     /// Commits the provided [`State`] to persistent storage as the latest
@@ -122,7 +134,7 @@ impl Storage {
             .name("Storage::write_node_batch")
             .spawn_blocking(move || {
                 span.in_scope(|| {
-                    let snap = inner.latest_snapshot.read().clone();
+                    let snap = inner.snapshots.read().latest();
                     let jmt = JellyfishMerkleTree::new(&snap);
 
                     let unwritten_changes: Vec<_> = state
@@ -173,24 +185,29 @@ impl Storage {
                         };
                     }
 
-                    // 4. update the snapshot
+                    let latest_snapshot = Snapshot::new(inner.db.clone(), new_version);
+                    // Obtain a write lock to the snapshot cache, and push the latest snapshot
+                    // available. The lock guard is implicitly dropped immediately.
+                    inner
+                        .snapshots
+                        .write()
+                        .try_push(latest_snapshot.clone())
+                        .expect("should process snapshots with consecutive jmt versions");
 
-                    // Obtain the write-lock for the latest snapshot, and replace it with a new snapshot with the new version.
-                    let mut guard = inner.latest_snapshot.write();
-                    *guard = Snapshot::new(inner.db.clone(), new_version);
-                    // Drop the write-lock (this will happen implicitly anyways, but it's good to be explicit).
-                    drop(guard);
-
-                    // .send fails if the channel is closed (i.e., if there are no receivers);
+                    // Send fails if the channel is closed (i.e., if there are no receivers);
                     // in this case, we should ignore the error, we have no one to notify.
-                    let _ = inner
-                        .state_tx
-                        .send(StateNotification(inner.latest_snapshot.read().clone()));
+                    let _ = inner.state_tx.send(StateNotification(latest_snapshot));
 
                     Ok(root_hash)
                 })
             })?
             .await?
+    }
+
+    /// Returns the internal handle to RocksDB, this is useful to test adjacent storage crates.
+    #[cfg(test)]
+    pub(crate) fn db(&self) -> Arc<DB> {
+        self.0.db.clone()
     }
 }
 
@@ -203,13 +220,13 @@ impl TreeWriter for Inner {
         for (node_key, node) in node_batch {
             let key_bytes = &node_key.encode()?;
             let value_bytes = &node.encode()?;
-            tracing::trace!(?key_bytes, value_bytes = ?hex::encode(&value_bytes));
+            tracing::trace!(?key_bytes, value_bytes = ?hex::encode(value_bytes));
 
             let jmt_cf = self
                 .db
                 .cf_handle("jmt")
                 .expect("jmt column family not found");
-            self.db.put_cf(jmt_cf, key_bytes, &value_bytes)?;
+            self.db.put_cf(jmt_cf, key_bytes, value_bytes)?;
         }
 
         Ok(())

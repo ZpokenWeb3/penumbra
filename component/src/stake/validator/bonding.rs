@@ -57,18 +57,22 @@ impl From<State> for pb::BondingState {
 impl TryFrom<pb::BondingState> for State {
     type Error = anyhow::Error;
     fn try_from(v: pb::BondingState) -> Result<Self, Self::Error> {
-        let unbonding_epoch = v.unbonding_epoch;
-        Ok(
-            match pb::bonding_state::BondingStateEnum::from_i32(v.state)
-                .ok_or_else(|| anyhow::anyhow!("missing bonding state"))?
-            {
-                pb::bonding_state::BondingStateEnum::Bonded => State::Bonded,
-                pb::bonding_state::BondingStateEnum::Unbonded => State::Unbonded,
-                pb::bonding_state::BondingStateEnum::Unbonding => State::Unbonding {
-                    unbonding_epoch: unbonding_epoch
-                        .expect("unbonding epoch should be set for unbonding state"),
-                },
-            },
-        )
+        let Some(bonding_state) = pb::bonding_state::BondingStateEnum::from_i32(v.state) else {
+            return Err(anyhow::anyhow!("invalid bonding state!"))
+        };
+
+        match bonding_state {
+            pb::bonding_state::BondingStateEnum::Bonded => Ok(State::Bonded),
+            pb::bonding_state::BondingStateEnum::Unbonded => Ok(State::Unbonded),
+            pb::bonding_state::BondingStateEnum::Unbonding => {
+                let Some(unbonding_epoch) = v.unbonding_epoch else {
+            return Err(anyhow::anyhow!("unbonding epoch should be set for unbonding state"))
+        };
+                Ok(State::Unbonding { unbonding_epoch })
+            }
+            pb::bonding_state::BondingStateEnum::Unspecified => {
+                Err(anyhow::anyhow!("unspecified bonding state!"))
+            }
+        }
     }
 }

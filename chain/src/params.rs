@@ -1,7 +1,10 @@
 use num_rational::Ratio;
-use penumbra_crypto::asset;
-use penumbra_crypto::asset::Amount;
-use penumbra_proto::{core::chain::v1alpha1 as pb, core::crypto::v1alpha1 as pbc, Protobuf};
+use penumbra_crypto::{asset, stake::Penalty, Amount};
+use penumbra_proto::client::v1alpha1 as pb_client;
+use penumbra_proto::core::chain::v1alpha1 as pb_chain;
+use penumbra_proto::core::crypto::v1alpha1 as pb_crypto;
+use penumbra_proto::view::v1alpha1 as pb_view;
+use penumbra_proto::Protobuf;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
@@ -12,12 +15,12 @@ pub struct AssetInfo {
     pub total_supply: u64,
 }
 
-impl Protobuf<pb::AssetInfo> for AssetInfo {}
+impl Protobuf<pb_chain::AssetInfo> for AssetInfo {}
 
-impl TryFrom<pb::AssetInfo> for AssetInfo {
+impl TryFrom<pb_chain::AssetInfo> for AssetInfo {
     type Error = anyhow::Error;
 
-    fn try_from(msg: pb::AssetInfo) -> Result<Self, Self::Error> {
+    fn try_from(msg: pb_chain::AssetInfo) -> Result<Self, Self::Error> {
         Ok(AssetInfo {
             asset_id: asset::Id::try_from(msg.asset_id.unwrap())?,
             denom: asset::Denom::try_from(msg.denom.unwrap())?,
@@ -27,11 +30,11 @@ impl TryFrom<pb::AssetInfo> for AssetInfo {
     }
 }
 
-impl From<AssetInfo> for pb::AssetInfo {
+impl From<AssetInfo> for pb_chain::AssetInfo {
     fn from(ai: AssetInfo) -> Self {
-        pb::AssetInfo {
-            asset_id: Some(pbc::AssetId::from(ai.asset_id)),
-            denom: Some(pbc::Denom::from(ai.denom)),
+        pb_chain::AssetInfo {
+            asset_id: Some(pb_crypto::AssetId::from(ai.asset_id)),
+            denom: Some(pb_crypto::Denom::from(ai.denom)),
             as_of_block_height: ai.as_of_block_height,
             total_supply: ai.total_supply,
         }
@@ -39,7 +42,10 @@ impl From<AssetInfo> for pb::AssetInfo {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(try_from = "pb::ChainParameters", into = "pb::ChainParameters")]
+#[serde(
+    try_from = "pb_chain::ChainParameters",
+    into = "pb_chain::ChainParameters"
+)]
 pub struct ChainParameters {
     pub chain_id: String,
     pub epoch_duration: u64,
@@ -49,10 +55,10 @@ pub struct ChainParameters {
     pub active_validator_limit: u64,
     /// The base reward rate, expressed in basis points of basis points
     pub base_reward_rate: u64,
-    /// The penalty for slashing due to misbehavior, expressed in basis points.
-    pub slashing_penalty_misbehavior_bps: u64,
-    /// The penalty for slashing due to downtime, expressed in basis points.
-    pub slashing_penalty_downtime_bps: u64,
+    /// The penalty for slashing due to misbehavior, expressed in basis points squared (10^-8)
+    pub slashing_penalty_misbehavior: Penalty,
+    /// The penalty for slashing due to downtime, expressed in basis points squared (10^-8)
+    pub slashing_penalty_downtime: Penalty,
     /// The number of blocks in the window to check for downtime.
     pub signed_blocks_window_len: u64,
     /// The maximum number of blocks in the window each validator can miss signing without slashing.
@@ -79,19 +85,31 @@ pub struct ChainParameters {
     pub proposal_veto_threshold: Ratio<u64>,
 }
 
-impl Protobuf<pb::ChainParameters> for ChainParameters {}
+impl Protobuf<pb_chain::ChainParameters> for ChainParameters {}
 
-impl TryFrom<pb::ChainParameters> for ChainParameters {
+impl TryFrom<pb_chain::ChainParameters> for ChainParameters {
     type Error = anyhow::Error;
 
-    fn try_from(msg: pb::ChainParameters) -> anyhow::Result<Self> {
+    fn try_from(msg: pb_chain::ChainParameters) -> anyhow::Result<Self> {
         Ok(ChainParameters {
             chain_id: msg.chain_id,
             epoch_duration: msg.epoch_duration,
             unbonding_epochs: msg.unbonding_epochs,
             active_validator_limit: msg.active_validator_limit,
-            slashing_penalty_downtime_bps: msg.slashing_penalty_downtime_bps,
-            slashing_penalty_misbehavior_bps: msg.slashing_penalty_misbehavior_bps,
+            slashing_penalty_downtime: msg
+                .slashing_penalty_downtime
+                .ok_or_else(|| {
+                    anyhow::anyhow!("slashing_penalty_downtime_bps must be set in ChainParameters")
+                })?
+                .try_into()?,
+            slashing_penalty_misbehavior: msg
+                .slashing_penalty_misbehavior
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "slashing_penalty_misbehavior_bps must be set in ChainParameters"
+                    )
+                })?
+                .try_into()?,
             base_reward_rate: msg.base_reward_rate,
             missed_blocks_maximum: msg.missed_blocks_maximum,
             signed_blocks_window_len: msg.signed_blocks_window_len,
@@ -121,17 +139,39 @@ impl TryFrom<pb::ChainParameters> for ChainParameters {
     }
 }
 
-impl From<ChainParameters> for pb::ChainParameters {
+impl TryFrom<pb_view::ChainParametersResponse> for ChainParameters {
+    type Error = anyhow::Error;
+
+    fn try_from(response: pb_view::ChainParametersResponse) -> Result<Self, Self::Error> {
+        response
+            .parameters
+            .ok_or_else(|| anyhow::anyhow!("empty ChainParametersResponse message"))?
+            .try_into()
+    }
+}
+
+impl TryFrom<pb_client::ChainParametersResponse> for ChainParameters {
+    type Error = anyhow::Error;
+
+    fn try_from(response: pb_client::ChainParametersResponse) -> Result<Self, Self::Error> {
+        response
+            .chain_parameters
+            .ok_or_else(|| anyhow::anyhow!("empty ChainParametersResponse message"))?
+            .try_into()
+    }
+}
+
+impl From<ChainParameters> for pb_chain::ChainParameters {
     fn from(params: ChainParameters) -> Self {
-        pb::ChainParameters {
+        pb_chain::ChainParameters {
             chain_id: params.chain_id,
             epoch_duration: params.epoch_duration,
             unbonding_epochs: params.unbonding_epochs,
             active_validator_limit: params.active_validator_limit,
             signed_blocks_window_len: params.signed_blocks_window_len,
             missed_blocks_maximum: params.missed_blocks_maximum,
-            slashing_penalty_downtime_bps: params.slashing_penalty_downtime_bps,
-            slashing_penalty_misbehavior_bps: params.slashing_penalty_misbehavior_bps,
+            slashing_penalty_downtime: Some(params.slashing_penalty_downtime.into()),
+            slashing_penalty_misbehavior: Some(params.slashing_penalty_misbehavior.into()),
             base_reward_rate: params.base_reward_rate,
             ibc_enabled: params.ibc_enabled,
             inbound_ics20_transfers_enabled: params.inbound_ics20_transfers_enabled,
@@ -152,15 +192,15 @@ impl Default for ChainParameters {
         Self {
             chain_id: String::new(),
             epoch_duration: 719,
-            unbonding_epochs: 30,
-            active_validator_limit: 10,
+            unbonding_epochs: 2,
+            active_validator_limit: 80,
             // copied from cosmos hub
             signed_blocks_window_len: 10000,
             missed_blocks_maximum: 9500,
             // 1000 basis points = 10%
-            slashing_penalty_misbehavior_bps: 1000,
+            slashing_penalty_misbehavior: Penalty(1000_0000),
             // 1 basis point = 0.01%
-            slashing_penalty_downtime_bps: 1,
+            slashing_penalty_downtime: Penalty(1_0000),
             // 3bps -> 11% return over 365 epochs
             base_reward_rate: 3_0000,
             ibc_enabled: true,
@@ -178,7 +218,7 @@ impl Default for ChainParameters {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(try_from = "pb::FmdParameters", into = "pb::FmdParameters")]
+#[serde(try_from = "pb_chain::FmdParameters", into = "pb_chain::FmdParameters")]
 pub struct FmdParameters {
     /// Bits of precision.
     pub precision_bits: u8,
@@ -186,12 +226,12 @@ pub struct FmdParameters {
     pub as_of_block_height: u64,
 }
 
-impl Protobuf<pb::FmdParameters> for FmdParameters {}
+impl Protobuf<pb_chain::FmdParameters> for FmdParameters {}
 
-impl TryFrom<pb::FmdParameters> for FmdParameters {
+impl TryFrom<pb_chain::FmdParameters> for FmdParameters {
     type Error = anyhow::Error;
 
-    fn try_from(msg: pb::FmdParameters) -> Result<Self, Self::Error> {
+    fn try_from(msg: pb_chain::FmdParameters) -> Result<Self, Self::Error> {
         Ok(FmdParameters {
             precision_bits: msg.precision_bits.try_into()?,
             as_of_block_height: msg.as_of_block_height,
@@ -199,9 +239,9 @@ impl TryFrom<pb::FmdParameters> for FmdParameters {
     }
 }
 
-impl From<FmdParameters> for pb::FmdParameters {
+impl From<FmdParameters> for pb_chain::FmdParameters {
     fn from(params: FmdParameters) -> Self {
-        pb::FmdParameters {
+        pb_chain::FmdParameters {
             precision_bits: u32::from(params.precision_bits),
             as_of_block_height: params.as_of_block_height,
         }

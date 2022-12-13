@@ -9,11 +9,11 @@ use penumbra_component::stake::{rate::RateData, validator};
 use penumbra_crypto::{
     asset::Amount,
     asset::Denom,
-    dex::{swap::SwapPlaintext, BatchSwapOutputData, TradingPair},
+    dex::{swap::SwapPlaintext, TradingPair},
     keys::AddressIndex,
     rdsa::{SpendAuth, VerificationKey},
     transaction::Fee,
-    Address, DelegationToken, FieldExt, Fr, FullViewingKey, Note, Value, STAKING_TOKEN_ASSET_ID,
+    Address, FieldExt, Fr, FullViewingKey, Note, Value,
 };
 use penumbra_proto::view::v1alpha1::NotesRequest;
 use penumbra_tct as tct;
@@ -21,7 +21,7 @@ use penumbra_transaction::{
     action::{Proposal, ProposalSubmit, ProposalWithdrawBody, ValidatorVote},
     plan::{
         ActionPlan, MemoPlan, OutputPlan, ProposalWithdrawPlan, SpendPlan, SwapClaimPlan, SwapPlan,
-        TransactionPlan,
+        TransactionPlan, UndelegateClaimPlan,
     },
 };
 use penumbra_view::ViewClient;
@@ -106,29 +106,13 @@ impl<R: RngCore + CryptoRng> Planner<R> {
 
     /// Perform a swap claim based on an input swap NFT with a pre-paid fee.
     #[instrument(skip(self))]
-    pub fn swap_claim(
-        &mut self,
-        swap_plaintext: SwapPlaintext,
-        swap_nft_note: Note,
-        swap_nft_position: tct::Position,
-        epoch_duration: u64,
-        output_data: BatchSwapOutputData,
-    ) -> &mut Self {
-        // Add a `SwapClaimPlan` action:
-        let swap_claim = SwapClaimPlan::new(
-            &mut self.rng,
-            swap_plaintext,
-            swap_nft_note,
-            swap_nft_position,
-            epoch_duration,
-            output_data,
-        )
-        .into();
-
+    pub fn swap_claim(&mut self, plan: SwapClaimPlan) -> &mut Self {
         // Nothing needs to be spent, since the fee is pre-paid and the
         // swap NFT will be automatically consumed when the SwapClaim action
         // is processed by the validators.
-        self.action(swap_claim);
+        // TODO: need to set the intended fee so the tx actually balances,
+        // otherwise the planner will create an output
+        self.action(plan.into());
         self
     }
 
@@ -162,14 +146,14 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         }
 
         // Create the `SwapPlaintext` representing the swap to be performed:
-        let swap_plaintext = SwapPlaintext::from_parts(
+        let swap_plaintext = SwapPlaintext::new(
+            &mut self.rng,
             trading_pair,
             delta_1,
             delta_2,
             swap_claim_fee,
             claim_address,
-        )
-        .map_err(|_| anyhow!("error generating swap plaintext"))?;
+        );
 
         let swap = SwapPlan::new(&mut self.rng, swap_plaintext).into();
         self.action(swap);
@@ -200,23 +184,25 @@ impl<R: RngCore + CryptoRng> Planner<R> {
 
     /// Add an undelegation to this transaction.
     ///
-    /// Undelegations have special rules to prevent you from accidentally locking up funds while the
-    /// transaction is unbonding: any transaction containing an undelegation must contain exactly
-    /// one undelegation, must spend only delegation tokens matching the validator from which the
-    /// undelegation is being performed, and must output only staking tokens. This means that it
-    /// must be an "exact change" transaction with no other actions.
-    ///
-    /// In order to ensure that the transaction is an "exact change" transaction, you should
-    /// probably explicitly add the precisely correct spends to the transaction, after having
-    /// generated those exact notes by splitting notes in a previous transaction, if necessary.
-    ///
-    /// The conditions imposed by the consensus rules are more permissive, but the planner will
-    /// protect you from shooting yourself in the foot by throwing an error, should the built
-    /// transaction fail these conditions.
+    /// TODO: can we put the chain parameters into the planner at the start, so we can compute end_epoch_index?
     #[instrument(skip(self))]
-    pub fn undelegate(&mut self, delegation_amount: u64, rate_data: RateData) -> &mut Self {
-        let undelegation = rate_data.build_undelegate(delegation_amount).into();
+    pub fn undelegate(
+        &mut self,
+        delegation_amount: Amount,
+        rate_data: RateData,
+        end_epoch_index: u64,
+    ) -> &mut Self {
+        let undelegation = rate_data
+            .build_undelegate(delegation_amount, end_epoch_index)
+            .into();
         self.action(undelegation);
+        self
+    }
+
+    /// Add an undelegate claim to this transaction.
+    #[instrument(skip(self))]
+    pub fn undelegate_claim(&mut self, claim_plan: UndelegateClaimPlan) -> &mut Self {
+        self.action(ActionPlan::UndelegateClaim(claim_plan));
         self
     }
 
@@ -320,6 +306,7 @@ impl<R: RngCore + CryptoRng> Planner<R> {
                     address_index: source.map(Into::into),
                     amount_to_spend: amount.into(),
                     include_spent: false,
+                    ..Default::default()
                 })
                 .await?,
             );
@@ -348,12 +335,6 @@ impl<R: RngCore + CryptoRng> Planner<R> {
             anyhow::bail!("if no outputs, no memo should be added");
         }
 
-        // TODO: add dummy change outputs in the staking token denomination (this means they'll pass
-        // the undelegate rules check)
-
-        // Ensure that the transaction won't cause excessive quarantining
-        self.check_undelegate_rules()?;
-
         // Add clue plans for `Output`s.
         let fmd_params = view.fmd_parameters().await?;
         let precision_bits = fmd_params.precision_bits;
@@ -375,67 +356,6 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         let plan = mem::take(&mut self.plan);
 
         Ok(plan)
-    }
-
-    /// Undelegations should have a very particular form to avoid excessive quarantining: all
-    /// their spends should be of the delegation token being undelegated, and all their outputs
-    /// should be of the staking token, and they should contain no other actions.
-    fn check_undelegate_rules(&self) -> anyhow::Result<()> {
-        match self
-            .plan
-            .actions
-            .iter()
-            .filter_map(|action| {
-                if let ActionPlan::Undelegate(undelegate) = action {
-                    Some(undelegate)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .as_slice()
-        {
-            [] => {
-                // No undelegations
-            }
-            [undelegate] => {
-                let delegation_asset_id = DelegationToken::new(undelegate.validator_identity).id();
-                for action in self.plan.actions.iter() {
-                    match action {
-                        ActionPlan::Spend(spend) => {
-                            if spend.note.value().asset_id != delegation_asset_id {
-                                return Err(anyhow::anyhow!(
-                                    "undelegation transaction must spend only delegation tokens"
-                                ));
-                            }
-                        }
-                        ActionPlan::Output(output) => {
-                            if output.value.asset_id != *STAKING_TOKEN_ASSET_ID {
-                                return Err(anyhow::anyhow!(
-                                    "undelegation transaction must output only staking tokens"
-                                ));
-                            }
-                        }
-                        ActionPlan::Undelegate(_) => {
-                            // There's only one undelegate action, so this is the one we already
-                            // know about, so we don't have to do anything with it
-                        }
-                        _ => {
-                            return Err(anyhow::anyhow!(
-                                "undelegation transaction must not contain extraneous actions"
-                            ))
-                        }
-                    }
-                }
-            }
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "undelegation transaction must not contain multiple undelegations"
-                ))
-            }
-        }
-
-        Ok(())
     }
 
     /// Get a random address/withdraw key pair for proposals.

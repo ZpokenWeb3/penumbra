@@ -35,7 +35,7 @@ fn main() -> Result<()> {
         ".penumbra.core.transaction",
         // The byte fields in a compact block will also be converted to fixed-size
         // byte arrays and then discarded.
-        ".penumbra.core.crypto.v1alpha1.NotePayload",
+        ".penumbra.core.crypto.v1alpha1.EncryptedNote",
         ".penumbra.core.chain.v1alpha1.CompactBlock",
     ]);
 
@@ -51,6 +51,15 @@ fn main() -> Result<()> {
     // See https://docs.rs/prost-build/0.5.0/prost_build/struct.Config.html#method.extern_path
     config.extern_path(".ibc", "::ibc_proto::ibc");
     config.extern_path(".ics23", "::ics23");
+    // The same applies for some of the tendermint types.
+    // config.extern_path(
+    //     ".tendermint.types.Validator",
+    //     "::tendermint::types::Validator",
+    // );
+    // config.extern_path(
+    //     ".tendermint.p2p.DefaultNodeInfo",
+    //     "::tendermint::p2p::DefaultNodeInfo",
+    // );
 
     config.compile_protos(
         &[
@@ -62,6 +71,8 @@ fn main() -> Result<()> {
             "../../proto/proto/penumbra/core/dex/v1alpha1/dex.proto",
             "../../proto/proto/penumbra/core/transparent_proofs/v1alpha1/transparent_proofs.proto",
             "../../proto/proto/penumbra/core/governance/v1alpha1/governance.proto",
+            "../../proto/ibc-go-vendor/tendermint/types/validator.proto",
+            "../../proto/ibc-go-vendor/tendermint/p2p/types.proto",
         ],
         &["../../proto/proto/", "../../proto/ibc-go-vendor/"],
     )?;
@@ -69,12 +80,23 @@ fn main() -> Result<()> {
     // For the client code, we also want to generate RPC instances, so compile via tonic:
     tonic_build::configure()
         .out_dir(&target_dir)
+        .server_mod_attribute("penumbra.client.v1alpha1", "#[cfg(feature = \"rpc\")]")
+        .client_mod_attribute("penumbra.client.v1alpha1", "#[cfg(feature = \"rpc\")]")
+        .server_mod_attribute("penumbra.view.v1alpha1", "#[cfg(feature = \"rpc\")]")
+        .client_mod_attribute("penumbra.view.v1alpha1", "#[cfg(feature = \"rpc\")]")
+        .server_mod_attribute("penumbra.custody.v1alpha1", "#[cfg(feature = \"rpc\")]")
+        .client_mod_attribute("penumbra.custody.v1alpha1", "#[cfg(feature = \"rpc\")]")
+        .server_mod_attribute("cosmos.base.tendermint.v1beta1", "#[cfg(feature = \"rpc\")]")
+        .client_mod_attribute("cosmos.base.tendermint.v1beta1", "#[cfg(feature = \"rpc\")]")
         .compile_with_config(
             config,
             &[
                 "../../proto/proto/penumbra/client/v1alpha1/client.proto",
                 "../../proto/proto/penumbra/view/v1alpha1/view.proto",
                 "../../proto/proto/penumbra/custody/v1alpha1/custody.proto",
+                "../../proto/ibc-go-vendor/cosmos/base/tendermint/v1beta1/query.proto",
+                "../../proto/ibc-go-vendor/tendermint/types/validator.proto",
+                "../../proto/ibc-go-vendor/tendermint/p2p/types.proto",
             ],
             &["../../proto/proto/", "../../proto/ibc-go-vendor/"],
         )?;
@@ -128,10 +150,20 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     (".penumbra.core.stake.v1alpha1.BaseRateData", SERIALIZE),
     (".penumbra.core.stake.v1alpha1.Delegate", SERIALIZE),
     (".penumbra.core.stake.v1alpha1.Undelegate", SERIALIZE),
+    (".penumbra.core.stake.v1alpha1.UndelegateClaim", SERIALIZE),
+    (
+        ".penumbra.core.stake.v1alpha1.UndelegateClaimBody",
+        SERIALIZE,
+    ),
+    (
+        ".penumbra.core.stake.v1alpha1.UndelegateClaimPlan",
+        SERIALIZE,
+    ),
     (".penumbra.core.stake.v1alpha1.DelegationChanges", SERIALIZE),
     (".penumbra.core.stake.v1alpha1.CommissionAmount", SERIALIZE),
     (".penumbra.core.stake.v1alpha1.CommissionAmounts", SERIALIZE),
     (".penumbra.core.stake.v1alpha1.Uptime", SERIALIZE),
+    (".penumbra.core.stake.v1alpha1.Penalty", SERIALIZE),
     (
         ".penumbra.core.stake.v1alpha1.CurrentConsensusKeys",
         SERIALIZE,
@@ -154,9 +186,9 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     (".penumbra.core.crypto.v1alpha1.Address", SERIALIZE),
     (".penumbra.core.crypto.v1alpha1.Address", SERDE_TRANSPARENT),
     (".penumbra.core.crypto.v1alpha1.Note", SERIALIZE),
-    (".penumbra.core.crypto.v1alpha1.NoteCommitment", SERIALIZE),
+    (".penumbra.core.crypto.v1alpha1.StateCommitment", SERIALIZE),
     (
-        ".penumbra.core.crypto.v1alpha1.NoteCommitment",
+        ".penumbra.core.crypto.v1alpha1.StateCommitment",
         SERDE_TRANSPARENT,
     ),
     (
@@ -167,7 +199,12 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
         ".penumbra.core.crypto.v1alpha1.BalanceCommitment",
         SERDE_TRANSPARENT,
     ),
-    (".penumbra.core.crypto.v1alpha1.NotePayload", SERIALIZE),
+    (".tendermint.types.Validator", SERIALIZE),
+    (".tendermint.p2p.DefaultNodeInfo", SERIALIZE),
+    (".tendermint.p2p.DefaultNodeInfoOther", SERIALIZE),
+    (".tendermint.p2p.ProtocolVersion", SERIALIZE),
+    (".tendermint.crypto.PublicKey", SERIALIZE),
+    (".penumbra.core.crypto.v1alpha1.EncryptedNote", SERIALIZE),
     (".penumbra.core.crypto.v1alpha1.AssetId", SERIALIZE),
     (".penumbra.core.crypto.v1alpha1.AssetId", SERDE_TRANSPARENT),
     (".penumbra.core.crypto.v1alpha1.Value", SERIALIZE),
@@ -222,10 +259,7 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     (".penumbra.core.chain.v1alpha1.ChainParameters", SERIALIZE),
     (".penumbra.core.chain.v1alpha1.FmdParameters", SERIALIZE),
     (".penumbra.core.chain.v1alpha1.CompactBlock", SERIALIZE),
-    (
-        ".penumbra.core.chain.v1alpha1.AnnotatedNotePayload",
-        SERIALIZE,
-    ),
+    (".penumbra.core.chain.v1alpha1.StatePayload", SERIALIZE),
     (".penumbra.core.chain.v1alpha1.KnownAssets", SERIALIZE),
     (
         ".penumbra.core.chain.v1alpha1.KnownAssets",
@@ -238,11 +272,6 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     ),
     (".penumbra.core.chain.v1alpha1.GenesisAppState", SERIALIZE),
     (".penumbra.core.chain.v1alpha1.GenesisAllocation", SERIALIZE),
-    (".penumbra.core.chain.v1alpha1.Quarantined", SERIALIZE),
-    (
-        ".penumbra.core.chain.v1alpha1.QuarantinedPerValidator",
-        SERIALIZE,
-    ),
     (".penumbra.core.chain.v1alpha1.Ratio", SERIALIZE),
     (".penumbra.core.transaction.v1alpha1.AuthHash", SERIALIZE),
     (
@@ -252,11 +281,8 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     (".penumbra.core.transaction.v1alpha1.ActionPlan", SERIALIZE),
     (".penumbra.core.transaction.v1alpha1.SpendPlan", SERIALIZE),
     (".penumbra.core.transaction.v1alpha1.OutputPlan", SERIALIZE),
-    (".penumbra.core.transaction.v1alpha1.SwapPlan", SERIALIZE),
-    (
-        ".penumbra.core.transaction.v1alpha1.SwapClaimPlan",
-        SERIALIZE,
-    ),
+    (".penumbra.core.dex.v1alpha1.SwapPlan", SERIALIZE),
+    (".penumbra.core.dex.v1alpha1.SwapClaimPlan", SERIALIZE),
     (".penumbra.core.transaction.v1alpha1.CluePlan", SERIALIZE),
     (".penumbra.core.transaction.v1alpha1.MemoPlan", SERIALIZE),
     (".penumbra.core.transaction.v1alpha1.Transaction", SERIALIZE),
@@ -321,11 +347,8 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     ),
     (".penumbra.core.transaction.v1alpha1.SpendView", SERIALIZE),
     (".penumbra.core.transaction.v1alpha1.OutputView", SERIALIZE),
-    (
-        ".penumbra.core.transaction.v1alpha1.SwapClaimView",
-        SERIALIZE,
-    ),
-    (".penumbra.core.transaction.v1alpha1.SwapView", SERIALIZE),
+    (".penumbra.core.dex.v1alpha1.SwapClaimView", SERIALIZE),
+    (".penumbra.core.dex.v1alpha1.SwapView", SERIALIZE),
     (".penumbra.core.transaction.v1alpha1.ActionView", SERIALIZE),
     (
         ".penumbra.core.transaction.v1alpha1.TransactionView",
@@ -351,10 +374,9 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     (".penumbra.core.dex.v1alpha1.PositionRewardClaim", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.Swap", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.SwapBody", SERIALIZE),
+    (".penumbra.core.dex.v1alpha1.SwapPayload", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.SwapClaim", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.SwapClaimBody", SERIALIZE),
-    (".penumbra.core.dex.v1alpha1.ClaimedSwap", SERIALIZE),
-    (".penumbra.core.dex.v1alpha1.ClaimedSwapList", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.SwapPlaintext", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.BatchSwapOutputData", SERIALIZE),
     // see below re: prost issue #504
@@ -393,7 +415,7 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
         SERDE_TRANSPARENT,
     ),
     (".penumbra.view.v1alpha1.SpendableNoteRecord", SERIALIZE),
-    (".penumbra.view.v1alpha1.QuarantinedNoteRecord", SERIALIZE),
+    (".penumbra.view.v1alpha1.SwapRecord", SERIALIZE),
 ];
 
 static FIELD_ATTRIBUTES: &[(&str, &str)] = &[
@@ -418,7 +440,7 @@ static FIELD_ATTRIBUTES: &[(&str, &str)] = &[
         AS_BECH32_ASSET_ID,
     ),
     (
-        ".penumbra.core.crypto.v1alpha1.NoteCommitment.inner",
+        ".penumbra.core.crypto.v1alpha1.StateCommitment.inner",
         AS_HEX,
     ),
     (
@@ -455,11 +477,11 @@ static FIELD_ATTRIBUTES: &[(&str, &str)] = &[
         AS_HEX,
     ),
     (
-        ".penumbra.core.crypto.v1alpha1.NotePayload.ephemeral_key",
+        ".penumbra.core.crypto.v1alpha1.EncryptedNote.ephemeral_key",
         AS_HEX_FOR_BYTES,
     ),
     (
-        ".penumbra.core.crypto.v1alpha1.NotePayload.encrypted_note",
+        ".penumbra.core.crypto.v1alpha1.EncryptedNote.encrypted_note",
         AS_HEX_FOR_BYTES,
     ),
     (".penumbra.core.crypto.v1alpha1.Nullifier.inner", AS_HEX),
@@ -494,34 +516,19 @@ static FIELD_ATTRIBUTES: &[(&str, &str)] = &[
         ".penumbra.core.transaction.v1alpha1.OutputPlan.memo",
         AS_HEX_FOR_BYTES,
     ),
+    (".penumbra.core.dex.v1alpha1.SwapPlan.note_blinding", AS_HEX),
+    (".penumbra.core.dex.v1alpha1.SwapPlan.fee_blinding", AS_HEX),
+    (".penumbra.core.dex.v1alpha1.SwapPlan.esk", AS_HEX),
     (
-        ".penumbra.core.transaction.v1alpha1.SwapPlan.note_blinding",
+        ".penumbra.core.dex.v1alpha1.SwapClaimPlan.output_1_blinding",
         AS_HEX_FOR_BYTES,
     ),
     (
-        ".penumbra.core.transaction.v1alpha1.SwapPlan.fee_blinding",
+        ".penumbra.core.dex.v1alpha1.SwapClaimPlan.output_2_blinding",
         AS_HEX_FOR_BYTES,
     ),
-    (
-        ".penumbra.core.transaction.v1alpha1.SwapPlan.esk",
-        AS_HEX_FOR_BYTES,
-    ),
-    (
-        ".penumbra.core.transaction.v1alpha1.SwapClaimPlan.output_1_blinding",
-        AS_HEX_FOR_BYTES,
-    ),
-    (
-        ".penumbra.core.transaction.v1alpha1.SwapClaimPlan.output_2_blinding",
-        AS_HEX_FOR_BYTES,
-    ),
-    (
-        ".penumbra.core.transaction.v1alpha1.SwapClaimPlan.esk_1",
-        AS_HEX_FOR_BYTES,
-    ),
-    (
-        ".penumbra.core.transaction.v1alpha1.SwapClaimPlan.esk_2",
-        AS_HEX_FOR_BYTES,
-    ),
+    (".penumbra.core.dex.v1alpha1.SwapClaimPlan.esk_1", AS_HEX),
+    (".penumbra.core.dex.v1alpha1.SwapClaimPlan.esk_2", AS_HEX),
     // Transaction formatting
     (
         ".penumbra.core.transaction.v1alpha1.Transaction.binding_sig",

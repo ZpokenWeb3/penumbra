@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 # Workspace dependencies
-penumbra-proto = { path = "../proto" }
+penumbra-proto = { path = "../proto", features = ["penumbra-storage"] }
 penumbra-storage = { path = "../storage" }
 penumbra-crypto = { path = "../crypto" }
 penumbra-transaction = { path = "../transaction" }
@@ -13,10 +13,13 @@ penumbra-tct = { path = "../tct" }
 
 # Penumbra dependencies
 decaf377 = { git = "https://github.com/penumbra-zone/decaf377" }
+jmt = { git = "https://github.com/penumbra-zone/jmt.git", branch = "upstream-ics23" }
+
+tendermint = "0.26.0"
+ibc = "0.23.0"
+ics23 = "0.8.1"
 
 # Crates.io deps
-tendermint = { git = "https://github.com/penumbra-zone/tendermint-rs", branch = "penumbra-034" }
-
 ark-ff = "0.3"
 anyhow = "1"
 bytes = "1"
@@ -28,6 +31,3 @@ async-trait = "0.1.52"
 tracing = "0.1"
 tonic = "0.8.1"
 num-rational = "0.4"
-
-ibc = { git = "https://github.com/penumbra-zone/ibc-rs", branch = "penumbra-034" }
-ics23 = { git = "https://github.com/penumbra-zone/ics23", branch = "penumbra-034" }

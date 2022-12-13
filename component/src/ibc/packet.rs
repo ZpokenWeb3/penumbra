@@ -58,8 +58,8 @@ impl From<Ics20Withdrawal> for IBCPacket<Unchecked> {
     fn from(withdrawal: Ics20Withdrawal) -> Self {
         Self {
             source_port: withdrawal.source_port.clone(),
-            source_channel: withdrawal.source_channel,
-            timeout_height: ibc::Height::zero().with_revision_height(withdrawal.timeout_height),
+            source_channel: withdrawal.source_channel.clone(),
+            timeout_height: ibc::Height::new(0, withdrawal.timeout_height).unwrap(),
             timeout_timestamp: withdrawal.timeout_time,
             data: withdrawal.packet_data(),
 
@@ -116,7 +116,7 @@ pub trait SendPacketRead: StateRead {
             return Err(anyhow::anyhow!(
                 "timeout height {} is less than the latest height {}",
                 packet.timeout_height,
-                latest_height.revision_height
+                latest_height.revision_height()
             ));
         }
 
@@ -132,7 +132,7 @@ pub trait SendPacketRead: StateRead {
     }
 }
 
-impl<T: StateRead> SendPacketRead for T {}
+impl<T: StateRead + ?Sized> SendPacketRead for T {}
 
 /// This trait, an extension of the Channel, Connection, and Client views, allows a component to
 /// send a packet.
@@ -159,7 +159,7 @@ pub trait SendPacketWrite: StateWrite {
             destination_port: PortId::default(),
             destination_channel: ChannelId::default(),
 
-            timeout_height: packet.timeout_height,
+            timeout_height: packet.timeout_height.into(),
             timeout_timestamp: ibc::timestamp::Timestamp::from_nanoseconds(
                 packet.timeout_timestamp,
             )

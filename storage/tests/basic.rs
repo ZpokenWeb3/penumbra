@@ -16,6 +16,10 @@ async fn simple_flow() -> anyhow::Result<()> {
     // tx00: c/ab => 1 [object store]
     // tx00: c/ac => 2 [object store]
     // tx00: c/ad => 3 [object store]
+    // tx00: iA => A [nonconsensus store]
+    // tx00: iC => C [nonconsensus store]
+    // tx00: iF => F [nonconsensus store]
+    // tx00: iD => D [nonconsensus store]
     // tx01: a/aa => aa
     // tx01: a/aaa => aaa
     // tx01: a/ab => ab
@@ -27,9 +31,11 @@ async fn simple_flow() -> anyhow::Result<()> {
     // tx10: test => [deleted]
     // tx10: a/aaa => [deleted]
     // tx10: a/c => c
+    // tx10: iB => B [nonconsensus store]
     // tx11: a/ab => ab2
+    // tx11: iD => [deleted] nonconsensus store]
 
-    let mut state_init = storage.state();
+    let mut state_init = storage.latest_state();
     // Check that reads on an empty state return Ok(None)
     assert_eq!(state_init.get_raw("test").await?, None);
     assert_eq!(state_init.get_raw("a/aa").await?, None);
@@ -41,6 +47,10 @@ async fn simple_flow() -> anyhow::Result<()> {
     tx00.object_put("c/ab", 1u64);
     tx00.object_put("c/ac", 2u64);
     tx00.object_put("c/ad", 3u64);
+    tx00.nonconsensus_put_raw(b"iA".to_vec(), b"A".to_vec());
+    tx00.nonconsensus_put_raw(b"iC".to_vec(), b"C".to_vec());
+    tx00.nonconsensus_put_raw(b"iF".to_vec(), b"F".to_vec());
+    tx00.nonconsensus_put_raw(b"iD".to_vec(), b"D".to_vec());
 
     // Check reads against tx00:
     //     This is present in tx00
@@ -56,19 +66,26 @@ async fn simple_flow() -> anyhow::Result<()> {
     assert_eq!(tx00.object_get::<bool>("c/aa"), None);
     //     Missing in tx00 object store
     assert_eq!(tx00.object_get::<bool>("nonexist"), None);
-    //     Object store range checks
-    /*
-    let mut range = tx00.prefix_ephemeral::<u64>("c/");
-    assert_eq!(range.next(), Some(("c/aa", &0u64)));
-    assert_eq!(range.next(), Some(("c/ab", &1u64)));
-    assert_eq!(range.next(), Some(("c/ac", &2u64)));
-    assert_eq!(range.next(), Some(("c/ad", &3u64)));
-    assert_eq!(range.next(), None);
+    //     Nonconsensus range checks
+    let mut range = tx00.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iD".to_vec(), b"D".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
-    let mut range = tx00.prefix_ephemeral::<bool>("c/");
-    assert_eq!(range.next(), None);
-    std::mem::drop(range);
-    */
 
     // Now apply the transaction to state_init
     tx00.apply();
@@ -83,19 +100,26 @@ async fn simple_flow() -> anyhow::Result<()> {
     assert_eq!(state_init.object_get::<bool>("c/aa"), None);
     //     Missing in state_init object store
     assert_eq!(state_init.object_get::<bool>("nonexist"), None);
-    //     Object store range checks
-    /*
-    let mut range = state_init.prefix_ephemeral::<u64>("c/");
-    assert_eq!(range.next(), Some(("c/aa", &0u64)));
-    assert_eq!(range.next(), Some(("c/ab", &1u64)));
-    assert_eq!(range.next(), Some(("c/ac", &2u64)));
-    assert_eq!(range.next(), Some(("c/ad", &3u64)));
-    assert_eq!(range.next(), None);
+    //     Nonconsensus range checks
+    let mut range = state_init.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iD".to_vec(), b"D".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
-    let mut range = state_init.prefix_ephemeral::<bool>("c/");
-    assert_eq!(range.next(), None);
-    std::mem::drop(range);
-    */
 
     // Create a transaction writing the other keys.
     let mut tx01 = state_init.begin_transaction();
@@ -135,15 +159,6 @@ async fn simple_flow() -> anyhow::Result<()> {
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
-    //     Object store range checks
-    /*
-    let mut range = tx01.prefix_ephemeral::<u64>("c/");
-    assert_eq!(range.next(), Some(("c/aa", &0u64)));
-    assert_eq!(range.next(), Some(("c/ab", &10u64)));
-    assert_eq!(range.next(), Some(("c/ad", &3u64)));
-    assert_eq!(range.next(), None);
-    std::mem::drop(range);
-    */
 
     // Now apply the transaction to state_init
     tx01.apply();
@@ -176,21 +191,12 @@ async fn simple_flow() -> anyhow::Result<()> {
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
-    //     Object store range checks
-    /*
-    let mut range = state_init.prefix_ephemeral::<u64>("c/");
-    assert_eq!(range.next(), Some(("c/aa", &0u64)));
-    assert_eq!(range.next(), Some(("c/ab", &10u64)));
-    assert_eq!(range.next(), Some(("c/ad", &3u64)));
-    assert_eq!(range.next(), None);
-    std::mem::drop(range);
-    */
 
     // Now commit state_init to storage
     storage.commit(state_init).await?;
 
     // Now we have version 0.
-    let mut state0 = storage.state();
+    let mut state0 = storage.latest_state();
     assert_eq!(state0.version(), 0);
     // Check reads against state0:
     //    This is missing in state0 and present in JMT
@@ -220,12 +226,33 @@ async fn simple_flow() -> anyhow::Result<()> {
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
+    //     Nonconsensus range checks
+    let mut range = state0.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iD".to_vec(), b"D".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
+    std::mem::drop(range);
 
     // Start building a transaction
     let mut tx10 = state0.begin_transaction();
     tx10.delete("test".to_owned());
     tx10.delete("a/aaa".to_owned());
     tx10.put_raw("a/c".to_owned(), b"c".to_vec());
+    tx10.nonconsensus_put_raw(b"iB".to_vec(), b"B".to_vec());
 
     // Check reads against tx10:
     //    This is deleted in tx10, missing in state0, present in JMT
@@ -256,8 +283,30 @@ async fn simple_flow() -> anyhow::Result<()> {
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
-
-    // TODO: Check ranged reads against tx10
+    //     Nonconsensus range checks
+    let mut range = tx10.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iB".to_vec(), b"B".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iD".to_vec(), b"D".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
+    std::mem::drop(range);
 
     // Apply tx10 to state0
     tx10.apply();
@@ -295,6 +344,7 @@ async fn simple_flow() -> anyhow::Result<()> {
     // Start building another transaction
     let mut tx11 = state0.begin_transaction();
     tx11.put_raw("a/ab".to_owned(), b"ab2".to_vec());
+    tx11.nonconsensus_delete(b"iD".to_vec());
 
     // Check reads against tx11:
     //    This is present in tx11, missing in state0, present in JMT
@@ -323,6 +373,26 @@ async fn simple_flow() -> anyhow::Result<()> {
     assert_eq!(
         range.next().await.transpose()?,
         Some(("a/z".to_owned(), b"z".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
+    std::mem::drop(range);
+    //     Nonconsensus range checks
+    let mut range = tx11.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iB".to_vec(), b"B".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
@@ -360,15 +430,34 @@ async fn simple_flow() -> anyhow::Result<()> {
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
+    let mut range = state0.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iB".to_vec(), b"B".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
+    std::mem::drop(range);
 
     // Create another fork of state 0 while we've edited the first one but before we commit.
-    let state0a = storage.state();
+    let state0a = storage.latest_state();
     assert_eq!(state0a.version(), 0);
 
     // Commit state0 as state1.
     storage.commit(state0).await?;
 
-    let state1 = storage.state();
+    let state1 = storage.latest_state();
     assert_eq!(state1.version(), 1);
 
     // Check reads against state1
@@ -394,6 +483,25 @@ async fn simple_flow() -> anyhow::Result<()> {
     assert_eq!(
         range.next().await.transpose()?,
         Some(("a/z".to_owned(), b"z".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
+    std::mem::drop(range);
+    let mut range = state1.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iB".to_vec(), b"B".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
@@ -424,6 +532,26 @@ async fn simple_flow() -> anyhow::Result<()> {
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);
+    //     Nonconsensus range checks
+    let mut range = state0a.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iD".to_vec(), b"D".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
+    std::mem::drop(range);
 
     // Now, check that closing and reloading works.
 
@@ -436,7 +564,7 @@ async fn simple_flow() -> anyhow::Result<()> {
 
     // Now reload the storage from the same directory...
     let storage_a = Storage::load(tmpdir.path().to_owned()).await?;
-    let state1a = storage_a.state();
+    let state1a = storage_a.latest_state();
 
     // Check that we reload at the correct version ...
     assert_eq!(state1a.version(), 1);
@@ -464,6 +592,26 @@ async fn simple_flow() -> anyhow::Result<()> {
     assert_eq!(
         range.next().await.transpose()?,
         Some(("a/z".to_owned(), b"z".to_vec()))
+    );
+    assert_eq!(range.next().await.transpose()?, None);
+    std::mem::drop(range);
+    //     Nonconsensus range checks
+    let mut range = state1a.nonconsensus_prefix_raw(b"i");
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iA".to_vec(), b"A".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iB".to_vec(), b"B".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iC".to_vec(), b"C".to_vec()))
+    );
+    assert_eq!(
+        range.next().await.transpose()?,
+        Some((b"iF".to_vec(), b"F".to_vec()))
     );
     assert_eq!(range.next().await.transpose()?, None);
     std::mem::drop(range);

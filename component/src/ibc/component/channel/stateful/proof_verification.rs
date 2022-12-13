@@ -2,6 +2,7 @@ use crate::ibc::component::client::StateReadExt;
 
 use super::super::*;
 use ibc::clients::ics07_tendermint::client_state::ClientState as TendermintClientState;
+use ibc::clients::ics07_tendermint::consensus_state::ConsensusState as TendermintConsensusState;
 use ibc::core::ics02_client::client_state::ClientState;
 use ibc::core::ics04_channel::context::calculate_block_delay;
 use ibc::core::ics23_commitment::commitment::CommitmentPrefix;
@@ -16,11 +17,10 @@ use ibc::core::ics24_host::path::CommitmentsPath;
 use ibc::core::ics24_host::path::ReceiptsPath;
 use ibc::core::ics24_host::path::SeqRecvsPath;
 use ibc::core::ics24_host::Path;
-use ibc::downcast;
+
 use ibc_proto::ibc::core::commitment::v1::MerkleProof as RawMerkleProof;
 use prost::Message;
 
-use ibc::core::ics02_client::client_state::AnyClientState;
 use penumbra_chain::StateReadExt as _;
 use sha2::{Digest, Sha256};
 
@@ -32,8 +32,18 @@ use sha2::{Digest, Sha256};
 pub fn commit_packet(packet: &Packet) -> Vec<u8> {
     let mut commit = vec![];
     commit.extend_from_slice(&packet.timeout_timestamp.nanoseconds().to_be_bytes());
-    commit.extend_from_slice(&packet.timeout_height.revision_number.to_be_bytes());
-    commit.extend_from_slice(&packet.timeout_height.revision_height.to_be_bytes());
+    commit.extend_from_slice(
+        &packet
+            .timeout_height
+            .commitment_revision_number()
+            .to_be_bytes(),
+    );
+    commit.extend_from_slice(
+        &packet
+            .timeout_height
+            .commitment_revision_height()
+            .to_be_bytes(),
+    );
     commit.extend_from_slice(&Sha256::digest(&packet.data)[..]);
 
     Sha256::digest(&commit).to_vec()
@@ -98,12 +108,11 @@ pub trait ChannelProofVerifier: StateReadExt {
             .get_verified_consensus_state(proofs.height(), connection.client_id().clone())
             .await?;
 
-        let client_def = AnyClient::from_client_type(trusted_client_state.client_type());
+        let client_def = trusted_client_state;
 
         // PROOF VERIFICATION. verify that our counterparty committed expected_channel to its
         // state.
         client_def.verify_channel_state(
-            &trusted_client_state,
             proofs.height(),
             connection.counterparty().prefix(),
             proofs.object_proof(),
@@ -136,7 +145,7 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
 
         let commitment_path = CommitmentsPath {
             port_id: msg.packet.destination_port.clone(),
-            channel_id: msg.packet.destination_channel,
+            channel_id: msg.packet.destination_channel.clone(),
             sequence: msg.packet.sequence,
         };
 
@@ -169,7 +178,7 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
 
         let ack_path = AcksPath {
             port_id: msg.packet.destination_port.clone(),
-            channel_id: msg.packet.destination_channel,
+            channel_id: msg.packet.destination_channel.clone(),
             sequence: msg.packet.sequence,
         };
 
@@ -179,7 +188,7 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
             msg.proofs.object_proof(),
             trusted_consensus_state.root(),
             ack_path,
-            msg.acknowledgement.clone().into_bytes(),
+            msg.acknowledgement.clone().into(),
         )?;
 
         Ok(())
@@ -205,7 +214,7 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
 
         let seq_path = SeqRecvsPath(
             msg.packet.destination_port.clone(),
-            msg.packet.destination_channel,
+            msg.packet.destination_channel.clone(),
         );
 
         verify_merkle_proof(
@@ -235,7 +244,7 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
 
         let receipt_path = ReceiptsPath {
             port_id: msg.packet.destination_port.clone(),
-            channel_id: msg.packet.destination_channel,
+            channel_id: msg.packet.destination_channel.clone(),
             sequence: msg.packet.sequence,
         };
 
@@ -263,7 +272,7 @@ mod inner {
             client_id: &ClientId,
             height: &ibc::Height,
             connection: &ConnectionEnd,
-        ) -> anyhow::Result<(TendermintClientState, AnyConsensusState)> {
+        ) -> anyhow::Result<(TendermintClientState, TendermintConsensusState)> {
             let trusted_client_state = self.get_client_state(client_id).await?;
 
             // TODO: should we also check if the client is expired here?
@@ -275,8 +284,7 @@ mod inner {
                 .get_verified_consensus_state(*height, client_id.clone())
                 .await?;
 
-            let tm_client_state = downcast!(trusted_client_state => AnyClientState::Tendermint)
-                .ok_or_else(|| anyhow::anyhow!("client state is not tendermint"))?;
+            let tm_client_state = trusted_client_state;
 
             tm_client_state.verify_height(*height)?;
 
@@ -295,7 +303,7 @@ mod inner {
 
             TendermintClientState::verify_delay_passed(
                 current_timestamp.into(),
-                ibc::Height::zero().with_revision_height(current_height),
+                ibc::Height::new(0, current_height)?,
                 processed_time,
                 processed_height,
                 delay_period_time,

@@ -6,19 +6,21 @@ use std::{
 use penumbra_chain::{sync::CompactBlock, Epoch};
 use penumbra_crypto::{Asset, FullViewingKey, Nullifier};
 use penumbra_proto::{
+    self as proto,
     client::v1alpha1::{
-        oblivious_query_client::ObliviousQueryClient, AssetListRequest, CompactBlockRangeRequest,
+        oblivious_query_service_client::ObliviousQueryServiceClient,
+        tendermint_proxy_service_client::TendermintProxyServiceClient, AssetListRequest,
+        CompactBlockRangeRequest, GetBlockByHeightRequest,
     },
     Protobuf,
 };
 use penumbra_transaction::Transaction;
 use sha2::Digest;
-use tendermint_rpc::Client;
 use tokio::sync::{watch, RwLock};
 use tonic::transport::Channel;
 
 #[cfg(feature = "nct-divergence-check")]
-use penumbra_proto::client::v1alpha1::specific_query_client::SpecificQueryClient;
+use penumbra_proto::client::v1alpha1::specific_query_service_client::SpecificQueryServiceClient;
 
 use crate::{
     sync::{scan_block, FilteredBlock},
@@ -27,14 +29,14 @@ use crate::{
 
 pub struct Worker {
     storage: Storage,
-    client: ObliviousQueryClient<Channel>,
+    client: ObliviousQueryServiceClient<Channel>,
     nct: Arc<RwLock<penumbra_tct::Tree>>,
     fvk: FullViewingKey, // TODO: notifications (see TODOs on ViewService)
     error_slot: Arc<Mutex<Option<anyhow::Error>>>,
     sync_height_tx: watch::Sender<u64>,
-    tm_client: tendermint_rpc::HttpClient,
+    tm_client: TendermintProxyServiceClient<Channel>,
     #[cfg(feature = "nct-divergence-check")]
-    specific_client: SpecificQueryClient<Channel>,
+    specific_client: SpecificQueryServiceClient<Channel>,
 }
 
 impl Worker {
@@ -48,7 +50,6 @@ impl Worker {
         storage: Storage,
         node: String,
         pd_port: u16,
-        tendermint_port: u16,
     ) -> Result<
         (
             Self,
@@ -70,14 +71,14 @@ impl Worker {
         // Mark the current height as seen, since it's not new.
         sync_height_rx.borrow_and_update();
 
-        let client = ObliviousQueryClient::connect(format!("http://{}:{}", node, pd_port)).await?;
+        let client =
+            ObliviousQueryServiceClient::connect(format!("http://{}:{}", node, pd_port)).await?;
         #[cfg(feature = "nct-divergence-check")]
         let specific_client =
-            SpecificQueryClient::connect(format!("http://{}:{}", node, pd_port)).await?;
+            SpecificQueryServiceClient::connect(format!("http://{}:{}", node, pd_port)).await?;
 
-        let tm_client = tendermint_rpc::HttpClient::new(
-            format!("http://{}:{}", node, tendermint_port).as_str(),
-        )?;
+        let tm_client =
+            TendermintProxyServiceClient::connect(format!("http://{}:{}", node, pd_port)).await?;
 
         Ok((
             Self {
@@ -119,6 +120,8 @@ impl Worker {
             .asset_list(tonic::Request::new(AssetListRequest { chain_id }))
             .await?
             .into_inner()
+            .asset_list
+            .ok_or_else(|| anyhow::anyhow!("empty AssetListResponse message"))?
             .assets;
 
         for new_asset in assets {
@@ -139,7 +142,8 @@ impl Worker {
     ) -> anyhow::Result<Vec<Transaction>> {
         let inbound_transaction_ids = filtered_block.inbound_transaction_ids();
         let spent_nullifiers = filtered_block
-            .all_nullifiers()
+            .spent_nullifiers
+            .iter()
             .cloned()
             .collect::<BTreeSet<Nullifier>>();
 
@@ -154,18 +158,11 @@ impl Worker {
             "fetching full transaction data"
         );
 
-        let block = self
-            .tm_client
-            .block(
-                tendermint::block::Height::try_from(filtered_block.height)
-                    .expect("height should be less than 2^63"),
-            )
-            .await?
-            .block;
+        let block = fetch_block(&mut self.tm_client.clone(), filtered_block.height as i64).await?;
 
         let mut transactions = Vec::new();
 
-        for tx_bytes in block.data.iter() {
+        for tx_bytes in block.data.as_ref().expect("block data").txs.iter() {
             let tx_id: [u8; 32] = sha2::Sha256::digest(tx_bytes.as_slice())
                 .as_slice()
                 .try_into()
@@ -183,7 +180,7 @@ impl Worker {
             }
         }
         tracing::debug!(
-            transactions_in_block = block.data.len(),
+            transactions_in_block = block.data.expect("block data").txs.len(),
             matched = transactions.len(),
             "filtered relevant transactions"
         );
@@ -231,7 +228,8 @@ impl Worker {
         });
 
         while let Some(block) = buffered_stream.recv().await {
-            let block = CompactBlock::try_from(block?)?;
+            let block: CompactBlock = block?.try_into()?;
+
             let height = block.height;
 
             // Lock the NCT only while processing this block.
@@ -305,15 +303,27 @@ impl Worker {
     }
 }
 
+async fn fetch_block(
+    client: &mut TendermintProxyServiceClient<Channel>,
+    height: i64,
+) -> Result<proto::tendermint::types::Block, anyhow::Error> {
+    Ok(client
+        .get_block_by_height(GetBlockByHeightRequest { height })
+        .await?
+        .into_inner()
+        .block
+        .expect("block not found"))
+}
+
 #[cfg(feature = "nct-divergence-check")]
 async fn nct_divergence_check(
-    client: &mut SpecificQueryClient<Channel>,
+    client: &mut SpecificQueryServiceClient<Channel>,
     height: u64,
     actual_root: penumbra_tct::Root,
 ) -> anyhow::Result<()> {
     let value = client
         .key_value(penumbra_proto::client::v1alpha1::KeyValueRequest {
-            key: format!("shielded_pool/anchor/{}", height).into_bytes(),
+            key: format!("shielded_pool/anchor/{}", height),
             ..Default::default()
         })
         .await?

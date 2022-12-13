@@ -6,9 +6,31 @@ pub struct AuthorizeRequest {
     /// Identifies the FVK (and hence the spend authorization key) to use for signing.
     #[prost(message, optional, tag="2")]
     pub account_id: ::core::option::Option<super::super::core::crypto::v1alpha1::AccountId>,
+    /// Optionally, pre-authorization data, if required by the custodian.
+    #[prost(message, optional, tag="3")]
+    pub pre_auth: ::core::option::Option<PreAuthorization>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AuthorizeResponse {
+    #[prost(message, optional, tag="1")]
+    pub data: ::core::option::Option<super::super::core::transaction::v1alpha1::AuthorizationData>,
+}
+/// A pre-authorization packet, containing an Ed25519 signature over a
+/// `TransactionPlan`.  This allows a custodian to delegate (partial) signing
+/// authority to Ed25519 keys.  Details of how a custodian manages those keys
+/// are out-of-scope for the custody protocol and are custodian-specific.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PreAuthorization {
+    /// The Ed25519 verification key used to verify the signature.
+    #[prost(bytes="vec", tag="1")]
+    pub vk: ::prost::alloc::vec::Vec<u8>,
+    /// The Ed25519 signature over the `TransactionPlan`.
+    #[prost(bytes="vec", tag="2")]
+    pub sig: ::prost::alloc::vec::Vec<u8>,
 }
 /// Generated client implementations.
-pub mod custody_protocol_client {
+#[cfg(feature = "rpc")]
+pub mod custody_protocol_service_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
@@ -24,10 +46,10 @@ pub mod custody_protocol_client {
     /// understand the transaction and determine whether or not it should be
     /// authorized.
     #[derive(Debug, Clone)]
-    pub struct CustodyProtocolClient<T> {
+    pub struct CustodyProtocolServiceClient<T> {
         inner: tonic::client::Grpc<T>,
     }
-    impl CustodyProtocolClient<tonic::transport::Channel> {
+    impl CustodyProtocolServiceClient<tonic::transport::Channel> {
         /// Attempt to create a new client by connecting to a given endpoint.
         pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
         where
@@ -38,7 +60,7 @@ pub mod custody_protocol_client {
             Ok(Self::new(conn))
         }
     }
-    impl<T> CustodyProtocolClient<T>
+    impl<T> CustodyProtocolServiceClient<T>
     where
         T: tonic::client::GrpcService<tonic::body::BoxBody>,
         T::Error: Into<StdError>,
@@ -56,7 +78,7 @@ pub mod custody_protocol_client {
         pub fn with_interceptor<F>(
             inner: T,
             interceptor: F,
-        ) -> CustodyProtocolClient<InterceptedService<T, F>>
+        ) -> CustodyProtocolServiceClient<InterceptedService<T, F>>
         where
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
@@ -70,7 +92,9 @@ pub mod custody_protocol_client {
                 http::Request<tonic::body::BoxBody>,
             >>::Error: Into<StdError> + Send + Sync,
         {
-            CustodyProtocolClient::new(InterceptedService::new(inner, interceptor))
+            CustodyProtocolServiceClient::new(
+                InterceptedService::new(inner, interceptor),
+            )
         }
         /// Compress requests with the given encoding.
         ///
@@ -91,12 +115,7 @@ pub mod custody_protocol_client {
         pub async fn authorize(
             &mut self,
             request: impl tonic::IntoRequest<super::AuthorizeRequest>,
-        ) -> Result<
-            tonic::Response<
-                super::super::super::core::transaction::v1alpha1::AuthorizationData,
-            >,
-            tonic::Status,
-        > {
+        ) -> Result<tonic::Response<super::AuthorizeResponse>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -108,29 +127,25 @@ pub mod custody_protocol_client {
                 })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/penumbra.custody.v1alpha1.CustodyProtocol/Authorize",
+                "/penumbra.custody.v1alpha1.CustodyProtocolService/Authorize",
             );
             self.inner.unary(request.into_request(), path, codec).await
         }
     }
 }
 /// Generated server implementations.
-pub mod custody_protocol_server {
+#[cfg(feature = "rpc")]
+pub mod custody_protocol_service_server {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
-    ///Generated trait containing gRPC methods that should be implemented for use with CustodyProtocolServer.
+    ///Generated trait containing gRPC methods that should be implemented for use with CustodyProtocolServiceServer.
     #[async_trait]
-    pub trait CustodyProtocol: Send + Sync + 'static {
+    pub trait CustodyProtocolService: Send + Sync + 'static {
         /// Requests authorization of the transaction with the given description.
         async fn authorize(
             &self,
             request: tonic::Request<super::AuthorizeRequest>,
-        ) -> Result<
-            tonic::Response<
-                super::super::super::core::transaction::v1alpha1::AuthorizationData,
-            >,
-            tonic::Status,
-        >;
+        ) -> Result<tonic::Response<super::AuthorizeResponse>, tonic::Status>;
     }
     /// The custody protocol is used by a wallet client to request authorization for
     /// a transaction they've constructed.
@@ -144,13 +159,13 @@ pub mod custody_protocol_server {
     /// understand the transaction and determine whether or not it should be
     /// authorized.
     #[derive(Debug)]
-    pub struct CustodyProtocolServer<T: CustodyProtocol> {
+    pub struct CustodyProtocolServiceServer<T: CustodyProtocolService> {
         inner: _Inner<T>,
         accept_compression_encodings: EnabledCompressionEncodings,
         send_compression_encodings: EnabledCompressionEncodings,
     }
     struct _Inner<T>(Arc<T>);
-    impl<T: CustodyProtocol> CustodyProtocolServer<T> {
+    impl<T: CustodyProtocolService> CustodyProtocolServiceServer<T> {
         pub fn new(inner: T) -> Self {
             Self::from_arc(Arc::new(inner))
         }
@@ -184,9 +199,10 @@ pub mod custody_protocol_server {
             self
         }
     }
-    impl<T, B> tonic::codegen::Service<http::Request<B>> for CustodyProtocolServer<T>
+    impl<T, B> tonic::codegen::Service<http::Request<B>>
+    for CustodyProtocolServiceServer<T>
     where
-        T: CustodyProtocol,
+        T: CustodyProtocolService,
         B: Body + Send + 'static,
         B::Error: Into<StdError> + Send + 'static,
     {
@@ -202,14 +218,14 @@ pub mod custody_protocol_server {
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             let inner = self.inner.clone();
             match req.uri().path() {
-                "/penumbra.custody.v1alpha1.CustodyProtocol/Authorize" => {
+                "/penumbra.custody.v1alpha1.CustodyProtocolService/Authorize" => {
                     #[allow(non_camel_case_types)]
-                    struct AuthorizeSvc<T: CustodyProtocol>(pub Arc<T>);
+                    struct AuthorizeSvc<T: CustodyProtocolService>(pub Arc<T>);
                     impl<
-                        T: CustodyProtocol,
+                        T: CustodyProtocolService,
                     > tonic::server::UnaryService<super::AuthorizeRequest>
                     for AuthorizeSvc<T> {
-                        type Response = super::super::super::core::transaction::v1alpha1::AuthorizationData;
+                        type Response = super::AuthorizeResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -255,7 +271,7 @@ pub mod custody_protocol_server {
             }
         }
     }
-    impl<T: CustodyProtocol> Clone for CustodyProtocolServer<T> {
+    impl<T: CustodyProtocolService> Clone for CustodyProtocolServiceServer<T> {
         fn clone(&self) -> Self {
             let inner = self.inner.clone();
             Self {
@@ -265,7 +281,7 @@ pub mod custody_protocol_server {
             }
         }
     }
-    impl<T: CustodyProtocol> Clone for _Inner<T> {
+    impl<T: CustodyProtocolService> Clone for _Inner<T> {
         fn clone(&self) -> Self {
             Self(self.0.clone())
         }
@@ -275,7 +291,8 @@ pub mod custody_protocol_server {
             write!(f, "{:?}", self.0)
         }
     }
-    impl<T: CustodyProtocol> tonic::server::NamedService for CustodyProtocolServer<T> {
-        const NAME: &'static str = "penumbra.custody.v1alpha1.CustodyProtocol";
+    impl<T: CustodyProtocolService> tonic::server::NamedService
+    for CustodyProtocolServiceServer<T> {
+        const NAME: &'static str = "penumbra.custody.v1alpha1.CustodyProtocolService";
     }
 }

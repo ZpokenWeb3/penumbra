@@ -3,9 +3,9 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use penumbra_crypto::FullViewingKey;
-use penumbra_proto::client::v1alpha1::oblivious_query_client::ObliviousQueryClient;
-use penumbra_proto::client::v1alpha1::ChainParamsRequest;
-use penumbra_proto::view::v1alpha1::view_protocol_server::ViewProtocolServer;
+use penumbra_proto::client::v1alpha1::oblivious_query_service_client::ObliviousQueryServiceClient;
+use penumbra_proto::client::v1alpha1::ChainParametersRequest;
+use penumbra_proto::view::v1alpha1::view_protocol_service_server::ViewProtocolServiceServer;
 use penumbra_view::ViewService;
 use std::env;
 use std::str::FromStr;
@@ -27,9 +27,6 @@ struct Opt {
     /// The address of the pd+tendermint node.
     #[clap(short, long, default_value = "testnet.penumbra.zone")]
     node: String,
-    /// The port to use to speak to tendermint's RPC server.
-    #[clap(long, default_value = "26657")]
-    tendermint_port: u16,
     /// The port to use to speak to pd's gRPC server.
     #[clap(long, default_value = "8080")]
     pd_port: u16,
@@ -59,12 +56,14 @@ async fn main() -> Result<()> {
 
     match opt.cmd {
         Command::Init { full_viewing_key } => {
-            let mut client =
-                ObliviousQueryClient::connect(format!("http://{}:{}", opt.node, opt.pd_port))
-                    .await?;
+            let mut client = ObliviousQueryServiceClient::connect(format!(
+                "http://{}:{}",
+                opt.node, opt.pd_port
+            ))
+            .await?;
 
             let params = client
-                .chain_parameters(tonic::Request::new(ChainParamsRequest {
+                .chain_parameters(tonic::Request::new(ChainParametersRequest {
                     chain_id: String::new(),
                 }))
                 .await?
@@ -81,16 +80,15 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Start { host, view_port } => {
-            tracing::info!(?opt.sqlite_path, ?host, ?view_port, ?opt.node, ?opt.tendermint_port, ?opt.pd_port, "starting pviewd");
+            tracing::info!(?opt.sqlite_path, ?host, ?view_port, ?opt.node, ?opt.pd_port, "starting pviewd");
 
             let storage = penumbra_view::Storage::load(opt.sqlite_path).await?;
 
-            let service =
-                ViewService::new(storage, opt.node, opt.pd_port, opt.tendermint_port).await?;
+            let service = ViewService::new(storage, opt.node, opt.pd_port).await?;
 
             tokio::spawn(
                 Server::builder()
-                    .add_service(ViewProtocolServer::new(service))
+                    .add_service(ViewProtocolServiceServer::new(service))
                     .serve(
                         format!("{}:{}", host, view_port)
                             .parse()

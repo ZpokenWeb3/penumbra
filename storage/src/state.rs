@@ -1,4 +1,4 @@
-use std::{any::Any, collections::BTreeMap, pin::Pin};
+use std::{any::Any, collections::BTreeMap, pin::Pin, sync::Arc};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -15,7 +15,7 @@ pub use write::StateWrite;
 
 use crate::snapshot::Snapshot;
 
-use self::read::prefix_raw_with_cache;
+use self::read::{nonconsensus_prefix_raw_with_cache, prefix_raw_with_cache};
 
 /// A lightweight snapshot of a particular version of the chain state.
 ///
@@ -32,7 +32,7 @@ use self::read::prefix_raw_with_cache;
 /// [`Storage`](crate::Storage), if the states are meant to be independent, or
 /// the [`State`] should be explicitly shared using an [`Arc`](std::sync::Arc).
 pub struct State {
-    snapshot: Snapshot,
+    pub(crate) snapshot: Snapshot,
     // A `None` value represents deletion.
     pub(crate) unwritten_changes: BTreeMap<String, Option<Vec<u8>>>,
     // A `None` value represents deletion.
@@ -170,5 +170,24 @@ impl StateRead for State {
         self.ephemeral_objects
             .get(key)
             .and_then(|object| object.downcast_ref())
+    }
+
+    fn nonconsensus_prefix_raw<'a>(
+        &'a self,
+        prefix: &'a [u8],
+    ) -> Pin<Box<dyn Stream<Item = Result<(Vec<u8>, Vec<u8>)>> + Send + Sync + 'a>> {
+        nonconsensus_prefix_raw_with_cache(&self.snapshot, &self.nonconsensus_changes, prefix)
+    }
+}
+
+/// Extension trait providing `try_begin_transaction()` on `Arc<State>`.
+pub trait ArcStateExt: Sized {
+    /// Attempts to begin a transaction on this `Arc<State>`, returning `None` if the `Arc` is shared.
+    fn try_begin_transaction(&'_ mut self) -> Option<StateTransaction<'_>>;
+}
+
+impl ArcStateExt for Arc<State> {
+    fn try_begin_transaction(&'_ mut self) -> Option<StateTransaction<'_>> {
+        Arc::get_mut(self).map(|state| state.begin_transaction())
     }
 }

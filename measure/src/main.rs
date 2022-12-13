@@ -6,7 +6,8 @@ use tracing_subscriber::EnvFilter;
 
 use penumbra_chain::{params::ChainParameters, sync::CompactBlock};
 use penumbra_proto::client::v1alpha1::{
-    oblivious_query_client::ObliviousQueryClient, ChainParamsRequest, CompactBlockRangeRequest,
+    oblivious_query_service_client::ObliviousQueryServiceClient, ChainParametersRequest,
+    CompactBlockRangeRequest,
 };
 
 #[derive(Debug, Parser)]
@@ -25,6 +26,7 @@ pub struct Opt {
         parse(try_from_str = url::Host::parse)
     )]
     node: url::Host,
+    // TODO: use TendermintProxyService instead
     /// The port to use to speak to tendermint's RPC server.
     #[clap(long, default_value_t = 26657, env = "PENUMBRA_TENDERMINT_PORT")]
     tendermint_port: u16,
@@ -56,12 +58,14 @@ impl Opt {
     pub async fn run(&self) -> anyhow::Result<()> {
         match self.cmd {
             Command::StreamBlocks => {
-                let mut client =
-                    ObliviousQueryClient::connect(format!("http://{}:{}", self.node, self.pd_port))
-                        .await?;
+                let mut client = ObliviousQueryServiceClient::connect(format!(
+                    "http://{}:{}",
+                    self.node, self.pd_port
+                ))
+                .await?;
 
                 let params: ChainParameters = client
-                    .chain_parameters(tonic::Request::new(ChainParamsRequest {
+                    .chain_parameters(tonic::Request::new(ChainParametersRequest {
                         chain_id: String::new(),
                     }))
                     .await?
@@ -88,8 +92,8 @@ impl Opt {
                         ));
                 progress_bar.set_position(0);
 
-                while let Some(block) = stream.message().await? {
-                    let block = CompactBlock::try_from(block)?;
+                while let Some(block_rsp) = stream.message().await? {
+                    let block: CompactBlock = block_rsp.try_into()?;
                     progress_bar.set_position(block.height);
                 }
                 progress_bar.finish();

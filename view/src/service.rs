@@ -13,16 +13,19 @@ use penumbra_crypto::{
     keys::{AccountID, AddressIndex, FullViewingKey},
 };
 use penumbra_proto::{
-    core::chain::v1alpha1 as pbp,
+    client::v1alpha1::{
+        tendermint_proxy_service_client::TendermintProxyServiceClient, GetStatusRequest,
+    },
     core::crypto::v1alpha1 as pbc,
-    core::transaction::v1alpha1::{self as pbt},
     view::v1alpha1::{
-        self as pb, view_protocol_server::ViewProtocol, StatusResponse,
-        TransactionHashStreamResponse, TransactionStreamResponse,
+        self as pb, view_protocol_service_server::ViewProtocolService, ChainParametersResponse,
+        FmdParametersResponse, NoteByCommitmentResponse, StatusResponse, SwapByCommitmentResponse,
+        TransactionHashesResponse, TransactionsResponse, WitnessResponse,
     },
 };
 use penumbra_tct::{Commitment, Proof};
-use penumbra_transaction::{TransactionPerspective, WitnessData};
+use penumbra_transaction::{plan::TransactionPlan, TransactionPerspective, WitnessData};
+use rand_core::OsRng;
 use tokio::sync::{watch, RwLock};
 use tokio_stream::wrappers::WatchStream;
 use tonic::async_trait;
@@ -49,8 +52,8 @@ pub struct ViewService {
     note_commitment_tree: Arc<RwLock<penumbra_tct::Tree>>,
     // The address of the pd+tendermint node.
     node: String,
-    // The port to use to speak to tendermint's RPC server.
-    tendermint_port: u16,
+    /// The port to talk to tendermint on.
+    pd_port: u16,
     /// Used to watch for changes to the sync height.
     sync_height_rx: watch::Receiver<u64>,
 }
@@ -62,11 +65,10 @@ impl ViewService {
         fvk: &FullViewingKey,
         node: String,
         pd_port: u16,
-        tendermint_port: u16,
     ) -> anyhow::Result<Self> {
         let storage = Storage::load_or_initialize(storage_path, fvk, node.clone(), pd_port).await?;
 
-        Self::new(storage, node, pd_port, tendermint_port).await
+        Self::new(storage, node, pd_port).await
     }
 
     /// Constructs a new [`ViewService`], spawning a sync task internally.
@@ -76,14 +78,9 @@ impl ViewService {
     /// To create multiple [`ViewService`]s, clone the [`ViewService`] returned
     /// by this method, rather than calling it multiple times.  That way, each clone
     /// will be backed by the same scanning task, rather than each spawning its own.
-    pub async fn new(
-        storage: Storage,
-        node: String,
-        pd_port: u16,
-        tendermint_port: u16,
-    ) -> Result<Self, anyhow::Error> {
+    pub async fn new(storage: Storage, node: String, pd_port: u16) -> Result<Self, anyhow::Error> {
         let (worker, nct, error_slot, sync_height_rx) =
-            Worker::new(storage.clone(), node.clone(), pd_port, tendermint_port).await?;
+            Worker::new(storage.clone(), node.clone(), pd_port).await?;
 
         tokio::spawn(worker.run());
 
@@ -97,7 +94,7 @@ impl ViewService {
             sync_height_rx,
             note_commitment_tree: nct,
             node,
-            tendermint_port,
+            pd_port,
         })
     }
 
@@ -145,35 +142,21 @@ impl ViewService {
     /// well as whether the fullnode is caught up with that height.
     #[instrument(skip(self))]
     pub async fn latest_known_block_height(&self) -> Result<(u64, bool), anyhow::Error> {
-        let client = reqwest::Client::new();
+        let mut client =
+            TendermintProxyServiceClient::connect(format!("http://{}:{}", self.node, self.pd_port))
+                .await?;
 
-        let rsp: serde_json::Value = client
-            .get(format!(
-                r#"http://{}:{}/status"#,
-                self.node, self.tendermint_port
-            ))
-            .send()
-            .await?
-            .json()
-            .await?;
+        let rsp = client.get_status(GetStatusRequest {}).await?.into_inner();
 
-        tracing::debug!("{}", rsp);
+        //tracing::debug!("{:#?}", rsp);
 
         let sync_info = rsp
-            .get("result")
-            .and_then(|r| r.get("sync_info"))
-            .ok_or_else(|| anyhow::anyhow!("could not parse sync_info in JSON response"))?;
+            .sync_info
+            .ok_or_else(|| anyhow::anyhow!("could not parse sync_info in gRPC response"))?;
 
-        let latest_block_height = sync_info
-            .get("latest_block_height")
-            .and_then(|c| c.as_str())
-            .ok_or_else(|| anyhow::anyhow!("could not parse latest_block_height in JSON response"))?
-            .parse()?;
+        let latest_block_height = sync_info.latest_block_height;
 
-        let node_catching_up = sync_info
-            .get("catching_up")
-            .and_then(|c| c.as_bool())
-            .ok_or_else(|| anyhow::anyhow!("could not parse catching_up in JSON response"))?;
+        let node_catching_up = sync_info.catching_up;
 
         // There is a `max_peer_block_height` available in TM 0.35, however it should not be used
         // as it does not seem to reflect the consensus height. Since clients use `latest_known_block_height`
@@ -220,25 +203,19 @@ impl ViewService {
 }
 
 #[async_trait]
-impl ViewProtocol for ViewService {
+impl ViewProtocolService for ViewService {
     type NotesStream =
-        Pin<Box<dyn futures::Stream<Item = Result<pb::SpendableNoteRecord, tonic::Status>> + Send>>;
-    type QuarantinedNotesStream = Pin<
-        Box<dyn futures::Stream<Item = Result<pb::QuarantinedNoteRecord, tonic::Status>> + Send>,
-    >;
+        Pin<Box<dyn futures::Stream<Item = Result<pb::NotesResponse, tonic::Status>> + Send>>;
     type AssetsStream =
-        Pin<Box<dyn futures::Stream<Item = Result<pbc::Asset, tonic::Status>> + Send>>;
+        Pin<Box<dyn futures::Stream<Item = Result<pb::AssetsResponse, tonic::Status>> + Send>>;
     type StatusStreamStream = Pin<
         Box<dyn futures::Stream<Item = Result<pb::StatusStreamResponse, tonic::Status>> + Send>,
     >;
     type TransactionHashesStream = Pin<
-        Box<
-            dyn futures::Stream<Item = Result<TransactionHashStreamResponse, tonic::Status>> + Send,
-        >,
+        Box<dyn futures::Stream<Item = Result<TransactionHashesResponse, tonic::Status>> + Send>,
     >;
-    type TransactionsStream = Pin<
-        Box<dyn futures::Stream<Item = Result<TransactionStreamResponse, tonic::Status>> + Send>,
-    >;
+    type TransactionsStream =
+        Pin<Box<dyn futures::Stream<Item = Result<TransactionsResponse, tonic::Status>> + Send>>;
 
     async fn transaction_perspective(
         &self,
@@ -279,19 +256,22 @@ impl ViewProtocol for ViewService {
         for action in tx.actions() {
             if let penumbra_transaction::Action::Spend(spend) = action {
                 let nullifier = spend.body.nullifier;
-                let spendable_note_record = self.storage.note_by_nullifier(nullifier, false).await;
-
-                if spendable_note_record.is_err() {
-                    spend_nullifiers.insert(nullifier, None);
-                } else if let Ok(spendable_note_record) = spendable_note_record {
-                    spend_nullifiers.insert(nullifier, Some(spendable_note_record.note));
+                // An error here indicates we don't know the nullifier, so we omit it from the Perspective.
+                if let Ok(spendable_note_record) =
+                    self.storage.note_by_nullifier(nullifier, false).await
+                {
+                    spend_nullifiers.insert(nullifier, spendable_note_record.note);
                 }
             }
         }
 
+        // TODO: query for advice notes
+        let advice_notes = Default::default();
+
         let txp = TransactionPerspective {
             payload_keys,
             spend_nullifiers,
+            advice_notes,
         };
 
         let response = pb::TransactionPerspectiveResponse {
@@ -301,10 +281,43 @@ impl ViewProtocol for ViewService {
 
         Ok(tonic::Response::new(response))
     }
+
+    async fn swap_by_commitment(
+        &self,
+        request: tonic::Request<pb::SwapByCommitmentRequest>,
+    ) -> Result<tonic::Response<pb::SwapByCommitmentResponse>, tonic::Status> {
+        self.check_worker().await?;
+        self.check_fvk(request.get_ref().account_id.as_ref())
+            .await?;
+
+        let request = request.into_inner();
+
+        let swap_commitment = request
+            .swap_commitment
+            .ok_or_else(|| {
+                tonic::Status::failed_precondition("Missing swap commitment in request")
+            })?
+            .try_into()
+            .map_err(|_| {
+                tonic::Status::failed_precondition("Invalid swap commitment in request")
+            })?;
+
+        let swap = pb::SwapRecord::from(
+            self.storage
+                .swap_by_commitment(swap_commitment, request.await_detection)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("error: {}", e)))?,
+        );
+
+        Ok(tonic::Response::new(SwapByCommitmentResponse {
+            swap: Some(swap),
+        }))
+    }
+
     async fn note_by_commitment(
         &self,
         request: tonic::Request<pb::NoteByCommitmentRequest>,
-    ) -> Result<tonic::Response<pb::SpendableNoteRecord>, tonic::Status> {
+    ) -> Result<tonic::Response<pb::NoteByCommitmentResponse>, tonic::Status> {
         self.check_worker().await?;
         self.check_fvk(request.get_ref().account_id.as_ref())
             .await?;
@@ -321,12 +334,16 @@ impl ViewProtocol for ViewService {
                 tonic::Status::failed_precondition("Invalid note commitment in request")
             })?;
 
-        Ok(tonic::Response::new(pb::SpendableNoteRecord::from(
+        let spendable_note = pb::SpendableNoteRecord::from(
             self.storage
                 .note_by_commitment(note_commitment, request.await_detection)
                 .await
                 .map_err(|e| tonic::Status::internal(format!("error: {}", e)))?,
-        )))
+        );
+
+        Ok(tonic::Response::new(NoteByCommitmentResponse {
+            spendable_note: Some(spendable_note),
+        }))
     }
 
     async fn nullifier_status(
@@ -434,7 +451,9 @@ impl ViewProtocol for ViewService {
 
         let stream = try_stream! {
             for note in notes {
-                yield note.into()
+                yield pb::NotesResponse {
+                    note_record: Some(note.into()),
+                }
             }
         };
 
@@ -447,38 +466,9 @@ impl ViewProtocol for ViewService {
         ))
     }
 
-    async fn quarantined_notes(
-        &self,
-        request: tonic::Request<pb::QuarantinedNotesRequest>,
-    ) -> Result<tonic::Response<Self::QuarantinedNotesStream>, tonic::Status> {
-        self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
-            .await?;
-
-        let notes = self
-            .storage
-            .quarantined_notes()
-            .await
-            .map_err(|e| tonic::Status::unavailable(format!("database error: {}", e)))?;
-
-        let stream = try_stream! {
-            for note in notes {
-                yield note.into()
-            }
-        };
-
-        Ok(tonic::Response::new(
-            stream
-                .map_err(|e: anyhow::Error| {
-                    tonic::Status::unavailable(format!("database error: {}", e))
-                })
-                .boxed(),
-        ))
-    }
-
     async fn assets(
         &self,
-        _request: tonic::Request<pb::AssetRequest>,
+        _request: tonic::Request<pb::AssetsRequest>,
     ) -> Result<tonic::Response<Self::AssetsStream>, tonic::Status> {
         self.check_worker().await?;
 
@@ -491,7 +481,10 @@ impl ViewProtocol for ViewService {
 
         let stream = try_stream! {
             for asset in assets {
-                yield asset.into()
+                yield
+                    pb::AssetsResponse {
+                        asset: Some(asset.into()),
+                    }
             }
         };
 
@@ -506,10 +499,9 @@ impl ViewProtocol for ViewService {
 
     async fn transaction_hashes(
         &self,
-        request: tonic::Request<pb::TransactionsRequest>,
+        request: tonic::Request<pb::TransactionHashesRequest>,
     ) -> Result<tonic::Response<Self::TransactionHashesStream>, tonic::Status> {
         self.check_worker().await?;
-
         // Fetch transactions from storage.
         let txs = self
             .storage
@@ -521,7 +513,7 @@ impl ViewProtocol for ViewService {
 
         let stream = try_stream! {
             for tx in txs {
-                yield TransactionHashStreamResponse {
+                yield TransactionHashesResponse {
                     block_height: tx.0,
                     tx_hash: tx.1,
                 }
@@ -542,7 +534,6 @@ impl ViewProtocol for ViewService {
         request: tonic::Request<pb::TransactionsRequest>,
     ) -> Result<tonic::Response<Self::TransactionsStream>, tonic::Status> {
         self.check_worker().await?;
-
         // Fetch transactions from storage.
         let txs = self
             .storage
@@ -554,7 +545,7 @@ impl ViewProtocol for ViewService {
 
         let stream = try_stream! {
             for tx in txs {
-                yield TransactionStreamResponse {
+                yield TransactionsResponse {
                     block_height: tx.0,
                     tx_hash: tx.1,
                     tx: Some(tx.2.into())
@@ -594,7 +585,7 @@ impl ViewProtocol for ViewService {
     async fn witness(
         &self,
         request: tonic::Request<pb::WitnessRequest>,
-    ) -> Result<tonic::Response<pbt::WitnessData>, tonic::Status> {
+    ) -> Result<tonic::Response<WitnessResponse>, tonic::Status> {
         self.check_worker().await?;
         self.check_fvk(request.get_ref().account_id.as_ref())
             .await?;
@@ -634,41 +625,74 @@ impl ViewProtocol for ViewService {
         // Release the read lock on the NCT
         drop(nct);
 
-        let witness_data = WitnessData {
+        let mut witness_data = WitnessData {
             anchor,
             note_commitment_proofs: auth_paths
                 .into_iter()
                 .map(|proof| (proof.commitment(), proof))
                 .collect(),
         };
+
         tracing::debug!(?witness_data);
-        Ok(tonic::Response::new(witness_data.into()))
+
+        let tx_plan: TransactionPlan =
+            request
+                .get_ref()
+                .to_owned()
+                .transaction_plan
+                .map_or(TransactionPlan::default(), |x| {
+                    x.try_into()
+                        .expect("TransactionPlan should exist in request")
+                });
+
+        // Now we need to augment the witness data with dummy proofs such that
+        // note commitments corresponding to dummy spends also have proofs.
+        for nc in tx_plan
+            .spend_plans()
+            .filter(|plan| plan.note.amount() == 0u64.into())
+            .map(|plan| plan.note.commit())
+        {
+            witness_data.add_proof(nc, Proof::dummy(&mut OsRng, nc));
+        }
+
+        let witness_response = WitnessResponse {
+            witness_data: Some(witness_data.into()),
+        };
+        Ok(tonic::Response::new(witness_response))
     }
 
     async fn chain_parameters(
         &self,
-        _request: tonic::Request<pb::ChainParamsRequest>,
-    ) -> Result<tonic::Response<pbp::ChainParameters>, tonic::Status> {
+        _request: tonic::Request<pb::ChainParametersRequest>,
+    ) -> Result<tonic::Response<pb::ChainParametersResponse>, tonic::Status> {
         self.check_worker().await?;
 
-        let params = self.storage.chain_params().await.map_err(|e| {
+        let parameters = self.storage.chain_params().await.map_err(|e| {
             tonic::Status::unavailable(format!("error getting chain params: {}", e))
         })?;
 
-        Ok(tonic::Response::new(params.into()))
+        let response = ChainParametersResponse {
+            parameters: Some(parameters.into()),
+        };
+
+        Ok(tonic::Response::new(response))
     }
 
     async fn fmd_parameters(
         &self,
         _request: tonic::Request<pb::FmdParametersRequest>,
-    ) -> Result<tonic::Response<pbp::FmdParameters>, tonic::Status> {
+    ) -> Result<tonic::Response<pb::FmdParametersResponse>, tonic::Status> {
         self.check_worker().await?;
 
-        let params =
+        let parameters =
             self.storage.fmd_parameters().await.map_err(|e| {
                 tonic::Status::unavailable(format!("error getting FMD params: {}", e))
             })?;
 
-        Ok(tonic::Response::new(params.into()))
+        let response = FmdParametersResponse {
+            parameters: Some(parameters.into()),
+        };
+
+        Ok(tonic::Response::new(response))
     }
 }

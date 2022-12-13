@@ -1,13 +1,11 @@
-use std::convert::TryFrom;
-use std::str::FromStr;
-use std::sync::Arc;
-
 use crate::Component;
 use anyhow::Result;
 use async_trait::async_trait;
-use ibc::core::ics02_client::client_state::ClientState;
-use ibc::core::ics24_host::identifier::ConnectionId;
-use ibc::downcast;
+use ibc::clients::ics07_tendermint;
+use ibc::clients::ics07_tendermint::client_state::TENDERMINT_CLIENT_STATE_TYPE_URL;
+use ibc::clients::ics07_tendermint::consensus_state::TENDERMINT_CONSENSUS_STATE_TYPE_URL;
+use ibc::clients::ics07_tendermint::header::TENDERMINT_HEADER_TYPE_URL;
+
 use ibc::{
     clients::ics07_tendermint::{
         client_state::ClientState as TendermintClientState,
@@ -16,20 +14,18 @@ use ibc::{
     },
     core::{
         ics02_client::{
-            client_consensus::AnyConsensusState,
-            client_state::AnyClientState,
+            client_state::ClientState,
             client_type::ClientType,
-            header::AnyHeader,
+            consensus_state::ConsensusState,
             height::Height,
-            msgs::{create_client::MsgCreateAnyClient, update_client::MsgUpdateAnyClient},
+            msgs::{create_client::MsgCreateClient, update_client::MsgUpdateClient},
         },
         ics24_host::identifier::ClientId,
     },
 };
 use penumbra_chain::{genesis, StateReadExt as _};
-use penumbra_proto::core::ibc::v1alpha1::ibc_action::Action::{CreateClient, UpdateClient};
-use penumbra_storage::{State, StateRead, StateTransaction, StateWrite};
-use penumbra_transaction::Transaction;
+use penumbra_proto::{StateReadProto, StateWriteProto};
+use penumbra_storage::{StateRead, StateTransaction, StateWrite};
 use tendermint::{abci, validator};
 use tendermint_light_client_verifier::{
     types::{TrustedBlockState, UntrustedBlockState},
@@ -37,12 +33,20 @@ use tendermint_light_client_verifier::{
 };
 use tracing::instrument;
 
-use crate::ibc::{event, ClientConnections, ClientCounter, VerifiedHeights};
+use crate::ibc::{event, ClientCounter, VerifiedHeights};
 
 use super::state_key;
 
-mod stateful;
-mod stateless;
+pub(crate) mod stateful;
+pub(crate) mod stateless;
+
+// TODO(erwan): remove before opening PR
+// + replace concrete types with trait objects
+// + evaluate how to make penumbra_proto::Protobuf more friendly with the erased protobuf traits that
+//   underpins the ics02 traits
+// + ADR004 defers LC state/consensus deserialization later, maybe we should have a preprocessing step before execution
+// . to distinguish I/O errors from actual execution errors. It would also make things a little less boilerplaty.
+// +
 
 /// The Penumbra IBC client component. Handles all client-related IBC actions: MsgCreateClient,
 /// MsgUpdateClient, MsgUpgradeClient, and MsgSubmitMisbehaviour. The core responsibility of the
@@ -73,83 +77,10 @@ impl Component for Ics2Client {
         // Currently, we don't use a revision number, because we don't have
         // any further namespacing of blocks than the block height.
         let revision_number = 0;
-        let height = Height::new(revision_number, begin_block.header.height.into());
+        let height = Height::new(revision_number, begin_block.header.height.into())
+            .expect("block height cannot be zero");
 
-        state.put_penumbra_consensus_state(height, AnyConsensusState::Tendermint(cs));
-    }
-
-    #[instrument(name = "ics2_client", skip(tx))]
-    fn check_tx_stateless(tx: Arc<Transaction>) -> Result<()> {
-        // Each stateless check is a distinct function in an appropriate submodule,
-        // so that we can easily add new stateless checks and see a birds' eye view
-        // of all of the checks we're performing.
-
-        for ibc_action in tx.ibc_actions() {
-            match &ibc_action.action {
-                Some(CreateClient(msg)) => {
-                    use stateless::create_client::*;
-                    let msg = MsgCreateAnyClient::try_from(msg.clone())?;
-
-                    client_state_is_tendermint(&msg)?;
-                    consensus_state_is_tendermint(&msg)?;
-                }
-                Some(UpdateClient(msg)) => {
-                    use stateless::update_client::*;
-                    let msg = MsgUpdateAnyClient::try_from(msg.clone())?;
-
-                    header_is_tendermint(&msg)?;
-                }
-                // Other IBC messages are not handled by this component.
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    #[instrument(name = "ics2_client", skip(state, tx))]
-    async fn check_tx_stateful(state: Arc<State>, tx: Arc<Transaction>) -> Result<()> {
-        for ibc_action in tx.ibc_actions() {
-            match &ibc_action.action {
-                Some(CreateClient(msg)) => {
-                    use stateful::create_client::CreateClientCheck;
-                    let msg = MsgCreateAnyClient::try_from(msg.clone())?;
-                    state.validate(&msg).await?;
-                }
-                Some(UpdateClient(msg)) => {
-                    use stateful::update_client::UpdateClientCheck;
-                    let msg = MsgUpdateAnyClient::try_from(msg.clone())?;
-                    state.validate(&msg).await?;
-                }
-                // Other IBC messages are not handled by this component.
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    #[instrument(name = "ics2_client", skip(state, tx))]
-    async fn execute_tx(state: &mut StateTransaction, tx: Arc<Transaction>) -> Result<()> {
-        // Handle any IBC actions found in the transaction.
-        for ibc_action in tx.ibc_actions() {
-            match &ibc_action.action {
-                Some(CreateClient(raw_msg_create_client)) => {
-                    let msg_create_client =
-                        MsgCreateAnyClient::try_from(raw_msg_create_client.clone()).unwrap();
-
-                    state.execute_create_client(msg_create_client).await;
-                }
-                Some(UpdateClient(raw_msg_update_client)) => {
-                    let msg_update_client =
-                        MsgUpdateAnyClient::try_from(raw_msg_update_client.clone()).unwrap();
-
-                    state.execute_update_client(msg_update_client).await;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
+        state.put_penumbra_consensus_state(height, cs);
     }
 
     #[instrument(name = "ics2_client", skip(_state, _end_block))]
@@ -157,52 +88,48 @@ impl Component for Ics2Client {
 }
 
 #[async_trait]
-trait Ics2ClientExt: StateWrite {
+pub(crate) trait Ics2ClientExt: StateWrite {
     // execute a UpdateClient IBC action. this assumes that the UpdateClient has already been
     // validated, including header verification.
-    async fn execute_update_client(&mut self, msg_update_client: MsgUpdateAnyClient) {
+    async fn execute_update_client(&mut self, msg_update_client: &MsgUpdateClient) {
+        // TODO(erwan): deferred client state deserialization means `execute_update_client` is faillible
+        // see ibc-rs ADR004: https://github.com/cosmos/ibc-rs/blob/main/docs/architecture/adr-004-light-client-crates-extraction.md#light-client-specific-code
+        let tm_header = match msg_update_client.header.type_url.as_str() {
+            TENDERMINT_HEADER_TYPE_URL => {
+                TendermintHeader::try_from(msg_update_client.header.clone())
+                    .expect("decoding tendermint header")
+            }
+            _ => unimplemented!("not a tendermint header"),
+        };
+
         // get the latest client state
         let client_state = self
             .get_client_state(&msg_update_client.client_id)
             .await
             .unwrap();
 
-        let tm_client_state = match client_state.clone() {
-            AnyClientState::Tendermint(tm_state) => tm_state,
-            _ => panic!("unsupported client type"),
-        };
-        let tm_header = match msg_update_client.header.clone() {
-            AnyHeader::Tendermint(tm_header) => tm_header,
-            _ => {
-                panic!("update header is not a Tendermint header");
-            }
-        };
-
         let (next_tm_client_state, next_tm_consensus_state) = self
             .next_tendermint_state(
                 msg_update_client.client_id.clone(),
-                tm_client_state,
+                client_state.clone(),
                 tm_header.clone(),
             )
             .await;
 
         // store the updated client and consensus states
-        self.put_client(
-            &msg_update_client.client_id,
-            AnyClientState::Tendermint(next_tm_client_state),
-        );
+        self.put_client(&msg_update_client.client_id, next_tm_client_state);
         self.put_verified_consensus_state(
             tm_header.height(),
             msg_update_client.client_id.clone(),
-            AnyConsensusState::Tendermint(next_tm_consensus_state),
+            next_tm_consensus_state,
         )
         .await
         .unwrap();
 
         self.record(event::update_client(
-            msg_update_client.client_id,
+            msg_update_client.client_id.clone(),
             client_state,
-            msg_update_client.header,
+            tm_header,
         ));
     }
 
@@ -213,22 +140,40 @@ trait Ics2ClientExt: StateWrite {
     // - client type
     // - consensus state
     // - processed time and height
-    async fn execute_create_client(&mut self, msg_create_client: MsgCreateAnyClient) {
+    async fn execute_create_client(&mut self, msg_create_client: &MsgCreateClient) {
+        tracing::info!("deserializing client state");
+        // TODO(erwan): deferred client state deserialization means `execute_create_client` is faillible
+        // see ibc-rs ADR004: https://github.com/cosmos/ibc-rs/blob/main/docs/architecture/adr-004-light-client-crates-extraction.md#light-client-specific-code
+        let client_state = match msg_create_client.client_state.type_url.as_str() {
+            TENDERMINT_CLIENT_STATE_TYPE_URL => {
+                TendermintClientState::try_from(msg_create_client.client_state.clone())
+                    .expect("decoding the tendermint client state")
+            }
+            _ => unimplemented!("not a tendermint lightclient"),
+        };
+
         // get the current client counter
         let id_counter = self.client_counter().await.unwrap();
-        let client_id =
-            ClientId::new(msg_create_client.client_state.client_type(), id_counter.0).unwrap();
+        let client_id = ClientId::new(client_state.client_type(), id_counter.0).unwrap();
 
         tracing::info!("creating client {:?}", client_id);
 
+        let consensus_state = match msg_create_client.consensus_state.type_url.as_str() {
+            TENDERMINT_CONSENSUS_STATE_TYPE_URL => {
+                TendermintConsensusState::try_from(msg_create_client.consensus_state.clone())
+                    .expect("decoding the tendermint consensus state")
+            }
+            _ => unimplemented!("not a tendermint lightclient"),
+        };
+
         // store the client data
-        self.put_client(&client_id, msg_create_client.client_state.clone());
+        self.put_client(&client_id, client_state.clone());
 
         // store the genesis consensus state
         self.put_verified_consensus_state(
-            msg_create_client.client_state.latest_height(),
+            client_state.latest_height(),
             client_id.clone(),
-            msg_create_client.consensus_state,
+            consensus_state,
         )
         .await
         .unwrap();
@@ -237,10 +182,7 @@ trait Ics2ClientExt: StateWrite {
         let counter = self.client_counter().await.unwrap_or(ClientCounter(0));
         self.put_client_counter(ClientCounter(counter.0 + 1));
 
-        self.record(event::create_client(
-            client_id,
-            msg_create_client.client_state,
-        ));
+        self.record(event::create_client(client_id, client_state));
     }
 
     // given an already verified tendermint header, and a trusted tendermint client state, compute
@@ -259,17 +201,13 @@ trait Ics2ClientExt: StateWrite {
             .get_verified_consensus_state(verified_header.height(), client_id.clone())
             .await
         {
-            let stored_cs_state_tm = downcast!(stored_cs_state => AnyConsensusState::Tendermint)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("stored consensus state is not a Tendermint consensus state")
-                })
-                .unwrap();
-            if stored_cs_state_tm == verified_consensus_state {
+            if stored_cs_state == verified_consensus_state {
                 return (trusted_client_state, verified_consensus_state);
             } else {
                 return (
                     trusted_client_state
                         .with_header(verified_header.clone())
+                        .unwrap()
                         .with_frozen_height(verified_header.height())
                         .unwrap(),
                     verified_consensus_state,
@@ -293,15 +231,11 @@ trait Ics2ClientExt: StateWrite {
         // case 1: if we have a verified consensus state previous to this header, verify that this
         // header's timestamp is greater than or equal to the stored consensus state's timestamp
         if let Some(prev_state) = prev_consensus_state {
-            let prev_state_tm = downcast!(prev_state => AnyConsensusState::Tendermint)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("stored consensus state is not a Tendermint consensus state")
-                })
-                .unwrap();
-            if verified_header.signed_header.header().time < prev_state_tm.timestamp {
+            if verified_header.signed_header.header().time < prev_state.timestamp {
                 return (
                     trusted_client_state
                         .with_header(verified_header.clone())
+                        .unwrap()
                         .with_frozen_height(verified_header.height())
                         .unwrap(),
                     verified_consensus_state,
@@ -311,15 +245,11 @@ trait Ics2ClientExt: StateWrite {
         // case 2: if we have a verified consensus state with higher block height than this header,
         // verify that this header's timestamp is less than or equal to this header's timestamp.
         if let Some(next_state) = next_consensus_state {
-            let next_state_tm = downcast!(next_state => AnyConsensusState::Tendermint)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("stored consensus state is not a Tendermint consensus state")
-                })
-                .unwrap();
-            if verified_header.signed_header.header().time > next_state_tm.timestamp {
+            if verified_header.signed_header.header().time > next_state.timestamp {
                 return (
                     trusted_client_state
                         .with_header(verified_header.clone())
+                        .unwrap()
                         .with_frozen_height(verified_header.height())
                         .unwrap(),
                     verified_consensus_state,
@@ -328,7 +258,9 @@ trait Ics2ClientExt: StateWrite {
         }
 
         (
-            trusted_client_state.with_header(verified_header.clone()),
+            trusted_client_state
+                .with_header(verified_header.clone())
+                .unwrap(),
             verified_consensus_state,
         )
     }
@@ -342,7 +274,13 @@ pub trait StateWriteExt: StateWrite + StateReadExt {
         self.put("ibc_client_counter".into(), counter);
     }
 
-    fn put_client(&mut self, client_id: &ClientId, client_state: AnyClientState) {
+    fn put_client(&mut self, client_id: &ClientId, client_state: impl ClientState) {
+        let client_state = client_state
+            .as_any()
+            .downcast_ref::<ics07_tendermint::client_state::ClientState>()
+            .expect("not a tendermint client state")
+            .to_owned();
+
         self.put_proto(
             state_key::client_type(client_id),
             client_state.client_type().as_str().to_string(),
@@ -364,21 +302,34 @@ pub trait StateWriteExt: StateWrite + StateReadExt {
     }
 
     // returns the ConsensusState for the penumbra chain (this chain) at the given height
-    fn put_penumbra_consensus_state(&mut self, height: Height, consensus_state: AnyConsensusState) {
+    fn put_penumbra_consensus_state(
+        &mut self,
+        height: Height,
+        consensus_state: impl ConsensusState,
+    ) {
         // NOTE: this is an implementation detail of the Penumbra ICS2 implementation, so
         // it's not in the same path namespace.
-        self.put(
-            format!("penumbra_consensus_states/{}", height),
-            consensus_state,
-        );
+
+        // let tm = consensus_state;
+        let tm = consensus_state
+            .as_any()
+            .downcast_ref::<ics07_tendermint::consensus_state::ConsensusState>()
+            .expect("not an tendermint consensus state")
+            .to_owned();
+        self.put(format!("penumbra_consensus_states/{}", height), tm);
     }
 
     async fn put_verified_consensus_state(
         &mut self,
         height: Height,
         client_id: ClientId,
-        consensus_state: AnyConsensusState,
+        consensus_state: impl ConsensusState,
     ) -> Result<()> {
+        let consensus_state = consensus_state
+            .as_any()
+            .downcast_ref::<ics07_tendermint::consensus_state::ConsensusState>()
+            .expect("not a tendermint consensus state")
+            .to_owned();
         self.put(
             state_key::verified_client_consensus_state(&client_id, &height),
             consensus_state,
@@ -394,7 +345,7 @@ pub trait StateWriteExt: StateWrite + StateReadExt {
 
         self.put(
             state_key::client_processed_heights(&client_id, &height),
-            ibc::Height::zero().with_revision_height(current_height),
+            ibc::Height::new(0, current_height)?,
         );
 
         // update verified heights
@@ -411,28 +362,6 @@ pub trait StateWriteExt: StateWrite + StateReadExt {
 
         Ok(())
     }
-
-    // adds the provided connection ID to the client identified by client_id. returns an error if
-    // the client does not exist.
-    async fn add_connection_to_client(
-        &mut self,
-        client_id: &ClientId,
-        connection_id: &ConnectionId,
-    ) -> Result<()> {
-        self.get_client_state(client_id).await?;
-        self.get_client_type(client_id).await?;
-
-        let mut connections: ClientConnections = self
-            .get(&state_key::client_connections(client_id))
-            .await?
-            .unwrap_or_default();
-
-        connections.connection_ids.push(connection_id.clone());
-
-        self.put(state_key::client_connections(client_id), connections);
-
-        Ok(())
-    }
 }
 
 impl<T: StateWrite + ?Sized> StateWriteExt for T {}
@@ -446,15 +375,13 @@ pub trait StateReadExt: StateRead {
     }
 
     async fn get_client_type(&self, client_id: &ClientId) -> Result<ClientType> {
-        let client_type_str: String = self
-            .get_proto(&state_key::client_type(client_id))
+        self.get_proto(&state_key::client_type(client_id))
             .await?
-            .ok_or_else(|| anyhow::anyhow!("client not found"))?;
-
-        ClientType::from_str(&client_type_str).map_err(|_| anyhow::anyhow!("invalid client type"))
+            .ok_or_else(|| anyhow::anyhow!("client not found"))
+            .map(ClientType::new)
     }
 
-    async fn get_client_state(&self, client_id: &ClientId) -> Result<AnyClientState> {
+    async fn get_client_state(&self, client_id: &ClientId) -> Result<TendermintClientState> {
         let client_state = self.get(&state_key::client_state(client_id)).await?;
 
         client_state.ok_or_else(|| anyhow::anyhow!("client not found"))
@@ -471,7 +398,10 @@ pub trait StateReadExt: StateRead {
     }
 
     // returns the ConsensusState for the penumbra chain (this chain) at the given height
-    async fn get_penumbra_consensus_state(&self, height: Height) -> Result<AnyConsensusState> {
+    async fn get_penumbra_consensus_state(
+        &self,
+        height: Height,
+    ) -> Result<TendermintConsensusState> {
         // NOTE: this is an implementation detail of the Penumbra ICS2 implementation, so
         // it's not in the same path namespace.
         self.get(&format!("penumbra_consensus_states/{}", height))
@@ -483,7 +413,7 @@ pub trait StateReadExt: StateRead {
         &self,
         height: Height,
         client_id: ClientId,
-    ) -> Result<AnyConsensusState> {
+    ) -> Result<TendermintConsensusState> {
         self.get(&state_key::verified_client_consensus_state(
             &client_id, &height,
         ))
@@ -521,7 +451,7 @@ pub trait StateReadExt: StateRead {
         &self,
         client_id: &ClientId,
         height: Height,
-    ) -> Result<Option<AnyConsensusState>> {
+    ) -> Result<Option<TendermintConsensusState>> {
         let mut verified_heights =
             self.get_verified_heights(client_id)
                 .await?
@@ -552,7 +482,7 @@ pub trait StateReadExt: StateRead {
         &self,
         client_id: &ClientId,
         height: Height,
-    ) -> Result<Option<AnyConsensusState>> {
+    ) -> Result<Option<TendermintConsensusState>> {
         let mut verified_heights =
             self.get_verified_heights(client_id)
                 .await?
@@ -582,51 +512,45 @@ impl<T: StateRead + ?Sized> StateReadExt for T {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::action_handler::ActionHandler;
+    use crate::TempStorageExt;
+
     use super::*;
     use ibc_proto::ibc::core::client::v1::MsgCreateClient as RawMsgCreateClient;
     use ibc_proto::ibc::core::client::v1::MsgUpdateClient as RawMsgUpdateClient;
-    use penumbra_chain::StateWriteExt as _;
+    use penumbra_chain::StateWriteExt;
     use penumbra_proto::core::ibc::v1alpha1::{ibc_action::Action as IbcActionInner, IbcAction};
     use penumbra_proto::Message;
-    use penumbra_storage::Storage;
-    use penumbra_tct as tct;
-    use penumbra_transaction::{Action, Transaction, TransactionBody};
-    use tempfile::tempdir;
+    use penumbra_storage::{ArcStateExt, TempStorage};
+    use penumbra_transaction::Transaction;
     use tendermint::Time;
 
     // test that we can create and update a light client.
     #[tokio::test]
-    async fn test_create_and_update_light_client() {
+    async fn test_create_and_update_light_client() -> anyhow::Result<()> {
         // create a storage backend for testing
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("ibc-testing.db");
+        let storage = TempStorage::new().await?.apply_default_genesis().await?;
 
-        let storage = Storage::load(file_path.clone()).await.unwrap();
-        let mut state = Arc::new(storage.state());
-        let state_mut =
-            Arc::get_mut(&mut state).expect("state Arc should not be referenced elsewhere");
-        let mut state_tx = state_mut.begin_transaction();
+        let mut state = Arc::new(storage.latest_state());
 
-        // init chain should result in client counter = 0
-        let genesis_state = genesis::AppState::default();
-        let timestamp = Time::parse_from_rfc3339("2022-02-11T17:30:50.425417198Z").unwrap();
+        // Light client verification is time-dependent.  In practice, the latest
+        // (consensus) time will be delivered in each BeginBlock and written
+        // into the state.  Here, set the block timestamp manually so it's
+        // available to the unit test.
+        let timestamp = Time::parse_from_rfc3339("2022-02-11T17:30:50.425417198Z")?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
         state_tx.put_block_timestamp(timestamp);
-        state_tx.put_block_height(0);
-        Ics2Client::init_chain(&mut state_tx, &genesis_state).await;
-
+        // TODO(erwan): check that this is a correct assumption to make?
+        //              the ibc::ics02::Height constructor forbids building `Height` with value zero.
+        //              Semantically this seem to correspond to a blockchain that has not begun to produce blocks
+        state_tx.put_block_height(1);
         state_tx.apply();
-        storage
-            .commit(Arc::try_unwrap(state).unwrap())
-            .await
-            .unwrap();
-
-        let mut state = Arc::new(storage.state());
 
         // base64 encoded MsgCreateClient that was used to create the currently in-use Stargaze
         // light client on the cosmos hub:
         // https://cosmos.bigdipper.live/transactions/13C1ECC54F088473E2925AD497DDCC092101ADE420BC64BADE67D34A75769CE9
-        //
-        //
         let msg_create_client_stargaze_raw =
             base64::decode(include_str!("../../ibc/test/create_client.msg").replace('\n', ""))
                 .unwrap();
@@ -645,78 +569,37 @@ mod tests {
         let create_client_action = IbcAction {
             action: Some(IbcActionInner::CreateClient(msg_create_stargaze_client)),
         };
-        let create_client_tx = Arc::new(Transaction {
-            transaction_body: TransactionBody {
-                actions: vec![Action::IBCAction(create_client_action)],
-                expiry_height: 0,
-                chain_id: "".to_string(),
-                fee: Default::default(),
-                fmd_clues: vec![],
-                memo: None,
-            },
-            anchor: tct::Tree::new().root(),
-            binding_sig: [0u8; 64].into(),
-        });
-
         let update_client_action = IbcAction {
             action: Some(IbcActionInner::UpdateClient(msg_update_stargaze_client)),
         };
-        let update_client_tx = Arc::new(Transaction {
-            transaction_body: TransactionBody {
-                actions: vec![Action::IBCAction(update_client_action)],
-                expiry_height: 0,
-                chain_id: "".to_string(),
-                fee: Default::default(),
-                fmd_clues: vec![],
-                memo: None,
-            },
-            binding_sig: [0u8; 64].into(),
-            anchor: tct::Tree::new().root(),
-        });
 
-        Ics2Client::check_tx_stateless(create_client_tx.clone()).unwrap();
-        Ics2Client::check_tx_stateful(state.clone(), create_client_tx.clone())
-            .await
-            .unwrap();
-        // execute (save client)
-        let state_mut =
-            Arc::get_mut(&mut state).expect("state Arc should not be referenced elsewhere");
-        let mut state_tx = state_mut.begin_transaction();
-        Ics2Client::execute_tx(&mut state_tx, create_client_tx.clone())
-            .await
-            .unwrap();
+        // The ActionHandler trait provides the transaction the action was part
+        // of as context available during verification.  This is used, for instance,
+        // to allow spend and output proofs to access the (transaction-wide) anchor.
+        // Since the context is not used by the IBC action handlers, we can pass a dummy transaction.
+        let dummy_context = Arc::new(Transaction::default());
+
+        create_client_action
+            .check_stateless(dummy_context.clone())
+            .await?;
+        create_client_action.check_stateful(state.clone()).await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        create_client_action.execute(&mut state_tx).await?;
         state_tx.apply();
-        storage
-            .commit(Arc::try_unwrap(state).unwrap())
-            .await
-            .unwrap();
 
-        let mut state = Arc::new(storage.state());
-        assert_eq!(state.clone().client_counter().await.unwrap().0, 1);
+        // Check that state reflects +1 client apps registered.
+        assert_eq!(state.client_counter().await.unwrap().0, 1);
 
-        // now try update client
-
-        Ics2Client::check_tx_stateless(update_client_tx.clone()).unwrap();
-        // verify the ClientUpdate proof
-        Ics2Client::check_tx_stateful(state.clone(), update_client_tx.clone())
-            .await
-            .unwrap();
-        // save the next tm state
-        let state_mut =
-            Arc::get_mut(&mut state).expect("state Arc should not be referenced elsewhere");
-        let mut state_tx = state_mut.begin_transaction();
-        Ics2Client::execute_tx(&mut state_tx, update_client_tx.clone())
-            .await
-            .unwrap();
+        // Now we update the client and confirm that the update landed in state.
+        update_client_action
+            .check_stateless(dummy_context.clone())
+            .await?;
+        update_client_action.check_stateful(state.clone()).await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        update_client_action.execute(&mut state_tx).await?;
         state_tx.apply();
-        storage
-            .commit(Arc::try_unwrap(state).unwrap())
-            .await
-            .unwrap();
 
-        let mut state = Arc::new(storage.state());
-
-        // try one more client update
+        // We've had one client update, yes. What about second client update?
         // https://cosmos.bigdipper.live/transactions/ED217D360F51E622859F7B783FEF98BDE3544AA32BBD13C6C77D8D0D57A19FFD
         let msg_update_second =
             base64::decode(include_str!("../../ibc/test/update_client_2.msg").replace('\n', ""))
@@ -727,35 +610,17 @@ mod tests {
         let second_update_client_action = IbcAction {
             action: Some(IbcActionInner::UpdateClient(second_update)),
         };
-        let second_update_client_tx = Arc::new(Transaction {
-            transaction_body: TransactionBody {
-                actions: vec![Action::IBCAction(second_update_client_action)],
-                expiry_height: 0,
-                chain_id: "".to_string(),
-                fee: Default::default(),
-                fmd_clues: vec![],
-                memo: None,
-            },
-            anchor: tct::Tree::new().root(),
-            binding_sig: [0u8; 64].into(),
-        });
 
-        Ics2Client::check_tx_stateless(second_update_client_tx.clone()).unwrap();
-        // verify the ClientUpdate proof
-        Ics2Client::check_tx_stateful(state.clone(), second_update_client_tx.clone())
-            .await
-            .unwrap();
-        // save the next tm state
-        let state_mut =
-            Arc::get_mut(&mut state).expect("state Arc should not be referenced elsewhere");
-        let mut state_tx = state_mut.begin_transaction();
-        Ics2Client::execute_tx(&mut state_tx, second_update_client_tx.clone())
-            .await
-            .unwrap();
+        second_update_client_action
+            .check_stateless(dummy_context.clone())
+            .await?;
+        second_update_client_action
+            .check_stateful(state.clone())
+            .await?;
+        let mut state_tx = state.try_begin_transaction().unwrap();
+        second_update_client_action.execute(&mut state_tx).await?;
         state_tx.apply();
-        storage
-            .commit(Arc::try_unwrap(state).unwrap())
-            .await
-            .unwrap();
+
+        Ok(())
     }
 }

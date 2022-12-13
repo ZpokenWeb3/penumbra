@@ -34,13 +34,7 @@ impl FromStr for Vote {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> anyhow::Result<Vote> {
-        match s
-            .replace('-', "")
-            .replace('_', "")
-            .replace(' ', "")
-            .to_lowercase()
-            .as_str()
-        {
+        match s.replace(['-', '_', ' '], "").to_lowercase().as_str() {
             "yes" | "y" => Ok(Vote::Yes),
             "no" | "n" => Ok(Vote::No),
             "abstain" | "a" => Ok(Vote::Abstain),
@@ -57,6 +51,9 @@ impl Display for Vote {
             Vote::No => write!(f, "no"),
             Vote::Abstain => write!(f, "abstain"),
             Vote::NoWithVeto => write!(f, "no_with_veto"),
+            // Invalid vote, this is unreachable because it should
+            // never be allowed to be deserialized successfully.
+            Vote::Unspecified => unreachable!(),
         }
     }
 }

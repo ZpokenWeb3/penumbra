@@ -39,7 +39,7 @@ pub struct Note {
 }
 
 /// The domain separator used to generate note commitments.
-static NOTECOMMIT_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
+pub(crate) static NOTECOMMIT_DOMAIN_SEP: Lazy<Fq> = Lazy::new(|| {
     Fq::from_le_bytes_mod_order(blake2b_simd::blake2b(b"penumbra.notecommit").as_bytes())
 });
 
@@ -283,7 +283,10 @@ impl std::fmt::Debug for Note {
         f.debug_struct("Note")
             .field("value", &self.value)
             .field("address", &self.address())
-            .field("note_blinding", &self.note_blinding())
+            .field(
+                "note_blinding",
+                &hex::encode(self.note_blinding().to_bytes()),
+            )
             .finish()
     }
 }
@@ -396,7 +399,7 @@ mod tests {
     fn note_encryption_and_decryption() {
         let mut rng = OsRng;
 
-        let seed_phrase = SeedPhrase::generate(&mut rng);
+        let seed_phrase = SeedPhrase::generate(rng);
         let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
         let fvk = sk.full_viewing_key();
         let ivk = fvk.incoming();
@@ -416,7 +419,7 @@ mod tests {
 
         assert_eq!(plaintext, note);
 
-        let seed_phrase = SeedPhrase::generate(&mut rng);
+        let seed_phrase = SeedPhrase::generate(rng);
         let sk2 = SpendKey::from_seed_phrase(seed_phrase, 0);
         let fvk2 = sk2.full_viewing_key();
         let ivk2 = fvk2.incoming();
@@ -428,7 +431,7 @@ mod tests {
     fn note_encryption_and_sender_decryption() {
         let mut rng = OsRng;
 
-        let seed_phrase = SeedPhrase::generate(&mut rng);
+        let seed_phrase = SeedPhrase::generate(rng);
         let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
         let fvk = sk.full_viewing_key();
         let ivk = fvk.incoming();

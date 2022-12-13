@@ -1,0 +1,173 @@
+{{ $count := (.Values.numValidators | int) }}
+{{ range $i,$e := until $count }}
+{{ $val_name := printf "%s-val-%d" (include "penumbra.fullname" $) $i }}
+{{ $pd_name := printf "%s-pd-val-%d" (include "penumbra.fullname" $) $i }}
+{{ $tm_name := printf "%s-tm-val-%d" (include "penumbra.fullname" $) $i }}
+---
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: {{ $val_name }}
+  labels:
+    app: {{ $val_name }}
+    {{- include "penumbra.labels" $ | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    app: {{ $val_name }}
+  template:
+    metadata:
+      name: {{ $val_name }}
+      labels:
+        app: {{ $val_name }}
+        network: "{{ $.Values.network }}"
+        {{- include "penumbra.labels" $ | nindent 8 }}
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ $val_name }}
+              topologyKey: kubernetes.io/hostname
+      volumes:
+        - name: pv-{{ $pd_name }}
+          persistentVolumeClaim:
+            claimName: pvc-{{ $pd_name }}
+        - name: pv-{{ $tm_name }}
+          persistentVolumeClaim:
+            claimName: pvc-{{ $tm_name }}
+        - name: tm-config
+          configMap:
+            name: config-{{ $tm_name }}
+            items:
+              - key: "config.toml"
+                path: "config.toml"
+        - name: genesis-config
+          configMap:
+            name: {{ include "penumbra.fullname" $ }}-genesis-config
+            items:
+              - key: "genesis.json"
+                path: "genesis.json"
+        - name: val-secrets
+          secret:
+            secretName: {{ include "penumbra.fullname" $ }}-val-secrets-{{$i}}
+            items:
+              - key: "priv_validator_key.json"
+                path: "priv_validator_key.json"
+              - key: "node_key.json"
+                path: "node_key.json"
+              - key: "validator_custody.json"
+                path: "validator_custody.json"
+      initContainers:
+        - name: pvc-ownership
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+                set -eux
+                chown -R 1025:1025 "/home/pv-{{ $tm_name }}"
+                chown -R {{ $.Values.penumbra.uidGid }} "/home/pv-{{ $pd_name }}"
+          volumeMounts:
+            - name: pv-{{ $tm_name }}
+              mountPath: /home/pv-{{ $tm_name }}
+            - name: pv-{{ $pd_name }}
+              mountPath: /home/pv-{{ $pd_name }}
+        - name: config-init
+          image: "{{ $.Values.tendermint.image }}:{{ $.Values.tendermint.version }}"
+          command:
+            - sh
+            - -c
+            - |
+              set -eux
+              CHAIN_DIR=/home/.tendermint
+              if [ ! -d $CHAIN_DIR ]; then
+                tendermint init validator --home $CHAIN_DIR
+              else
+                TMP_DIR=/home/tmpConfig
+                tendermint init validator --home $TMP_DIR
+              fi
+          volumeMounts:
+            - name: "pv-{{ $tm_name }}"
+              mountPath: /home
+        - name: config-merge
+          image: "{{ $.Values.toolkit.image }}:{{ $.Values.toolkit.version }}"
+          command:
+            - sh
+            - -c
+            - |
+              set -eux
+              CONFIG_DIR=/home/.tendermint/config
+              MERGE_DIR=/tmp/configMerge
+              OVERLAY_DIR=/config
+              TMP_DIR=/home/tmpConfig
+              if [ -d $TMP_DIR/config ]; then
+                mv $TMP_DIR/config/*.toml $CONFIG_DIR/
+                rm -rf $TMP_DIR
+              fi
+              mkdir $MERGE_DIR
+              config-merge -f toml $CONFIG_DIR/config.toml $OVERLAY_DIR/config.toml > $MERGE_DIR/config.toml
+              mv $MERGE_DIR/* $CONFIG_DIR/
+              cp /genesis/genesis.json $CONFIG_DIR/
+              cp /val/priv_validator_key.json $CONFIG_DIR/
+              cp /val/node_key.json $CONFIG_DIR/
+              cp /val/validator_custody.json $CONFIG_DIR/
+          securityContext:
+            runAsUser: 1025
+            runAsGroup: 1025
+          volumeMounts:
+            - name: pv-{{ $tm_name }}
+              mountPath: /home
+            - name: tm-config
+              mountPath: "/config"
+              readOnly: true
+            - name: genesis-config
+              mountPath: "/genesis"
+              readOnly: true
+            - name: val-secrets
+              mountPath: "/val"
+              readOnly: true
+
+      containers:
+        - name: tm
+          image: "{{ $.Values.tendermint.image }}:{{ $.Values.tendermint.version }}"
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 26656
+              protocol: TCP
+              name: p2p
+          volumeMounts:
+            - name: pv-{{ $tm_name }}
+              mountPath: /home
+          command:
+            - tendermint
+            - start
+            - --home=/home/.tendermint
+        - name: pd
+          image: "{{ $.Values.penumbra.image }}:{{ $.Values.penumbra.version }}"
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+              name: grpc
+            - containerPort: 9000
+              protocol: TCP
+              name: metrics
+          volumeMounts:
+            - name: pv-{{ $pd_name }}
+              mountPath: /home
+          command:
+            - pd
+            - start
+            - --home
+            - /home/pd
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+
+{{ end }}

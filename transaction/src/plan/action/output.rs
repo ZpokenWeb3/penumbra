@@ -4,7 +4,7 @@ use penumbra_crypto::{
     keys::{IncomingViewingKey, OutgoingViewingKey},
     proofs::transparent::OutputProof,
     symmetric::WrappedMemoKey,
-    Address, FieldExt, Fq, Fr, Note, NotePayload, PayloadKey, Value, STAKING_TOKEN_ASSET_ID,
+    Address, EncryptedNote, FieldExt, Fq, Fr, Note, PayloadKey, Value, STAKING_TOKEN_ASSET_ID,
 };
 use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
 use rand_core::{CryptoRng, RngCore};
@@ -102,7 +102,7 @@ impl OutputPlan {
         );
 
         output::Body {
-            note_payload: NotePayload {
+            note_payload: EncryptedNote {
                 note_commitment,
                 ephemeral_key,
                 encrypted_note,
@@ -169,7 +169,7 @@ mod test {
     /// the balance and note commitments.
     fn check_output_proof_verification() {
         let mut rng = OsRng;
-        let seed_phrase = SeedPhrase::generate(&mut rng);
+        let seed_phrase = SeedPhrase::generate(rng);
         let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
         let ovk = sk.full_viewing_key().outgoing();
         let dummy_memo_key: PayloadKey = [0; 32].into();

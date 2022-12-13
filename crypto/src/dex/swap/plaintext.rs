@@ -1,15 +1,21 @@
 use crate::transaction::Fee;
-use crate::{asset, ka, Address, Amount, Value};
+use crate::{asset, ka, Address, Amount, Note, Value};
 use anyhow::{anyhow, Error, Result};
-use ark_ff::PrimeField;
-use decaf377::Fq;
+use ark_ff::{PrimeField, UniformRand};
+use decaf377::{FieldExt, Fq};
+use once_cell::sync::Lazy;
 use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, core::dex::v1alpha1 as pb, Protobuf};
-use poseidon377::{hash_4, hash_6};
+use penumbra_tct::Commitment;
+use poseidon377::{hash_1, hash_4, hash_7};
+use rand::{CryptoRng, RngCore};
 
 use crate::dex::TradingPair;
 use crate::symmetric::{PayloadKey, PayloadKind};
 
-use super::{SwapCiphertext, DOMAIN_SEPARATOR, SWAP_CIPHERTEXT_BYTES, SWAP_LEN_BYTES};
+use super::{
+    BatchSwapOutputData, SwapCiphertext, SwapPayload, DOMAIN_SEPARATOR, SWAP_CIPHERTEXT_BYTES,
+    SWAP_LEN_BYTES,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SwapPlaintext {
@@ -23,16 +29,69 @@ pub struct SwapPlaintext {
     pub claim_fee: Fee,
     // Address to receive the Swap NFT and SwapClaim outputs
     pub claim_address: Address,
+    // Swap blinding factor
+    pub swap_blinding: Fq,
 }
 
+pub static OUTPUT_1_BLINDING_DOMAIN_SEPARATOR: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.swapclaim.output1.blinding").as_bytes(),
+    )
+});
+pub static OUTPUT_2_BLINDING_DOMAIN_SEPARATOR: Lazy<Fq> = Lazy::new(|| {
+    Fq::from_le_bytes_mod_order(
+        blake2b_simd::blake2b(b"penumbra.swapclaim.output2.blinding").as_bytes(),
+    )
+});
+
 impl SwapPlaintext {
+    pub fn output_blinding_factors(&self) -> (Fq, Fq) {
+        (
+            hash_1(&OUTPUT_1_BLINDING_DOMAIN_SEPARATOR, self.swap_blinding),
+            hash_1(&OUTPUT_2_BLINDING_DOMAIN_SEPARATOR, self.swap_blinding),
+        )
+    }
+
+    pub fn output_notes(&self, batch_data: &BatchSwapOutputData) -> (Note, Note) {
+        let (output_1_blinding, output_2_blinding) = self.output_blinding_factors();
+
+        let (lambda_1_i, lambda_2_i) = batch_data.pro_rata_outputs((
+            // TODO: fix up amount conversions
+            self.delta_1_i.try_into().unwrap(),
+            self.delta_2_i.try_into().unwrap(),
+        ));
+
+        let output_1_note = Note::from_parts(
+            self.claim_address,
+            Value {
+                amount: lambda_1_i.into(),
+                asset_id: self.trading_pair.asset_1(),
+            },
+            output_1_blinding,
+        )
+        .expect("claim address is valid");
+
+        let output_2_note = Note::from_parts(
+            self.claim_address,
+            Value {
+                amount: lambda_2_i.into(),
+                asset_id: self.trading_pair.asset_2(),
+            },
+            output_2_blinding,
+        )
+        .expect("claim address is valid");
+
+        (output_1_note, output_2_note)
+    }
+
     // Constructs the unique asset ID for a swap as a poseidon hash of the input data for the swap.
     //
     // https://protocol.penumbra.zone/main/zswap/swap.html#swap-actions
-    pub fn asset_id(&self) -> asset::Id {
-        let asset_id_hash = hash_6(
+    pub fn swap_commitment(&self) -> Commitment {
+        let inner = hash_7(
             &DOMAIN_SEPARATOR,
             (
+                self.swap_blinding,
                 self.claim_fee.0.amount.into(),
                 self.claim_fee.0.asset_id.0,
                 self.claim_address
@@ -52,7 +111,7 @@ impl SwapPlaintext {
             ),
         );
 
-        asset::Id(asset_id_hash)
+        Commitment(inner)
     }
 
     pub fn diversified_generator(&self) -> &decaf377::Element {
@@ -63,7 +122,7 @@ impl SwapPlaintext {
         self.claim_address.transmission_key()
     }
 
-    pub fn encrypt(&self, esk: &ka::Secret) -> SwapCiphertext {
+    pub fn encrypt(&self, esk: &ka::Secret) -> SwapPayload {
         let epk = esk.diversified_public(self.diversified_generator());
         let shared_secret = esk
             .key_agreement_with(self.transmission_key())
@@ -77,23 +136,31 @@ impl SwapPlaintext {
             .try_into()
             .expect("swap encryption result fits in ciphertext len");
 
-        SwapCiphertext(ciphertext)
+        SwapPayload {
+            encrypted_swap: SwapCiphertext(ciphertext),
+            ephemeral_key: epk,
+            commitment: self.swap_commitment(),
+        }
     }
 
-    pub fn from_parts(
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
         trading_pair: TradingPair,
         delta_1_i: Amount,
         delta_2_i: Amount,
         claim_fee: Fee,
         claim_address: Address,
-    ) -> Result<Self, Error> {
-        Ok(SwapPlaintext {
+    ) -> SwapPlaintext {
+        let swap_blinding = Fq::rand(rng);
+
+        Self {
             trading_pair,
             delta_1_i,
             delta_2_i,
             claim_fee,
             claim_address,
-        })
+            swap_blinding,
+        }
     }
 }
 
@@ -124,6 +191,7 @@ impl TryFrom<pb::SwapPlaintext> for SwapPlaintext {
                 .trading_pair
                 .ok_or_else(|| anyhow::anyhow!("missing trading pair in SwapPlaintext"))?
                 .try_into()?,
+            swap_blinding: Fq::from_bytes(plaintext.swap_blinding.as_slice().try_into()?)?,
         })
     }
 }
@@ -136,6 +204,7 @@ impl From<SwapPlaintext> for pb::SwapPlaintext {
             claim_fee: Some(plaintext.claim_fee.into()),
             claim_address: Some(plaintext.claim_address.into()),
             trading_pair: Some(plaintext.trading_pair.into()),
+            swap_blinding: plaintext.swap_blinding.to_bytes().to_vec(),
         }
     }
 }
@@ -150,6 +219,7 @@ impl From<&SwapPlaintext> for [u8; SWAP_LEN_BYTES] {
         bytes[88..120].copy_from_slice(&swap.claim_fee.0.asset_id.to_bytes());
         let pb_address = pb_crypto::Address::from(swap.claim_address);
         bytes[120..200].copy_from_slice(&pb_address.inner);
+        bytes[200..232].copy_from_slice(&swap.swap_blinding.to_bytes());
         bytes
     }
 }
@@ -189,19 +259,23 @@ impl TryFrom<&[u8]> for SwapPlaintext {
         let pb_address = pb_crypto::Address {
             inner: address_bytes.to_vec(),
         };
+        let blinding_factor_bytes: [u8; 32] = bytes[200..232]
+            .try_into()
+            .map_err(|_| anyhow!("error fetching blinding factor bytes"))?;
 
-        SwapPlaintext::from_parts(
-            tp_bytes
+        Ok(SwapPlaintext {
+            trading_pair: tp_bytes
                 .try_into()
                 .map_err(|_| anyhow!("error deserializing trading pair"))?,
-            Amount::from_le_bytes(delta_1_bytes),
-            Amount::from_le_bytes(delta_2_bytes),
-            Fee(Value {
+            delta_1_i: Amount::from_le_bytes(delta_1_bytes),
+            delta_2_i: Amount::from_le_bytes(delta_2_bytes),
+            claim_fee: Fee(Value {
                 amount: asset::Amount::from_le_bytes(fee_amount_bytes),
                 asset_id: asset::Id::try_from(fee_asset_id_bytes)?,
             }),
-            pb_address.try_into()?,
-        )
+            claim_address: pb_address.try_into()?,
+            swap_blinding: Fq::from_le_bytes_mod_order(&blinding_factor_bytes),
+        })
     }
 }
 
@@ -215,6 +289,7 @@ impl TryFrom<[u8; SWAP_LEN_BYTES]> for SwapPlaintext {
 
 #[cfg(test)]
 mod tests {
+
     use rand_core::OsRng;
 
     use super::*;
@@ -228,7 +303,7 @@ mod tests {
     fn swap_encryption_and_decryption() {
         let mut rng = OsRng;
 
-        let seed_phrase = SeedPhrase::generate(&mut rng);
+        let seed_phrase = SeedPhrase::generate(rng);
         let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
         let fvk = sk.full_viewing_key();
         let ivk = fvk.incoming();
@@ -238,19 +313,21 @@ mod tests {
             asset_2: asset::REGISTRY.parse_denom("nala").unwrap().id(),
         };
 
-        let swap = SwapPlaintext {
+        let swap = SwapPlaintext::new(
+            &mut rng,
             trading_pair,
-            delta_1_i: 100000u64.into(),
-            delta_2_i: 1u64.into(),
-            claim_fee: Fee(Value {
+            100000u64.into(),
+            1u64.into(),
+            Fee(Value {
                 amount: 3u64.into(),
                 asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
             }),
-            claim_address: dest,
-        };
+            dest,
+        );
+
         let esk = ka::Secret::new(&mut rng);
 
-        let ciphertext = swap.encrypt(&esk);
+        let ciphertext = swap.encrypt(&esk).encrypted_swap;
         let diversified_basepoint = dest.diversified_generator();
         let transmission_key = swap.transmission_key();
         let plaintext =

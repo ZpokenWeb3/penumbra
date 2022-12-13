@@ -14,9 +14,11 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use pd::testnet::{canonicalize_path, generate_tm_config, write_configs, ValidatorKeys};
 use penumbra_chain::{genesis::Allocation, params::ChainParameters};
 use penumbra_component::stake::{validator::Validator, FundingStream, FundingStreams};
-use penumbra_crypto::{keys::SpendKey, DelegationToken, GovernanceKey};
+use penumbra_crypto::{keys::SpendKey, stake::DelegationToken, GovernanceKey};
 use penumbra_proto::client::v1alpha1::{
-    oblivious_query_server::ObliviousQueryServer, specific_query_server::SpecificQueryServer,
+    oblivious_query_service_server::ObliviousQueryServiceServer,
+    specific_query_service_server::SpecificQueryServiceServer,
+    tendermint_proxy_service_server::TendermintProxyServiceServer,
 };
 use penumbra_storage::Storage;
 use rand::Rng;
@@ -56,11 +58,13 @@ enum RootCommand {
         /// Bind the gRPC server to this port.
         #[clap(short, long, default_value = "8080")]
         grpc_port: u16,
-        /// Bind the metrics endpoint to this port.
+        /// bind the metrics endpoint to this port.
         #[clap(short, long, default_value = "9000")]
         metrics_port: u16,
+        /// Proxy Tendermint requests against the gRPC server to this address.
+        #[clap(short, long, default_value = "http://127.0.0.1:26657")]
+        tendermint_addr: url::Url,
     },
-
     /// Generate, join, or reset a testnet.
     Testnet {
         /// Path to directory to store output in. Must not exist. Defaults to
@@ -79,14 +83,14 @@ enum TestnetCommand {
     /// configuration.
     Generate {
         /// Number of blocks per epoch.
-        #[clap(long, default_value = "719")]
-        epoch_duration: u64,
+        #[clap(long)]
+        epoch_duration: Option<u64>,
         /// Number of epochs before unbonding stake is released.
-        #[clap(long, default_value = "2")]
-        unbonding_epochs: u64,
+        #[clap(long)]
+        unbonding_epochs: Option<u64>,
         /// Maximum number of validators in the consensus set.
-        #[clap(long, default_value = "32")]
-        active_validator_limit: u64,
+        #[clap(long)]
+        active_validator_limit: Option<u64>,
         /// Whether to preserve the chain ID (useful for public testnets) or append a random suffix (useful for dev/testing).
         #[clap(long)]
         preserve_chain_id: bool,
@@ -164,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
             abci_port,
             grpc_port,
             metrics_port,
+            tendermint_addr,
         } => {
             tracing::info!(?host, ?abci_port, ?grpc_port, "starting pd");
 
@@ -177,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
             let consensus = pd::Consensus::new(storage.clone()).await?;
             let mempool = pd::Mempool::new(storage.clone()).await?;
             let info = pd::Info::new(storage.clone());
+            let tm_proxy = pd::TendermintProxy::new(tendermint_addr);
             let snapshot = pd::Snapshot {};
 
             let abci_server = tokio::task::Builder::new()
@@ -206,8 +212,15 @@ async fn main() -> anyhow::Result<()> {
                         // Allow HTTP/1, which will be used by grpc-web connections.
                         .accept_http1(true)
                         // Wrap each of the gRPC services in a tonic-web proxy:
-                        .add_service(tonic_web::enable(ObliviousQueryServer::new(info.clone())))
-                        .add_service(tonic_web::enable(SpecificQueryServer::new(info.clone())))
+                        .add_service(tonic_web::enable(ObliviousQueryServiceServer::new(
+                            info.clone(),
+                        )))
+                        .add_service(tonic_web::enable(SpecificQueryServiceServer::new(
+                            info.clone(),
+                        )))
+                        .add_service(tonic_web::enable(TendermintProxyServiceServer::new(
+                            tm_proxy.clone(),
+                        )))
                         .serve(
                             format!("{}:{}", host, grpc_port)
                                 .parse()
@@ -229,7 +242,7 @@ async fn main() -> anyhow::Result<()> {
             Stack::new(recorder)
                 // Adding the `TracingContextLayer` will add labels from the tracing span to metrics.
                 // The only labels to be included are "chain_id" and "role".
-                .push(TracingContextLayer::only_allow(&["chain_id", "role"]))
+                .push(TracingContextLayer::only_allow(["chain_id", "role"]))
                 .install()
                 .expect("global recorder already installed");
 
@@ -240,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
             pd::register_metrics();
 
             // TODO: better error reporting
-            // We error out if either service errors, rather than keep running
+            // We error out if a service errors, rather than keep running
             tokio::select! {
                 x = abci_server => x?.map_err(|e| anyhow::anyhow!(e))?,
                 x = grpc_server => x?.map_err(|e| anyhow::anyhow!(e))?,
@@ -284,6 +297,7 @@ async fn main() -> anyhow::Result<()> {
 
             tracing::info!("fetching genesis");
             // We need to download the genesis data and the node ID from the remote node.
+            // TODO: replace with TendermintProxyServiceClient
             let client = reqwest::Client::new();
             let genesis_json = client
                 .get(format!("http://{}:26657/genesis", node))
@@ -313,12 +327,47 @@ async fn main() -> anyhow::Result<()> {
             let node_id = serde_json::value::from_value(node_id)?;
             tracing::info!(?node_id, "fetched node id");
 
+            // Crawl the node's
+            let net_info_peers = client
+                .get(format!("http://{}:26657/net_info", node))
+                .send()
+                .await?
+                .json::<serde_json::Value>()
+                .await?
+                .get("result")
+                .and_then(|v| v.get("peers"))
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let mut peers = Vec::new();
+            peers.push((node_id, node));
+            tracing::info!(?peers);
+
+            for raw_peer in net_info_peers {
+                let node_id: Option<tendermint::node::Id> = raw_peer
+                    .get("node_info")
+                    .and_then(|v| v.get("id"))
+                    .and_then(|v| serde_json::value::from_value(v.clone()).ok());
+                let remote_ip = raw_peer
+                    .get("remote_ip")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                match (node_id, remote_ip) {
+                    (Some(node_id), Some(remote_ip)) => {
+                        peers.push((node_id, remote_ip));
+                    }
+                    _ => continue,
+                }
+            }
+            tracing::info!(?peers);
+
             let node_name = if let Some(moniker) = moniker {
                 moniker
             } else {
                 format!("node-{}", hex::encode(OsRng.gen::<u32>().to_le_bytes()))
             };
-            let tm_config = generate_tm_config(&node_name, &[(node_id, node)]);
+            let tm_config = generate_tm_config(&node_name, peers.as_ref());
 
             write_configs(node_dir, &vk, &genesis, tm_config)?;
         }
@@ -357,13 +406,13 @@ async fn main() -> anyhow::Result<()> {
                     let randomizer = OsRng.gen::<u32>();
                     let chain_id =
                         chain_id.unwrap_or_else(|| env!("PD_LATEST_TESTNET_NAME").to_string());
-                    format!("{}-{}", chain_id, hex::encode(&randomizer.to_le_bytes()))
+                    format!("{}-{}", chain_id, hex::encode(randomizer.to_le_bytes()))
                 }
             };
 
             use pd::testnet::*;
             use penumbra_chain::genesis;
-            use penumbra_crypto::{Address, IdentityKey};
+            use penumbra_crypto::{stake::IdentityKey, Address};
             use tendermint::{node, public_key::Algorithm, Genesis, Time};
 
             let genesis_time = Time::from_unix_timestamp(
@@ -511,6 +560,12 @@ async fn main() -> anyhow::Result<()> {
                     })
                 })
                 .collect::<Result<Vec<Validator>, anyhow::Error>>()?;
+
+            let default_params = ChainParameters::default();
+            let active_validator_limit =
+                active_validator_limit.unwrap_or(default_params.active_validator_limit);
+            let epoch_duration = epoch_duration.unwrap_or(default_params.epoch_duration);
+            let unbonding_epochs = unbonding_epochs.unwrap_or(default_params.unbonding_epochs);
 
             let app_state = genesis::AppState {
                 allocations: allocations.clone(),

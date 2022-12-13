@@ -104,6 +104,7 @@ impl FromStr for Value {
 #[cfg(test)]
 mod tests {
     use decaf377::Fr;
+    use rand_core::OsRng;
     use std::ops::Deref;
 
     use crate::{
@@ -218,7 +219,8 @@ mod tests {
 
         // Swap NFTs have no associated denom, make sure we can roundtrip parse/format.
         let gm_base_denom = asset::REGISTRY.parse_denom("ugm").unwrap();
-        let sp = SwapPlaintext::from_parts(
+        let sp = SwapPlaintext::new(
+            &mut OsRng,
             TradingPair::new(
                 asset::Id::from(gm_base_denom),
                 asset::Id::from(upenumbra_base_denom),
@@ -227,10 +229,10 @@ mod tests {
             0u64.into(),
             Fee::default(),
             Address::from_str("penumbrav2t13vh0fkf3qkqjacpm59g23ufea9n5us45e4p5h6hty8vg73r2t8g5l3kynad87u0n9eragf3hhkgkhqe5vhngq2cw493k48c9qg9ms4epllcmndd6ly4v4dw2jcnxaxzjqnlvnw").unwrap()
-        ).unwrap();
+        );
         let v3: Value = Value {
             amount: 1u64.into(),
-            asset_id: sp.asset_id(),
+            asset_id: asset::Id(sp.swap_commitment().0),
         };
         let asset_id = v3.format(&cache);
         assert_eq!(v3, asset_id.parse().unwrap());
@@ -254,7 +256,8 @@ mod tests {
         let v2: Value = "1000upenumbra".parse().unwrap();
         let v3: Value = "4000000upenumbra".parse().unwrap();
         // Swap NFTs have no associated denom, make sure the formatter doesn't blow up.
-        let sp = SwapPlaintext::from_parts(
+        let sp = SwapPlaintext::new(
+            &mut OsRng,
             TradingPair::new(
                 asset::Id::from(gm_base_denom),
                 asset::Id::from(upenumbra_base_denom),
@@ -263,10 +266,10 @@ mod tests {
             0u64.into(),
             Fee::default(),
             Address::from_str("penumbrav2t13vh0fkf3qkqjacpm59g23ufea9n5us45e4p5h6hty8vg73r2t8g5l3kynad87u0n9eragf3hhkgkhqe5vhngq2cw493k48c9qg9ms4epllcmndd6ly4v4dw2jcnxaxzjqnlvnw").unwrap()
-        ).unwrap();
+        );
         let v4: Value = Value {
             amount: 1u64.into(),
-            asset_id: sp.asset_id(),
+            asset_id: asset::Id(sp.swap_commitment().0),
         };
 
         assert_eq!(v1.format(&cache), "999upenumbra");

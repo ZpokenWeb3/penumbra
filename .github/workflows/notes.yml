@@ -26,6 +26,9 @@ jobs:
       - name: Load get-version action to grab version component of deployment path
         uses: battila7/get-version-action@v2
         id: get_version
+      - name: Print version component of deployment path
+        run: |
+          echo ${{ steps.get_version.outputs.version }}
       - name: Install mdbook
         run: |
           cargo install mdbook mdbook-katex mdbook-mermaid
@@ -82,8 +85,9 @@ jobs:
             -p ark-serialize \
             -p ark-sponge \
             -p poseidon377 \
-            -p poseidon-paramgen \
-            -p decaf377 \
+            -p https://github.com/rust-lang/crates.io-index#poseidon-paramgen@0.1.0 \
+            -p poseidon-permutation \
+            -p https://github.com/penumbra-zone/decaf377#0.1.0 \
             -p decaf377-rdsa \
             -p decaf377-fmd \
             -p decaf377-ka \
@@ -125,7 +129,8 @@ jobs:
           cd docs/protocol
           if [ -d "firebase-tmp" ]; then rm -rf firebase-tmp; fi
           mkdir firebase-tmp
-          mv book firebase-tmp/${{ steps.get_version.outputs.version }}
+          mv book/html firebase-tmp/${{ steps.get_version.outputs.version }}
+          tree firebase-tmp
       - name: Deploy protocol spec to firebase
         uses: w9jds/firebase-action@v2.0.0
         with:
@@ -143,7 +148,8 @@ jobs:
           cd docs/guide
           if [ -d "firebase-tmp" ]; then rm -rf firebase-tmp; fi
           mkdir firebase-tmp
-          mv book firebase-tmp/${{ steps.get_version.outputs.version }}
+          mv book/html firebase-tmp/${{ steps.get_version.outputs.version }}
+          tree firebase-tmp
       - name: Deploy software guide to firebase
         uses: w9jds/firebase-action@v2.0.0
         with:

@@ -13,13 +13,10 @@ use penumbra_component::{
 };
 use penumbra_proto::{
     client::v1alpha1::{
-        oblivious_query_server::ObliviousQuery, AssetListRequest, ChainParamsRequest,
-        CompactBlockRangeRequest, MutableParametersRequest, ValidatorInfoRequest,
-    },
-    core::{
-        chain::v1alpha1::{ChainParameters, CompactBlock, KnownAssets},
-        governance::v1alpha1::MutableChainParameter,
-        stake::v1alpha1::ValidatorInfo,
+        oblivious_query_service_server::ObliviousQueryService, AssetListRequest, AssetListResponse,
+        ChainParametersRequest, ChainParametersResponse, CompactBlockRangeRequest,
+        CompactBlockRangeResponse, MutableParametersRequest, MutableParametersResponse,
+        ValidatorInfoRequest, ValidatorInfoResponse,
     },
     Protobuf,
 };
@@ -56,29 +53,33 @@ impl Drop for CompactBlockConnectionCounter {
 use super::Info;
 
 #[tonic::async_trait]
-impl ObliviousQuery for Info {
-    type CompactBlockRangeStream =
-        Pin<Box<dyn futures::Stream<Item = Result<CompactBlock, tonic::Status>> + Send>>;
+impl ObliviousQueryService for Info {
+    type CompactBlockRangeStream = Pin<
+        Box<dyn futures::Stream<Item = Result<CompactBlockRangeResponse, tonic::Status>> + Send>,
+    >;
 
     type ValidatorInfoStream =
-        Pin<Box<dyn futures::Stream<Item = Result<ValidatorInfo, tonic::Status>> + Send>>;
+        Pin<Box<dyn futures::Stream<Item = Result<ValidatorInfoResponse, tonic::Status>> + Send>>;
 
-    type MutableParametersStream =
-        Pin<Box<dyn futures::Stream<Item = Result<MutableChainParameter, tonic::Status>> + Send>>;
+    type MutableParametersStream = Pin<
+        Box<dyn futures::Stream<Item = Result<MutableParametersResponse, tonic::Status>> + Send>,
+    >;
 
     #[instrument(skip(self, request))]
     async fn chain_parameters(
         &self,
-        request: tonic::Request<ChainParamsRequest>,
-    ) -> Result<tonic::Response<ChainParameters>, Status> {
-        let state = self.storage.state();
+        request: tonic::Request<ChainParametersRequest>,
+    ) -> Result<tonic::Response<ChainParametersResponse>, Status> {
+        let state = self.storage.latest_state();
         state.check_chain_id(&request.get_ref().chain_id).await?;
 
         let chain_params = state.get_chain_params().await.map_err(|e| {
             tonic::Status::unavailable(format!("error getting chain parameters: {}", e))
         })?;
 
-        Ok(tonic::Response::new(chain_params.into()))
+        Ok(tonic::Response::new(ChainParametersResponse {
+            chain_parameters: Some(chain_params.into()),
+        }))
     }
 
     #[instrument(skip(self, request))]
@@ -86,25 +87,29 @@ impl ObliviousQuery for Info {
         &self,
         request: tonic::Request<MutableParametersRequest>,
     ) -> Result<tonic::Response<Self::MutableParametersStream>, Status> {
-        let state = self.storage.state();
+        let state = self.storage.latest_state();
         state.check_chain_id(&request.get_ref().chain_id).await?;
 
         let mutable_params = MutableParam::iter();
 
-        let s = try_stream! {
+        let stream = try_stream! {
             for param in mutable_params {
                 yield param.to_proto();
             }
         };
 
         Ok(tonic::Response::new(
-            s.map_err(|e: anyhow::Error| {
-                // Should be impossible, but.
-                tonic::Status::unavailable(format!("error getting mutable params: {}", e))
-            })
-            // TODO: how do we instrument a Stream
-            //.instrument(Span::current())
-            .boxed(),
+            stream
+                .map_ok(|params| MutableParametersResponse {
+                    chain_parameter: Some(params),
+                })
+                .map_err(|e: anyhow::Error| {
+                    // Should be impossible, but.
+                    tonic::Status::unavailable(format!("error getting mutable params: {}", e))
+                })
+                // TODO: how do we instrument a Stream
+                //.instrument(Span::current())
+                .boxed(),
         ))
     }
 
@@ -112,14 +117,16 @@ impl ObliviousQuery for Info {
     async fn asset_list(
         &self,
         request: tonic::Request<AssetListRequest>,
-    ) -> Result<tonic::Response<KnownAssets>, Status> {
-        let state = self.storage.state();
+    ) -> Result<tonic::Response<AssetListResponse>, Status> {
+        let state = self.storage.latest_state();
         state.check_chain_id(&request.get_ref().chain_id).await?;
 
         let known_assets = state.known_assets().await.map_err(|e| {
             tonic::Status::unavailable(format!("error getting known assets: {}", e))
         })?;
-        Ok(tonic::Response::new(known_assets.into()))
+        Ok(tonic::Response::new(AssetListResponse {
+            asset_list: Some(known_assets.into()),
+        }))
     }
 
     #[instrument(skip(self, request), fields(show_inactive = request.get_ref().show_inactive))]
@@ -127,7 +134,7 @@ impl ObliviousQuery for Info {
         &self,
         request: tonic::Request<ValidatorInfoRequest>,
     ) -> Result<tonic::Response<Self::ValidatorInfoStream>, Status> {
-        let state = self.storage.state();
+        let state = self.storage.latest_state();
         state.check_chain_id(&request.get_ref().chain_id).await?;
 
         let validators = state
@@ -137,8 +144,8 @@ impl ObliviousQuery for Info {
 
         let show_inactive = request.get_ref().show_inactive;
         let s = try_stream! {
-            for identity_key in validators {
-                let info = state.validator_info(&identity_key)
+            for v in validators {
+                let info = state.validator_info(&v.identity_key)
                     .await?
                     .expect("known validator must be present");
                 // Slashed and inactive validators are not shown by default.
@@ -150,7 +157,10 @@ impl ObliviousQuery for Info {
         };
 
         Ok(tonic::Response::new(
-            s.map_err(|e: anyhow::Error| {
+            s.map_ok(|info| ValidatorInfoResponse {
+                validator_info: Some(info),
+            })
+            .map_err(|e: anyhow::Error| {
                 tonic::Status::unavailable(format!("error getting validator info: {}", e))
             })
             // TODO: how do we instrument a Stream
@@ -171,7 +181,7 @@ impl ObliviousQuery for Info {
         &self,
         request: tonic::Request<CompactBlockRangeRequest>,
     ) -> Result<tonic::Response<Self::CompactBlockRangeStream>, Status> {
-        let state = self.storage.state();
+        let state = self.storage.latest_state();
         state.check_chain_id(&request.get_ref().chain_id).await?;
 
         let CompactBlockRangeRequest {
@@ -227,7 +237,7 @@ impl ObliviousQuery for Info {
                 let storage2 = storage.clone();
                 tokio::spawn(async move {
                     for height in start_height..=end_height {
-                        let state3 = storage2.state();
+                        let state3 = storage2.latest_state();
                         let _ = block_fetch_tx
                             .send(tokio::spawn(
                                 async move { state3.compact_block(height).await },
@@ -312,9 +322,12 @@ impl ObliviousQuery for Info {
         // manage load, etc.
         //
         // for now, assume that we can do c10k or whatever and don't worry about it.
-
         Ok(tonic::Response::new(
-            tokio_stream::wrappers::ReceiverStream::new(rx).boxed(),
+            tokio_stream::wrappers::ReceiverStream::new(rx)
+                .map_ok(|block| CompactBlockRangeResponse {
+                    compact_block: Some(block),
+                })
+                .boxed(),
         ))
     }
 }

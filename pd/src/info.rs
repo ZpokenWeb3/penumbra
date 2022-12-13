@@ -5,7 +5,6 @@ use std::{
 };
 
 use futures::FutureExt;
-//use penumbra_storage::{get_with_proof, AppHash, State, Storage};
 use penumbra_chain::AppHashRead;
 use penumbra_storage::Storage;
 use tendermint::abci::{self, response::Echo, InfoRequest, InfoResponse};
@@ -20,8 +19,13 @@ mod specific;
 const ABCI_INFO_VERSION: &str = env!("VERGEN_GIT_SEMVER");
 const APP_VERSION: u64 = 1;
 
+/// Implements service traits for Tonic gRPC services.
+///
+/// The fields of this struct are the configuration and data
+/// necessary to the gRPC services.
 #[derive(Clone, Debug)]
 pub struct Info {
+    /// Storage interface for retrieving chain state.
     storage: Storage,
     // height_rx: watch::Receiver<block::Height>,
 }
@@ -32,7 +36,7 @@ impl Info {
     }
 
     async fn info(&self, info: abci::request::Info) -> Result<abci::response::Info, anyhow::Error> {
-        let state = self.storage.state();
+        let state = self.storage.latest_state();
         tracing::info!(?info, version = ?state.version());
 
         let last_block_height = match state.version() {
@@ -69,15 +73,11 @@ impl Info {
                 let _height: u64 = query.height.into();
                 let key = hex::decode(&query.data).unwrap_or_else(|_| query.data.to_vec());
 
-                let state = self.storage.state();
-                let _height = state.version();
+                let state = self.storage.latest_state();
+                let height = state.version();
 
-                // TODO: align types (check storage/src/app_hash.rs::get_with_proof)
-                // where should that logic go?
-                let (_value, _proof) = state.get_with_proof(key).await?;
-                // let (value, proof) = get_with_proof(&store, key, height).await?;
+                let (value, proof) = state.get_with_proof_to_apphash_tm(key).await?;
 
-                /*
                 Ok(abci::response::Query {
                     code: 0,
                     key: query.data,
@@ -89,9 +89,6 @@ impl Info {
                     info: "".to_string(),
                     index: 0,
                 })
-                 */
-                // TODO: restore
-                Ok(Default::default())
             }
             _ => {
                 // TODO: handle unrecognized path

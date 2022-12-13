@@ -1,16 +1,17 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, pin::Pin, str::FromStr};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 use penumbra_crypto::{
     asset::Amount,
     rdsa::{SpendAuth, VerificationKey},
-    Address, IdentityKey, Value, STAKING_TOKEN_ASSET_ID,
+    stake::IdentityKey,
+    Address, Value, STAKING_TOKEN_ASSET_ID,
 };
+use penumbra_proto::{StateReadProto, StateWriteProto};
 use penumbra_storage::{StateRead, StateWrite};
 use penumbra_transaction::action::{Proposal, ProposalPayload, Vote};
-
-use crate::stake::{self, validator};
 
 use super::{
     proposal::{self, ProposalList},
@@ -106,11 +107,16 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
 
     /// Get the list of validators who voted on a proposal.
     async fn voting_validators(&self, proposal_id: u64) -> Result<Vec<IdentityKey>> {
-        Ok(self
-            .get::<stake::validator::List, _>(&state_key::voting_validators(proposal_id))
-            .await?
-            .unwrap_or_default()
-            .0)
+        let k = state_key::voting_validators_list(proposal_id);
+        let mut range: Pin<Box<dyn Stream<Item = Result<(String, Vote)>> + Send + '_>> =
+            self.prefix(&k);
+
+        range
+            .next()
+            .await
+            .into_iter()
+            .map(|r| IdentityKey::from_str(r?.0.rsplit('/').next().context("invalid key")?))
+            .collect()
     }
 
     /// Get the vote of a validator on a particular proposal.
@@ -142,9 +148,9 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
     async fn total_voting_power(&self) -> Result<u64> {
         let mut total = 0;
 
-        for identity_key in self.validator_list().await? {
+        for v in self.validator_list().await? {
             total += self
-                .validator_power(&identity_key)
+                .validator_power(&v.identity_key)
                 .await?
                 .unwrap_or_default();
         }
@@ -180,12 +186,6 @@ pub trait StateWriteExt: StateWrite {
         self.put(
             state_key::proposal_payload(proposal_id),
             proposal.payload.clone(),
-        );
-
-        // Set the list of validators who have voted to the empty list
-        self.put(
-            state_key::voting_validators(proposal_id),
-            validator::List::default(),
         );
 
         // Return the new proposal id
@@ -270,15 +270,6 @@ pub trait StateWriteExt: StateWrite {
     ) {
         // Record the vote
         self.put(state_key::validator_vote(proposal_id, identity_key), vote);
-
-        // Record the fact that this validator has voted on this proposal
-        let mut voting_validators = self
-            .get::<stake::validator::List, _>(&state_key::voting_validators(proposal_id))
-            .await
-            .expect("can fetch voting validators")
-            .unwrap_or_default();
-        voting_validators.0.push(identity_key);
-        self.put(state_key::voting_validators(proposal_id), voting_validators);
     }
 
     /// Set the proposal voting end block height for a proposal.

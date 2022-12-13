@@ -1,130 +1,26 @@
-use std::{any::Any, cmp::Ordering, collections::BTreeMap, fmt::Debug, pin::Pin};
+use std::{any::Any, cmp::Ordering, collections::BTreeMap, pin::Pin};
 
 use anyhow::Result;
 
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use penumbra_proto::{Message, Protobuf};
 
 /// Read access to chain state.
-// This needs to be a trait because we want to implement it over both `State` and `StateTransaction`,
-// mainly to support RPC methods.
 #[async_trait]
 pub trait StateRead: Send + Sync {
     /// Gets a value from the verifiable key-value store as raw bytes.
     ///
-    /// Users should generally prefer to use [`get`](Self::get) or [`get_proto`](Self::get_proto).
+    /// Users should generally prefer to use `get` or `get_proto` from an extension trait.
     async fn get_raw(&self, key: &str) -> Result<Option<Vec<u8>>>;
-
-    /// Gets a value from the verifiable key-value store as a domain type.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(v))` if the value is present and parseable as a domain type `D`;
-    /// * `Ok(None)` if the value is missing;
-    /// * `Err(_)` if the value is present but not parseable as a domain type `D`, or if an underlying storage error occurred.
-    async fn get<D, P>(&self, key: &str) -> Result<Option<D>>
-    where
-        D: Protobuf<P>,
-        // TODO: does this get less awful if P is an associated type of D?
-        P: Message + Default,
-        P: From<D>,
-        D: TryFrom<P> + Clone + Debug,
-        <D as TryFrom<P>>::Error: Into<anyhow::Error>,
-    {
-        match self.get_proto(key).await {
-            Ok(Some(p)) => match D::try_from(p) {
-                Ok(d) => {
-                    tracing::trace!(?key, value = ?d);
-                    Ok(Some(d))
-                }
-                Err(e) => Err(e.into()),
-            },
-            Ok(None) => {
-                tracing::trace!(?key, "no entry in tree");
-                Ok(None)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Gets a value from the verifiable key-value store as a proto type.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(v))` if the value is present and parseable as a proto type `P`;
-    /// * `Ok(None)` if the value is missing;
-    /// * `Err(_)` if the value is present but not parseable as a proto type `P`, or if an underlying storage error occurred.
-    async fn get_proto<P>(&self, key: &str) -> Result<Option<P>>
-    where
-        P: Message + Default + Debug,
-    {
-        let bytes = match self.get_raw(key).await? {
-            None => return Ok(None),
-            Some(bytes) => bytes,
-        };
-
-        Message::decode(bytes.as_slice())
-            .map_err(|e| anyhow::anyhow!(e))
-            .map(|v| Some(v))
-    }
-
-    /// Retrieve all values for keys matching a prefix from consensus-critical state, as domain types.
-    #[allow(clippy::type_complexity)]
-    fn prefix<'a, D, P>(
-        &'a self,
-        prefix: &'a str,
-    ) -> Pin<Box<dyn Stream<Item = Result<(String, D)>> + Send + 'a>>
-    where
-        D: Protobuf<P>,
-        P: Message + Default + 'static,
-        P: From<D>,
-        D: TryFrom<P> + Clone + Debug,
-        <D as TryFrom<P>>::Error: Into<anyhow::Error>,
-    {
-        Box::pin(self.prefix_proto(prefix).map(|p| match p {
-            Ok(p) => match D::try_from(p.1) {
-                Ok(d) => Ok((p.0, d)),
-                Err(e) => Err(e.into()),
-            },
-            Err(e) => Err(e),
-        }))
-    }
-
-    /// Retrieve all values for keys matching a prefix from the verifiable key-value store, as proto types.
-    #[allow(clippy::type_complexity)]
-    fn prefix_proto<'a, D, P>(
-        &'a self,
-        prefix: &'a str,
-    ) -> Pin<Box<dyn Stream<Item = Result<(String, P)>> + Send + 'a>>
-    where
-        D: Protobuf<P>,
-        P: Message + Default,
-        P: From<D>,
-        D: TryFrom<P> + Clone + Debug,
-        <D as TryFrom<P>>::Error: Into<anyhow::Error>,
-    {
-        let o = self.prefix_raw(prefix).map(|r| {
-            r.and_then(|(key, bytes)| {
-                Ok((
-                    key,
-                    Message::decode(&*bytes).map_err(|e| anyhow::anyhow!(e))?,
-                ))
-            })
-        });
-        Box::pin(o)
-    }
 
     /// Retrieve all values for keys matching a prefix from the verifiable key-value store, as raw bytes.
     ///
-    /// Users should generally prefer to use [`prefix`](Self::prefix) or [`prefix_proto`](Self::prefix_proto).
+    /// Users should generally prefer to use `prefix` or `prefix_proto` from an extension trait.
     #[allow(clippy::type_complexity)]
     fn prefix_raw<'a>(
         &'a self,
         prefix: &'a str,
-        // TODO: it might be possible to make this zero-allocation by representing the key as a `Box<&str>` but
-        // the lifetimes weren't working out, so allocating a new `String` was easier for now.
     ) -> Pin<Box<dyn Stream<Item = Result<(String, Vec<u8>)>> + Sync + Send + 'a>>;
 
     /// Gets a byte value from the non-verifiable key-value store.
@@ -132,6 +28,15 @@ pub trait StateRead: Send + Sync {
     /// This is intended for application-specific indexes of the verifiable
     /// consensus state, rather than for use as a primary data storage method.
     async fn nonconsensus_get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
+
+    /// Retrieve all values for keys matching a prefix from the non-verifiable key-value store, as raw bytes.
+    ///
+    /// Users should generally prefer to use wrapper methods in an extension trait.
+    #[allow(clippy::type_complexity)]
+    fn nonconsensus_prefix_raw<'a>(
+        &'a self,
+        prefix: &'a [u8],
+    ) -> Pin<Box<dyn Stream<Item = Result<(Vec<u8>, Vec<u8>)>> + Sync + Send + 'a>>;
 
     /// Gets an object from the ephemeral key-object store.
     ///
@@ -237,7 +142,34 @@ pub(crate) fn prefix_raw_with_cache<'a>(
     Box::pin(merged)
 }
 
-//#[async_trait(?Send)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn nonconsensus_prefix_raw_with_cache<'a>(
+    sr: &'a impl StateRead,
+    cache: &'a BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+    prefix: &'a [u8],
+) -> Pin<Box<dyn Stream<Item = Result<(Vec<u8>, Vec<u8>)>> + Send + Sync + 'a>> {
+    // Interleave the unwritten_changes cache with the snapshot.
+    let state_stream = sr
+        .nonconsensus_prefix_raw(prefix)
+        .map(move |r| r.map(move |(k, v)| (k, Some(v))));
+
+    // Range the unwritten_changes cache (sorted by key) starting with the keys matching the prefix,
+    // until we reach the keys that no longer match the prefix.
+    let unwritten_changes_iter = cache
+        .range(prefix.to_vec()..)
+        .take_while(move |(k, _)| (**k).starts_with(prefix))
+        .map(|(k, v)| (k.clone(), v.clone()));
+
+    // Merge the cache iterator and state stream into a single stream.
+    let merged = merge_cache(unwritten_changes_iter, state_stream);
+
+    // Skip all the `None` values, as they were deleted.
+    let merged =
+        merged.filter_map(|r| async { r.map(|(k, v)| v.map(move |v| (k, v))).transpose() });
+
+    Box::pin(merged)
+}
+
 #[async_trait]
 impl<'a, S: StateRead + Send + Sync> StateRead for &'a S {
     async fn get_raw(&self, key: &str) -> Result<Option<Vec<u8>>> {
@@ -249,6 +181,13 @@ impl<'a, S: StateRead + Send + Sync> StateRead for &'a S {
         prefix: &'b str,
     ) -> Pin<Box<dyn Stream<Item = Result<(String, Vec<u8>)>> + Sync + Send + 'b>> {
         (**self).prefix_raw(prefix)
+    }
+
+    fn nonconsensus_prefix_raw<'b>(
+        &'b self,
+        prefix: &'b [u8],
+    ) -> Pin<Box<dyn Stream<Item = Result<(Vec<u8>, Vec<u8>)>> + Sync + Send + 'b>> {
+        (**self).nonconsensus_prefix_raw(prefix)
     }
 
     async fn nonconsensus_get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
@@ -271,6 +210,13 @@ impl<'a, S: StateRead + Send + Sync> StateRead for &'a mut S {
         prefix: &'b str,
     ) -> Pin<Box<dyn Stream<Item = Result<(String, Vec<u8>)>> + Sync + Send + 'b>> {
         (**self).prefix_raw(prefix)
+    }
+
+    fn nonconsensus_prefix_raw<'b>(
+        &'b self,
+        prefix: &'b [u8],
+    ) -> Pin<Box<dyn Stream<Item = Result<(Vec<u8>, Vec<u8>)>> + Sync + Send + 'b>> {
+        (**self).nonconsensus_prefix_raw(prefix)
     }
 
     async fn nonconsensus_get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {

@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM rust:1-bullseye AS build-env
+FROM --platform=$BUILDPLATFORM rust:1.65.0-bullseye AS build-env
 
 RUN rustup component add rustfmt
 
@@ -75,7 +75,7 @@ RUN addgroup --gid 1000 -S penumbra && adduser --uid 1000 -S penumbra -G penumbr
 FROM busybox:1.34.1-musl AS busybox-full
 
 # Use TARGETARCH image for determining necessary libs
-FROM rust:1-bullseye as target-arch-libs
+FROM rust:1.65.0-bullseye as target-arch-libs
 RUN apt update && apt install -y clang libssl1.1 openssl
 
 # Determine library dependencies of built binaries and copy to indexed path in /root/lib_abs for copying to final image.
@@ -83,13 +83,13 @@ RUN apt update && apt install -y clang libssl1.1 openssl
 COPY --from=build-env /root/bin /root/bin
 RUN mkdir -p /root/lib_abs && touch /root/lib_abs.list
 RUN bash -c \
-  'for BIN in /root/bin/*; do \
-    readarray -t LIBS < <(ldd "$BIN"); \
+  'readarray -t LIBS < <( for b in $(ls -1 /root/bin/* | sort -u) ; do ldd $b | awk "{print \$1, \$2, \$3 }" | sort -u; done | sort -u ; ) ; \
     i=0; for LIB in "${LIBS[@]}"; do \
       PATH1=$(echo $LIB | awk "{print \$1}") ; \
       if [ "$PATH1" = "linux-vdso.so.1" ]; then continue; fi; \
+      if [ "$PATH1" = "/lib/ld-linux-aarch64.so.1" ]; then continue; fi; \
       PATH2=$(echo $LIB | awk "{print \$3}") ; \
-      if [ ! -z "$PATH2" ]; then \
+      if [ -n "$PATH2" ]; then \
         cp $PATH2 /root/lib_abs/$i ; \
         echo $PATH2 >> /root/lib_abs.list; \
       else \
@@ -97,7 +97,6 @@ RUN bash -c \
         echo $PATH1 >> /root/lib_abs.list; \
       fi; \
       ((i = i + 1)) ;\
-    done; \
   done'
 
 # Build final image from scratch
@@ -156,4 +155,4 @@ USER penumbra
 ARG DATABASE_URL
 ENV DATABASE_URL=$DATABASE_URL
 ENV RUST_LOG=warn,pd=info,penumbra=info
-CMD [ "/usr/bin/pd" ]
+CMD [ "/bin/pd" ]
