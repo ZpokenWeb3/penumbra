@@ -51,6 +51,7 @@ fn main() -> Result<()> {
     // See https://docs.rs/prost-build/0.5.0/prost_build/struct.Config.html#method.extern_path
     config.extern_path(".ibc", "::ibc_proto::ibc");
     config.extern_path(".ics23", "::ics23");
+    //    config.extern_path(".google.protobuf.Any", "::prost_wkt_types::Any");
     // The same applies for some of the tendermint types.
     // config.extern_path(
     //     ".tendermint.types.Validator",
@@ -60,6 +61,7 @@ fn main() -> Result<()> {
     //     ".tendermint.p2p.DefaultNodeInfo",
     //     "::tendermint::p2p::DefaultNodeInfo",
     // );
+    //
 
     config.compile_protos(
         &[
@@ -86,8 +88,14 @@ fn main() -> Result<()> {
         .client_mod_attribute("penumbra.view.v1alpha1", "#[cfg(feature = \"rpc\")]")
         .server_mod_attribute("penumbra.custody.v1alpha1", "#[cfg(feature = \"rpc\")]")
         .client_mod_attribute("penumbra.custody.v1alpha1", "#[cfg(feature = \"rpc\")]")
-        .server_mod_attribute("cosmos.base.tendermint.v1beta1", "#[cfg(feature = \"rpc\")]")
-        .client_mod_attribute("cosmos.base.tendermint.v1beta1", "#[cfg(feature = \"rpc\")]")
+        .server_mod_attribute(
+            "cosmos.base.tendermint.v1beta1",
+            "#[cfg(feature = \"rpc\")]",
+        )
+        .client_mod_attribute(
+            "cosmos.base.tendermint.v1beta1",
+            "#[cfg(feature = \"rpc\")]",
+        )
         .compile_with_config(
             config,
             &[
@@ -129,6 +137,7 @@ static AS_BECH32_FULL_VIEWING_KEY: &str =
     r#"#[serde(with = "crate::serializers::bech32str::full_viewing_key")]"#;
 static AS_BECH32_LP_ID: &str = r#"#[serde(with = "crate::serializers::bech32str::lp_id")]"#;
 static AS_VOTE: &str = r#"#[serde(with = "crate::serializers::vote")]"#;
+static AS_ANY: &str = r#"#[serde(with = "crate::serializers::prost_any")]"#;
 
 static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     (".penumbra.core.stake.v1alpha1.Validator", SERIALIZE),
@@ -273,7 +282,11 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
     (".penumbra.core.chain.v1alpha1.GenesisAppState", SERIALIZE),
     (".penumbra.core.chain.v1alpha1.GenesisAllocation", SERIALIZE),
     (".penumbra.core.chain.v1alpha1.Ratio", SERIALIZE),
-    (".penumbra.core.transaction.v1alpha1.AuthHash", SERIALIZE),
+    (".penumbra.core.transaction.v1alpha1.EffectHash", SERIALIZE),
+    (
+        ".penumbra.core.transaction.v1alpha1.AuthorizationData",
+        SERIALIZE,
+    ),
     (
         ".penumbra.core.transaction.v1alpha1.TransactionPlan",
         SERIALIZE,
@@ -361,6 +374,7 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
         ".penumbra.core.dex.v1alpha1.MockFlowCiphertext",
         SERDE_TRANSPARENT,
     ),
+    (".penumbra.core.dex.v1alpha1.BareTradingFunction", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.TradingPair", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.TradingFunction", SERIALIZE),
     (".penumbra.core.dex.v1alpha1.Reserves", SERIALIZE),
@@ -411,11 +425,14 @@ static TYPE_ATTRIBUTES: &[(&str, &str)] = &[
         SERDE_TAG_OUTCOME,
     ),
     (
-        ".penumbra.core.transaction.v1alpha1.AuthHash",
+        ".penumbra.core.transaction.v1alpha1.EffectHash",
         SERDE_TRANSPARENT,
     ),
     (".penumbra.view.v1alpha1.SpendableNoteRecord", SERIALIZE),
     (".penumbra.view.v1alpha1.SwapRecord", SERIALIZE),
+    (".penumbra.custody.v1alpha1.AuthorizeRequest", SERIALIZE),
+    (".penumbra.custody.v1alpha1.AuthorizeResponse", SERIALIZE),
+    (".penumbra.custody.v1alpha1.PreAuthorization", SERIALIZE),
 ];
 
 static FIELD_ATTRIBUTES: &[(&str, &str)] = &[
@@ -602,7 +619,16 @@ static FIELD_ATTRIBUTES: &[(&str, &str)] = &[
     // see above re: prost issue #504
     ("penumbra.core.governance.v1alpha1.Vote.vote", AS_VOTE),
     (
-        ".penumbra.core.transaction.v1alpha1.AuthHash.inner",
+        ".penumbra.core.transaction.v1alpha1.EffectHash.inner",
         AS_HEX_FOR_BYTES,
     ),
+    (
+        ".penumbra.custody.v1alpha1.PreAuthorization.Ed25519.vk",
+        AS_BASE64,
+    ),
+    (
+        ".penumbra.custody.v1alpha1.PreAuthorization.Ed25519.sig",
+        AS_BASE64,
+    ),
+    ("penumbra.core.ibc.v1alpha1.IbcAction.raw_action", AS_ANY),
 ];

@@ -1,10 +1,8 @@
+use crate::ibc::client::ics02_validation;
 use crate::Component;
 use anyhow::Result;
 use async_trait::async_trait;
 use ibc::clients::ics07_tendermint;
-use ibc::clients::ics07_tendermint::client_state::TENDERMINT_CLIENT_STATE_TYPE_URL;
-use ibc::clients::ics07_tendermint::consensus_state::TENDERMINT_CONSENSUS_STATE_TYPE_URL;
-use ibc::clients::ics07_tendermint::header::TENDERMINT_HEADER_TYPE_URL;
 
 use ibc::{
     clients::ics07_tendermint::{
@@ -91,16 +89,10 @@ impl Component for Ics2Client {
 pub(crate) trait Ics2ClientExt: StateWrite {
     // execute a UpdateClient IBC action. this assumes that the UpdateClient has already been
     // validated, including header verification.
-    async fn execute_update_client(&mut self, msg_update_client: &MsgUpdateClient) {
+    async fn execute_update_client(&mut self, msg_update_client: &MsgUpdateClient) -> Result<()> {
         // TODO(erwan): deferred client state deserialization means `execute_update_client` is faillible
         // see ibc-rs ADR004: https://github.com/cosmos/ibc-rs/blob/main/docs/architecture/adr-004-light-client-crates-extraction.md#light-client-specific-code
-        let tm_header = match msg_update_client.header.type_url.as_str() {
-            TENDERMINT_HEADER_TYPE_URL => {
-                TendermintHeader::try_from(msg_update_client.header.clone())
-                    .expect("decoding tendermint header")
-            }
-            _ => unimplemented!("not a tendermint header"),
-        };
+        let tm_header = ics02_validation::get_tendermint_header(msg_update_client.header.clone())?;
 
         // get the latest client state
         let client_state = self
@@ -131,6 +123,7 @@ pub(crate) trait Ics2ClientExt: StateWrite {
             client_state,
             tm_header,
         ));
+        Ok(())
     }
 
     // execute IBC CreateClient.
@@ -140,17 +133,12 @@ pub(crate) trait Ics2ClientExt: StateWrite {
     // - client type
     // - consensus state
     // - processed time and height
-    async fn execute_create_client(&mut self, msg_create_client: &MsgCreateClient) {
+    async fn execute_create_client(&mut self, msg_create_client: &MsgCreateClient) -> Result<()> {
         tracing::info!("deserializing client state");
         // TODO(erwan): deferred client state deserialization means `execute_create_client` is faillible
         // see ibc-rs ADR004: https://github.com/cosmos/ibc-rs/blob/main/docs/architecture/adr-004-light-client-crates-extraction.md#light-client-specific-code
-        let client_state = match msg_create_client.client_state.type_url.as_str() {
-            TENDERMINT_CLIENT_STATE_TYPE_URL => {
-                TendermintClientState::try_from(msg_create_client.client_state.clone())
-                    .expect("decoding the tendermint client state")
-            }
-            _ => unimplemented!("not a tendermint lightclient"),
-        };
+        let client_state =
+            ics02_validation::get_tendermint_client_state(msg_create_client.client_state.clone())?;
 
         // get the current client counter
         let id_counter = self.client_counter().await.unwrap();
@@ -158,13 +146,9 @@ pub(crate) trait Ics2ClientExt: StateWrite {
 
         tracing::info!("creating client {:?}", client_id);
 
-        let consensus_state = match msg_create_client.consensus_state.type_url.as_str() {
-            TENDERMINT_CONSENSUS_STATE_TYPE_URL => {
-                TendermintConsensusState::try_from(msg_create_client.consensus_state.clone())
-                    .expect("decoding the tendermint consensus state")
-            }
-            _ => unimplemented!("not a tendermint lightclient"),
-        };
+        let consensus_state = ics02_validation::get_tendermint_consensus_state(
+            msg_create_client.consensus_state.clone(),
+        )?;
 
         // store the client data
         self.put_client(&client_id, client_state.clone());
@@ -183,6 +167,7 @@ pub(crate) trait Ics2ClientExt: StateWrite {
         self.put_client_counter(ClientCounter(counter.0 + 1));
 
         self.record(event::create_client(client_id, client_state));
+        Ok(())
     }
 
     // given an already verified tendermint header, and a trusted tendermint client state, compute
@@ -518,13 +503,12 @@ mod tests {
     use crate::TempStorageExt;
 
     use super::*;
-    use ibc_proto::ibc::core::client::v1::MsgCreateClient as RawMsgCreateClient;
-    use ibc_proto::ibc::core::client::v1::MsgUpdateClient as RawMsgUpdateClient;
+    use ibc_proto::protobuf::Protobuf;
     use penumbra_chain::StateWriteExt;
-    use penumbra_proto::core::ibc::v1alpha1::{ibc_action::Action as IbcActionInner, IbcAction};
-    use penumbra_proto::Message;
+    use penumbra_proto::core::ibc::v1alpha1::IbcAction;
     use penumbra_storage::{ArcStateExt, TempStorage};
     use penumbra_transaction::Transaction;
+    use std::str::FromStr;
     use tendermint::Time;
 
     // test that we can create and update a light client.
@@ -555,7 +539,7 @@ mod tests {
             base64::decode(include_str!("../../ibc/test/create_client.msg").replace('\n', ""))
                 .unwrap();
         let msg_create_stargaze_client =
-            RawMsgCreateClient::decode(msg_create_client_stargaze_raw.as_slice()).unwrap();
+            MsgCreateClient::decode(msg_create_client_stargaze_raw.as_slice()).unwrap();
 
         // base64 encoded MsgUpdateClient that was used to issue the first update to the in-use stargaze light client on the cosmos hub:
         // https://cosmos.bigdipper.live/transactions/24F1E19F218CAF5CA41D6E0B653E85EB965843B1F3615A6CD7BCF336E6B0E707
@@ -563,15 +547,12 @@ mod tests {
             base64::decode(include_str!("../../ibc/test/update_client_1.msg").replace('\n', ""))
                 .unwrap();
         let mut msg_update_stargaze_client =
-            RawMsgUpdateClient::decode(msg_update_client_stargaze_raw.as_slice()).unwrap();
-        msg_update_stargaze_client.client_id = "07-tendermint-0".to_string();
+            MsgUpdateClient::decode(msg_update_client_stargaze_raw.as_slice()).unwrap();
 
-        let create_client_action = IbcAction {
-            action: Some(IbcActionInner::CreateClient(msg_create_stargaze_client)),
-        };
-        let update_client_action = IbcAction {
-            action: Some(IbcActionInner::UpdateClient(msg_update_stargaze_client)),
-        };
+        msg_update_stargaze_client.client_id = ClientId::from_str("07-tendermint-0").unwrap();
+
+        let create_client_action: IbcAction = msg_create_stargaze_client.into();
+        let update_client_action: IbcAction = msg_update_stargaze_client.into();
 
         // The ActionHandler trait provides the transaction the action was part
         // of as context available during verification.  This is used, for instance,
@@ -605,11 +586,9 @@ mod tests {
             base64::decode(include_str!("../../ibc/test/update_client_2.msg").replace('\n', ""))
                 .unwrap();
 
-        let mut second_update = RawMsgUpdateClient::decode(msg_update_second.as_slice()).unwrap();
-        second_update.client_id = "07-tendermint-0".to_string();
-        let second_update_client_action = IbcAction {
-            action: Some(IbcActionInner::UpdateClient(second_update)),
-        };
+        let mut second_update = MsgUpdateClient::decode(msg_update_second.as_slice()).unwrap();
+        second_update.client_id = ClientId::from_str("07-tendermint-0").unwrap();
+        let second_update_client_action: IbcAction = second_update.into();
 
         second_update_client_action
             .check_stateless(dummy_context.clone())
