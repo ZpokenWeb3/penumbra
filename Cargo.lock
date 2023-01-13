@@ -3989,6 +3989,7 @@ dependencies = [
  "hex",
  "indexmap",
  "js-sys",
+ "penumbra-chain",
  "penumbra-crypto",
  "penumbra-proto",
  "penumbra-tct",

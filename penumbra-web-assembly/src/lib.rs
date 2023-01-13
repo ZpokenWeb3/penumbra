@@ -1,21 +1,18 @@
 extern crate core;
 
 mod utils;
+mod mock_client;
 
 use penumbra_proto::{Protobuf};
-use std::convert::TryFrom;
-use std::fmt::Debug;
+use std::convert::{TryFrom};
 use std::str::FromStr;
-use penumbra_crypto::{FullViewingKey, ka, Note, Nullifier};
+use penumbra_crypto::{FullViewingKey, ka, Note};
+
 use anyhow::Context;
-use anyhow::Error;
-use hex::FromHex;
-use base64::decode;
 use rand_core::OsRng;
 use wasm_bindgen::prelude::*;
 use penumbra_crypto::keys::{SeedPhrase, SpendKey};
-use penumbra_tct::{Forgotten, Tree};
-use penumbra_tct::storage::{StoredPosition, Updates};
+
 use penumbra_transaction::plan::TransactionPlan;
 use penumbra_transaction::Transaction;
 
@@ -83,18 +80,8 @@ pub fn sign_plan(spend_key_str: &str,
 
     let authorization_data = plan.authorize(OsRng, &spend_key).to_proto();
     return JsValue::from_serde(&authorization_data).unwrap();
-
 }
 
-
-#[wasm_bindgen]
-pub fn send(full_viewing_key: &str,
-            amount: u64,
-            asset_id: &str,
-            fee: u64,
-            dest_address: &str) -> JsValue {
-    return JsValue::null();
-}
 
 
 // #[wasm_bindgen]

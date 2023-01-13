@@ -5,15 +5,15 @@ edition = "2021"
 
 [dependencies]
 # Workspace dependencies
-penumbra-proto = { path = "../proto", features = ["penumbra-storage"] }
-penumbra-storage = { path = "../storage" }
+penumbra-proto = { path = "../proto" }
+penumbra-storage = { path = "../storage",  optional = true }
 penumbra-crypto = { path = "../crypto" }
 penumbra-transaction = { path = "../transaction" }
 penumbra-tct = { path = "../tct" }
 
 # Penumbra dependencies
 decaf377 = { git = "https://github.com/penumbra-zone/decaf377" }
-jmt = { git = "https://github.com/penumbra-zone/jmt.git", branch = "upstream-ics23" }
+jmt = { git = "https://github.com/penumbra-zone/jmt.git", branch = "upstream-ics23", optional = true }
 
 tendermint = "0.26.0"
 ibc = "0.23.0"
@@ -29,5 +29,5 @@ sha2 = "0.9"
 serde = { version = "1", features = ["derive"] }
 async-trait = "0.1.52"
 tracing = "0.1"
-tonic = "0.8.1"
+tonic = { version = "0.8.1", optional = true}
 num-rational = "0.4"

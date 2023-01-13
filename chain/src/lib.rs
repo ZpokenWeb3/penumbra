@@ -9,12 +9,12 @@ pub mod params;
 pub(crate) mod state_key;
 pub mod sync;
 
-pub use app_hash::{AppHash, AppHashRead, PENUMBRA_COMMITMENT_PREFIX, PENUMBRA_PROOF_SPECS};
+//pub use app_hash::{AppHash, AppHashRead, PENUMBRA_COMMITMENT_PREFIX, PENUMBRA_PROOF_SPECS};
 pub use epoch::Epoch;
 pub use known_assets::KnownAssets;
 pub use note_source::NoteSource;
 pub use sync::{CompactBlock, StatePayload};
-pub use view::{StateReadExt, StateWriteExt};
+//pub use view::{StateReadExt, StateWriteExt};
 
 /// Hardcoded test data used by the `Default` genesis state.
 pub mod test_keys {
