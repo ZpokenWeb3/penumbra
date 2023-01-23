@@ -72,7 +72,6 @@ pub struct AddressIndex {
     pub inner: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
-#[serde(transparent)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StateCommitment {
@@ -90,12 +89,12 @@ pub struct BalanceCommitment {
     pub inner: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
-#[serde(transparent)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AssetId {
     #[prost(bytes = "vec", tag = "1")]
-    #[serde(with = "crate::serializers::bech32str::asset_id")]
+//    #[serde(with = "crate::serializers::bech32str::asset_id")]
+            #[serde(with = "crate::serializers::hexstr")]
     pub inner: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
@@ -125,7 +124,6 @@ pub struct Value {
     pub asset_id: ::core::option::Option<AssetId>,
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
-#[serde(transparent)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MerkleRoot {
@@ -184,7 +182,6 @@ pub struct Note {
     pub address: ::core::option::Option<Address>,
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
-#[serde(transparent)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Nullifier {

@@ -94,7 +94,10 @@ pub struct SwapPayload {
     >,
     /// TODO: replace with ovk-based encryption
     #[prost(bytes = "vec", tag = "2")]
+        #[serde(with = "crate::serializers::hexstr")]
+
     pub ephemeral_key: ::prost::alloc::vec::Vec<u8>,
+    #[serde(with = "crate::serializers::hexstr")]
     #[prost(bytes = "vec", tag = "3")]
     pub encrypted_swap: ::prost::alloc::vec::Vec<u8>,
 }

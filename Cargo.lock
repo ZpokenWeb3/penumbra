@@ -2142,6 +2142,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 
 [[package]]
+name = "gloo-utils"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8e8fc851e9c7b9852508bc6e3f690f452f474417e8545ec9857b7f7377036b5"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "h2"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3976,7 +3989,7 @@ dependencies = [
 
 [[package]]
 name = "penumbra-web-assembly"
-version = "0.38.0"
+version = "0.40.40"
 dependencies = [
  "anyhow",
  "async-global-executor",
@@ -3986,6 +3999,7 @@ dependencies = [
  "console_error_panic_hook",
  "futures-lite",
  "getrandom 0.2.8",
+ "gloo-utils",
  "hex",
  "indexmap",
  "js-sys",
@@ -3999,6 +4013,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "wasm-bindgen",
  "wasm-bindgen-test",
+ "web-sys",
  "wee_alloc",
 ]
 
@@ -6238,8 +6253,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaf9f5aceeec8be17c128b2e93e031fb8a4d469bb9c4ae2d7dc1888b26887268"
 dependencies = [
  "cfg-if 1.0.0",
- "serde",
- "serde_json",
  "wasm-bindgen-macro",
 ]
 

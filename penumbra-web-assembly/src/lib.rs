@@ -2,6 +2,8 @@ extern crate core;
 
 mod utils;
 mod mock_client;
+mod note_record;
+mod swap_record;
 
 use penumbra_proto::{Protobuf};
 use std::convert::{TryFrom};
@@ -15,6 +17,9 @@ use penumbra_crypto::keys::{SeedPhrase, SpendKey};
 
 use penumbra_transaction::plan::TransactionPlan;
 use penumbra_transaction::Transaction;
+
+pub use mock_client::ViewClient;
+
 
 
 #[cfg(feature = "wee_alloc")]
@@ -33,8 +38,8 @@ pub fn decrypt_note(full_viewing_key: &str, encrypted_note: &str, ephemeral_key:
                              &ka::Public::try_from(&hex::decode(ephemeral_key).unwrap()[..]).unwrap());
 
 
-    return if note.is_ok() {
-        JsValue::from_serde(&note.unwrap()).unwrap()
+    return if note.is_ok() {serde_wasm_bindgen::to_value
+    (&note.unwrap()).unwrap()
     } else {
         JsValue::null()
     };
@@ -45,14 +50,14 @@ pub fn generate_spend_key(seed_phrase: &str) -> JsValue {
     let seed = SeedPhrase::from_str(seed_phrase).unwrap();
     let spend_key = SpendKey::from_seed_phrase(seed, 0);
 
-    return JsValue::from_serde(&spend_key).unwrap();
+    return serde_wasm_bindgen::to_value(&spend_key).unwrap();
 }
 
 #[wasm_bindgen]
 pub fn get_full_viewing_key(spend_key_str: &str) -> JsValue {
     let spend_key = SpendKey::from_str(spend_key_str).unwrap();
 
-    return JsValue::from_serde(&spend_key.full_viewing_key()).unwrap();
+    return serde_wasm_bindgen::to_value(&spend_key.full_viewing_key()).unwrap();
 }
 
 #[wasm_bindgen]
@@ -63,13 +68,13 @@ pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
     let (address, _dtk) = fvk
         .incoming()
         .payment_address(index.into());
-    return JsValue::from_serde(&address).unwrap();
+    return serde_wasm_bindgen::to_value(&address).unwrap();
 }
 
 #[wasm_bindgen]
 pub fn decode_transaction(tx_bytes: &str) -> JsValue {
     let transaction = Transaction::decode(base64::decode(tx_bytes).unwrap().as_slice()).unwrap();
-    return JsValue::from_serde(&transaction).unwrap();
+    return serde_wasm_bindgen::to_value(&transaction).unwrap();
 }
 
 #[wasm_bindgen]
@@ -79,7 +84,7 @@ pub fn sign_plan(spend_key_str: &str,
     let plan: TransactionPlan = serde_wasm_bindgen::from_value(transaction_plan).unwrap();
 
     let authorization_data = plan.authorize(OsRng, &spend_key).to_proto();
-    return JsValue::from_serde(&authorization_data).unwrap();
+    return serde_wasm_bindgen::to_value(&authorization_data).unwrap();
 }
 
 

@@ -174,6 +174,7 @@ pub mod state_payload {
     #[derive(::serde::Deserialize, ::serde::Serialize)]
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[serde(tag = "case", content = "value")]
     pub enum StatePayload {
         #[prost(message, tag = "1")]
         RolledUp(RolledUp),
@@ -184,7 +185,6 @@ pub mod state_payload {
     }
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
-#[serde(transparent)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct KnownAssets {
@@ -193,7 +193,6 @@ pub struct KnownAssets {
 }
 /// A spicy transaction ID
 #[derive(::serde::Deserialize, ::serde::Serialize)]
-#[serde(transparent)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NoteSource {
