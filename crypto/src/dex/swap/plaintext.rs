@@ -1,7 +1,7 @@
 use crate::transaction::Fee;
-use crate::{asset, ka, Address, Amount, Note, Value};
+use crate::{asset, ka, Address, Amount, Note, Rseed, Value};
 use anyhow::{anyhow, Error, Result};
-use ark_ff::{PrimeField, UniformRand};
+use ark_ff::PrimeField;
 use decaf377::{FieldExt, Fq};
 use once_cell::sync::Lazy;
 use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, core::dex::v1alpha1 as pb, Protobuf};
@@ -29,8 +29,8 @@ pub struct SwapPlaintext {
     pub claim_fee: Fee,
     // Address to receive the Swap NFT and SwapClaim outputs
     pub claim_address: Address,
-    // Swap blinding factor
-    pub swap_blinding: Fq,
+    // Swap rseed
+    pub rseed: Rseed,
 }
 
 pub static OUTPUT_1_BLINDING_DOMAIN_SEPARATOR: Lazy<Fq> = Lazy::new(|| {
@@ -45,15 +45,18 @@ pub static OUTPUT_2_BLINDING_DOMAIN_SEPARATOR: Lazy<Fq> = Lazy::new(|| {
 });
 
 impl SwapPlaintext {
-    pub fn output_blinding_factors(&self) -> (Fq, Fq) {
+    pub fn output_rseeds(&self) -> (Rseed, Rseed) {
+        let fq_rseed = Fq::from_le_bytes_mod_order(&self.rseed.to_bytes()[..]);
+        let rseed_1_hash = hash_1(&OUTPUT_1_BLINDING_DOMAIN_SEPARATOR, fq_rseed);
+        let rseed_2_hash = hash_1(&OUTPUT_2_BLINDING_DOMAIN_SEPARATOR, fq_rseed);
         (
-            hash_1(&OUTPUT_1_BLINDING_DOMAIN_SEPARATOR, self.swap_blinding),
-            hash_1(&OUTPUT_2_BLINDING_DOMAIN_SEPARATOR, self.swap_blinding),
+            Rseed(rseed_1_hash.to_bytes()),
+            Rseed(rseed_2_hash.to_bytes()),
         )
     }
 
     pub fn output_notes(&self, batch_data: &BatchSwapOutputData) -> (Note, Note) {
-        let (output_1_blinding, output_2_blinding) = self.output_blinding_factors();
+        let (output_1_rseed, output_2_rseed) = self.output_rseeds();
 
         let (lambda_1_i, lambda_2_i) = batch_data.pro_rata_outputs((
             // TODO: fix up amount conversions
@@ -67,7 +70,7 @@ impl SwapPlaintext {
                 amount: lambda_1_i.into(),
                 asset_id: self.trading_pair.asset_1(),
             },
-            output_1_blinding,
+            output_1_rseed,
         )
         .expect("claim address is valid");
 
@@ -77,7 +80,7 @@ impl SwapPlaintext {
                 amount: lambda_2_i.into(),
                 asset_id: self.trading_pair.asset_2(),
             },
-            output_2_blinding,
+            output_2_rseed,
         )
         .expect("claim address is valid");
 
@@ -91,7 +94,7 @@ impl SwapPlaintext {
         let inner = hash_7(
             &DOMAIN_SEPARATOR,
             (
-                self.swap_blinding,
+                Fq::from_le_bytes_mod_order(&self.rseed.to_bytes()[..]),
                 self.claim_fee.0.amount.into(),
                 self.claim_fee.0.asset_id.0,
                 self.claim_address
@@ -151,7 +154,7 @@ impl SwapPlaintext {
         claim_fee: Fee,
         claim_address: Address,
     ) -> SwapPlaintext {
-        let swap_blinding = Fq::rand(rng);
+        let rseed = Rseed::generate(rng);
 
         Self {
             trading_pair,
@@ -159,7 +162,7 @@ impl SwapPlaintext {
             delta_2_i,
             claim_fee,
             claim_address,
-            swap_blinding,
+            rseed,
         }
     }
 }
@@ -191,7 +194,7 @@ impl TryFrom<pb::SwapPlaintext> for SwapPlaintext {
                 .trading_pair
                 .ok_or_else(|| anyhow::anyhow!("missing trading pair in SwapPlaintext"))?
                 .try_into()?,
-            swap_blinding: Fq::from_bytes(plaintext.swap_blinding.as_slice().try_into()?)?,
+            rseed: Rseed(plaintext.rseed.as_slice().try_into()?),
         })
     }
 }
@@ -204,7 +207,7 @@ impl From<SwapPlaintext> for pb::SwapPlaintext {
             claim_fee: Some(plaintext.claim_fee.into()),
             claim_address: Some(plaintext.claim_address.into()),
             trading_pair: Some(plaintext.trading_pair.into()),
-            swap_blinding: plaintext.swap_blinding.to_bytes().to_vec(),
+            rseed: plaintext.rseed.to_bytes().to_vec(),
         }
     }
 }
@@ -213,13 +216,13 @@ impl From<&SwapPlaintext> for [u8; SWAP_LEN_BYTES] {
     fn from(swap: &SwapPlaintext) -> [u8; SWAP_LEN_BYTES] {
         let mut bytes = [0u8; SWAP_LEN_BYTES];
         bytes[0..64].copy_from_slice(&swap.trading_pair.to_bytes());
-        bytes[64..72].copy_from_slice(&swap.delta_1_i.to_le_bytes());
-        bytes[72..80].copy_from_slice(&swap.delta_2_i.to_le_bytes());
-        bytes[80..88].copy_from_slice(&swap.claim_fee.0.amount.to_le_bytes());
-        bytes[88..120].copy_from_slice(&swap.claim_fee.0.asset_id.to_bytes());
+        bytes[64..80].copy_from_slice(&swap.delta_1_i.to_le_bytes());
+        bytes[80..96].copy_from_slice(&swap.delta_2_i.to_le_bytes());
+        bytes[96..112].copy_from_slice(&swap.claim_fee.0.amount.to_le_bytes());
+        bytes[112..144].copy_from_slice(&swap.claim_fee.0.asset_id.to_bytes());
         let pb_address = pb_crypto::Address::from(swap.claim_address);
-        bytes[120..200].copy_from_slice(&pb_address.inner);
-        bytes[200..232].copy_from_slice(&swap.swap_blinding.to_bytes());
+        bytes[144..224].copy_from_slice(&pb_address.inner);
+        bytes[224..256].copy_from_slice(&swap.rseed.to_bytes());
         bytes
     }
 }
@@ -241,27 +244,27 @@ impl TryFrom<&[u8]> for SwapPlaintext {
         let tp_bytes: [u8; 64] = bytes[0..64]
             .try_into()
             .map_err(|_| anyhow!("error fetching trading pair bytes"))?;
-        let delta_1_bytes: [u8; 8] = bytes[64..72]
+        let delta_1_bytes: [u8; 16] = bytes[64..80]
             .try_into()
             .map_err(|_| anyhow!("error fetching delta1 bytes"))?;
-        let delta_2_bytes: [u8; 8] = bytes[72..80]
+        let delta_2_bytes: [u8; 16] = bytes[80..96]
             .try_into()
             .map_err(|_| anyhow!("error fetching delta2 bytes"))?;
-        let fee_amount_bytes: [u8; 8] = bytes[80..88]
+        let fee_amount_bytes: [u8; 16] = bytes[96..112]
             .try_into()
             .map_err(|_| anyhow!("error fetching fee amount bytes"))?;
-        let fee_asset_id_bytes: [u8; 32] = bytes[88..120]
+        let fee_asset_id_bytes: [u8; 32] = bytes[112..144]
             .try_into()
             .map_err(|_| anyhow!("error fetching fee asset ID bytes"))?;
-        let address_bytes: [u8; 80] = bytes[120..200]
+        let address_bytes: [u8; 80] = bytes[144..224]
             .try_into()
             .map_err(|_| anyhow!("error fetching address bytes"))?;
         let pb_address = pb_crypto::Address {
             inner: address_bytes.to_vec(),
         };
-        let blinding_factor_bytes: [u8; 32] = bytes[200..232]
+        let rseed: [u8; 32] = bytes[224..256]
             .try_into()
-            .map_err(|_| anyhow!("error fetching blinding factor bytes"))?;
+            .map_err(|_| anyhow!("error fetching rseed bytes"))?;
 
         Ok(SwapPlaintext {
             trading_pair: tp_bytes
@@ -274,7 +277,7 @@ impl TryFrom<&[u8]> for SwapPlaintext {
                 asset_id: asset::Id::try_from(fee_asset_id_bytes)?,
             }),
             claim_address: pb_address.try_into()?,
-            swap_blinding: Fq::from_le_bytes_mod_order(&blinding_factor_bytes),
+            rseed: Rseed(rseed),
         })
     }
 }

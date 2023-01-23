@@ -1,12 +1,26 @@
-use std::str::FromStr;
-
-use anyhow::{anyhow, Result};
-
+use anyhow::anyhow;
 use decaf377::FieldExt;
 use penumbra_proto::{core::dex::v1alpha1 as pb, Protobuf};
+use std::{fmt, str::FromStr};
 
 use crate::asset::{self, REGISTRY};
 
+pub struct DirectedTradingPair {
+    start: asset::Id,
+    end: asset::Id,
+}
+
+impl DirectedTradingPair {
+    pub fn new(start: asset::Id, end: asset::Id) -> Self {
+        Self { start, end }
+    }
+
+    pub fn to_canonical(&self) -> TradingPair {
+        TradingPair::new(self.start, self.end)
+    }
+}
+
+/// The canonical representation of a tuple of asset [`Id`]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 pub struct TradingPair {
     pub(crate) asset_1: asset::Id,
@@ -14,12 +28,18 @@ pub struct TradingPair {
 }
 
 impl TradingPair {
-    pub fn new(asset_1: asset::Id, asset_2: asset::Id) -> Result<Self> {
-        if asset_2 < asset_1 {
-            return Err(anyhow!("asset_2 must be greater than asset_1"));
+    pub fn new(a: asset::Id, b: asset::Id) -> Self {
+        if a < b {
+            Self {
+                asset_1: a,
+                asset_2: b,
+            }
+        } else {
+            Self {
+                asset_1: b,
+                asset_2: a,
+            }
         }
-
-        Ok(Self { asset_1, asset_2 })
     }
 
     pub fn asset_1(&self) -> asset::Id {
@@ -28,24 +48,6 @@ impl TradingPair {
 
     pub fn asset_2(&self) -> asset::Id {
         self.asset_2
-    }
-
-    /// Constructs the canonical representation of the provided pair.
-    pub fn canonical_order_for(pair: (asset::Id, asset::Id)) -> Result<Self> {
-        if pair.0 == pair.1 {
-            return Err(anyhow!("TradingPair must consist of different assets"));
-        }
-        if pair.0 < pair.1 {
-            return Ok(Self {
-                asset_1: pair.0,
-                asset_2: pair.1,
-            });
-        }
-
-        Ok(Self {
-            asset_1: pair.1,
-            asset_2: pair.0,
-        })
     }
 
     /// Convert the trading pair to bytes.
@@ -111,11 +113,21 @@ impl FromStr for TradingPair {
         let parts: Vec<&str> = s.split(':').collect();
 
         if parts.len() != 2 {
-            return Err(anyhow!("invalid trading pair string"));
+            Err(anyhow!("invalid trading pair string"))
+        } else {
+            let denom_1 = REGISTRY.parse_unit(parts[0]);
+            let denom_2 = REGISTRY.parse_unit(parts[1]);
+            Ok(Self::new(denom_1.id(), denom_2.id()))
         }
+    }
+}
 
-        let denom_1 = REGISTRY.parse_unit(parts[0]);
-        let denom_2 = REGISTRY.parse_unit(parts[1]);
-        Self::canonical_order_for((denom_1.id(), denom_2.id()))
+/// Produce an output string of the form ASSET_ID1:ASSET_ID2
+/// TODO: this mismatches the `FromStr` impl which uses denominations.
+/// The asset ID is more canonical than a base denom so I think that's okay,
+/// but the `FromStr` impl should probably be able to handle asset IDs as well.
+impl fmt::Display for TradingPair {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:{}", self.asset_1, self.asset_2)
     }
 }

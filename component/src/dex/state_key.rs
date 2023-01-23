@@ -1,22 +1,22 @@
 use penumbra_crypto::dex::TradingPair;
+use std::string::String;
 
-pub fn stub_cpmm_reserves(trading_pair: &TradingPair) -> String {
-    format!(
-        "dex/stub_cpmm_reserves/{}/{}",
-        &trading_pair.asset_1(),
-        &trading_pair.asset_2()
-    )
+pub fn position_nonce(nonce: &str) -> String {
+    format!("dex/position_nonce/{}", nonce)
 }
 
-pub fn output_data(height: u64, trading_pair: TradingPair) -> String {
-    format!(
-        "dex/output/{}/{}/{}",
-        height,
-        &trading_pair.asset_1(),
-        &trading_pair.asset_2()
-    )
+pub fn positions(trading_pair: &TradingPair, position_id: &str) -> String {
+    format!("dex/positions/{}/opened/{}", trading_pair, position_id)
 }
 
-pub fn swap_flows() -> &'static str {
-    "dex/swap_flows"
+/// Encompasses non-consensus state keys.
+pub(crate) mod internal {
+    use penumbra_crypto::dex::lp::BareTradingFunction;
+
+    pub fn prices(btf: &BareTradingFunction) -> [u8; 43] {
+        let mut result: [u8; 43] = [0; 43];
+        result[0..11].copy_from_slice("dex/prices/".as_bytes());
+        result[11..43].copy_from_slice(&btf.to_bytes());
+        result
+    }
 }

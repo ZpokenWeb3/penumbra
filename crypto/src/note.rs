@@ -1,11 +1,11 @@
 use std::convert::{TryFrom, TryInto};
 
-use ark_ff::{PrimeField, UniformRand};
+use ark_ff::PrimeField;
 use blake2b_simd;
 use decaf377::FieldExt;
 use once_cell::sync::Lazy;
 use penumbra_proto::core::crypto::v1alpha1 as pb;
-use rand::Rng;
+use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use thiserror;
 
@@ -15,11 +15,11 @@ use crate::{
     asset, balance, fmd, ka,
     keys::{Diversifier, IncomingViewingKey, OutgoingViewingKey},
     symmetric::{OutgoingCipherKey, OvkWrappedKey, PayloadKey, PayloadKind},
-    Address, Fq, Value,
+    Address, Fq, Rseed, Value,
 };
 
-pub const NOTE_LEN_BYTES: usize = 152;
-pub const NOTE_CIPHERTEXT_BYTES: usize = 168;
+pub const NOTE_LEN_BYTES: usize = 160;
+pub const NOTE_CIPHERTEXT_BYTES: usize = 176;
 
 /// A plaintext Penumbra note.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,8 +27,9 @@ pub const NOTE_CIPHERTEXT_BYTES: usize = 168;
 pub struct Note {
     /// The typed value recorded by this note.
     value: Value,
-    /// A blinding factor that acts as a commitment trapdoor.
-    note_blinding: Fq,
+    /// A uniformly random 32-byte sequence used to derive an ephemeral secret key
+    /// and note blinding factor.
+    rseed: Rseed,
     /// The address controlling this note.
     address: Address,
     /// The s-component of the transmission key of the destination address.
@@ -58,10 +59,10 @@ pub enum Error {
 }
 
 impl Note {
-    pub fn from_parts(address: Address, value: Value, note_blinding: Fq) -> Result<Self, Error> {
+    pub fn from_parts(address: Address, value: Value, rseed: Rseed) -> Result<Self, Error> {
         Ok(Note {
             value,
-            note_blinding,
+            rseed,
             address,
             transmission_key_s: Fq::from_bytes(address.transmission_key().0)
                 .map_err(|_| Error::InvalidTransmissionKey)?,
@@ -70,9 +71,9 @@ impl Note {
 
     /// Generate a fresh note representing the given value for the given destination address, with a
     /// random blinding factor.
-    pub fn generate(rng: &mut impl Rng, address: &Address, value: Value) -> Self {
-        let note_blinding = Fq::rand(rng);
-        Note::from_parts(address.clone(), value, note_blinding)
+    pub fn generate(rng: &mut (impl Rng + CryptoRng), address: &Address, value: Value) -> Self {
+        let rseed = Rseed::generate(rng);
+        Note::from_parts(address.clone(), value, rseed)
             .expect("transmission key in address is always valid")
     }
 
@@ -100,8 +101,17 @@ impl Note {
         self.address.diversifier()
     }
 
+    pub fn ephemeral_secret_key(&self) -> ka::Secret {
+        self.rseed.derive_esk()
+    }
+
+    pub fn ephemeral_public_key(&self) -> ka::Public {
+        self.ephemeral_secret_key()
+            .diversified_public(&self.diversified_generator())
+    }
+
     pub fn note_blinding(&self) -> Fq {
-        self.note_blinding
+        self.rseed.derive_note_blinding()
     }
 
     pub fn value(&self) -> Value {
@@ -116,8 +126,13 @@ impl Note {
         self.value.amount
     }
 
+    pub fn rseed(&self) -> Rseed {
+        self.rseed
+    }
+
     /// Encrypt a note, returning its ciphertext.
-    pub fn encrypt(&self, esk: &ka::Secret) -> [u8; NOTE_CIPHERTEXT_BYTES] {
+    pub fn encrypt(&self) -> [u8; NOTE_CIPHERTEXT_BYTES] {
+        let esk = self.ephemeral_secret_key();
         let epk = esk.diversified_public(&self.diversified_generator());
         let shared_secret = esk
             .key_agreement_with(self.transmission_key())
@@ -135,12 +150,8 @@ impl Note {
     }
 
     /// Generate encrypted outgoing cipher key for use with this note.
-    pub fn encrypt_key(
-        &self,
-        esk: &ka::Secret,
-        ovk: &OutgoingViewingKey,
-        cv: balance::Commitment,
-    ) -> OvkWrappedKey {
+    pub fn encrypt_key(&self, ovk: &OutgoingViewingKey, cv: balance::Commitment) -> OvkWrappedKey {
+        let esk = self.ephemeral_secret_key();
         let epk = esk.diversified_public(&self.diversified_generator());
         let ock = OutgoingCipherKey::derive(ovk, cv, self.commit(), &epk);
         let shared_secret = esk
@@ -197,7 +208,7 @@ impl Note {
             Note::decrypt_key(wrapped_ovk, cm, cv, ovk, epk).map_err(|_| Error::DecryptionError)?;
 
         let key = PayloadKey::derive(&shared_secret, epk);
-        Note::decrypt_with_payload_key(ciphertext, &key)
+        Note::decrypt_with_payload_key(ciphertext, &key, epk)
     }
 
     /// Decrypt a note ciphertext using the IVK and ephemeral public key to generate a plaintext `Note`.
@@ -215,13 +226,14 @@ impl Note {
             .map_err(|_| Error::DecryptionError)?;
 
         let key = PayloadKey::derive(&shared_secret, epk);
-        Note::decrypt_with_payload_key(ciphertext, &key)
+        Note::decrypt_with_payload_key(ciphertext, &key, epk)
     }
 
     /// Decrypt a note ciphertext using the [`PayloadKey`].
     pub fn decrypt_with_payload_key(
         ciphertext: &[u8],
         payload_key: &PayloadKey,
+        epk: &ka::Public,
     ) -> Result<Note, Error> {
         if ciphertext.len() != NOTE_CIPHERTEXT_BYTES {
             return Err(Error::DecryptionError);
@@ -234,15 +246,22 @@ impl Note {
         let plaintext_bytes: [u8; NOTE_LEN_BYTES] =
             plaintext.try_into().map_err(|_| Error::DecryptionError)?;
 
-        plaintext_bytes
+        let note: Note = plaintext_bytes
             .try_into()
-            .map_err(|_| Error::DecryptionError)
+            .map_err(|_| Error::DecryptionError)?;
+
+        // Ephemeral public key integrity check. See ZIP 212 or Penumbra issue #1688.
+        if note.ephemeral_public_key() != epk.clone() {
+            return Err(Error::DecryptionError);
+        }
+
+        Ok(note)
     }
 
     /// Create the note commitment for this note.
     pub fn commit(&self) -> Commitment {
         self::commitment(
-            self.note_blinding,
+            self.note_blinding(),
             self.value,
             self.diversified_generator(),
             self.transmission_key_s,
@@ -278,15 +297,35 @@ pub fn commitment(
     Commitment(commit)
 }
 
+/// Create a note commitment from the blinding factor, value, and address.
+pub fn commitment_from_address(
+    address: Address,
+    value: Value,
+    note_blinding: Fq,
+) -> Result<Commitment, Error> {
+    let transmission_key_s =
+        Fq::from_bytes(address.transmission_key().0).map_err(|_| Error::InvalidTransmissionKey)?;
+    let commit = poseidon377::hash_6(
+        &NOTECOMMIT_DOMAIN_SEP,
+        (
+            note_blinding,
+            value.amount.into(),
+            value.asset_id.0,
+            address.diversified_generator().vartime_compress_to_field(),
+            transmission_key_s,
+            Fq::from_le_bytes_mod_order(&address.clue_key().0[..]),
+        ),
+    );
+
+    Ok(Commitment(commit))
+}
+
 impl std::fmt::Debug for Note {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Note")
             .field("value", &self.value)
             .field("address", &self.address())
-            .field(
-                "note_blinding",
-                &hex::encode(self.note_blinding().to_bytes()),
-            )
+            .field("rseed", &hex::encode(self.rseed.to_bytes()))
             .finish()
     }
 }
@@ -302,9 +341,9 @@ impl TryFrom<pb::Note> for Note {
             .value
             .ok_or_else(|| anyhow::anyhow!("missing value"))?
             .try_into()?;
-        let note_blinding = Fq::from_bytes(msg.note_blinding.as_slice().try_into()?)?;
+        let rseed = Rseed(msg.rseed.as_slice().try_into()?);
 
-        Ok(Note::from_parts(address, value, note_blinding)?)
+        Ok(Note::from_parts(address, value, rseed)?)
     }
 }
 
@@ -313,7 +352,7 @@ impl From<Note> for pb::Note {
         pb::Note {
             address: Some(msg.address().into()),
             value: Some(msg.value().into()),
-            note_blinding: msg.note_blinding().to_bytes().to_vec(),
+            rseed: msg.rseed.to_bytes().to_vec(),
         }
     }
 }
@@ -322,9 +361,9 @@ impl From<&Note> for [u8; NOTE_LEN_BYTES] {
     fn from(note: &Note) -> [u8; NOTE_LEN_BYTES] {
         let mut bytes = [0u8; NOTE_LEN_BYTES];
         bytes[0..80].copy_from_slice(&note.address.to_vec());
-        bytes[80..88].copy_from_slice(&note.value.amount.to_le_bytes());
-        bytes[88..120].copy_from_slice(&note.value.asset_id.0.to_bytes());
-        bytes[120..152].copy_from_slice(&note.note_blinding.to_bytes());
+        bytes[80..96].copy_from_slice(&note.value.amount.to_le_bytes());
+        bytes[96..128].copy_from_slice(&note.value.asset_id.0.to_bytes());
+        bytes[128..160].copy_from_slice(&note.rseed.to_bytes());
         bytes
     }
 }
@@ -341,7 +380,7 @@ impl From<&Note> for Vec<u8> {
         bytes.extend_from_slice(&note.address().to_vec());
         bytes.extend_from_slice(&note.value.amount.to_le_bytes());
         bytes.extend_from_slice(&note.value.asset_id.0.to_bytes());
-        bytes.extend_from_slice(&note.note_blinding.to_bytes());
+        bytes.extend_from_slice(&note.rseed.to_bytes());
         bytes
     }
 }
@@ -354,13 +393,13 @@ impl TryFrom<&[u8]> for Note {
             return Err(Error::NoteDeserializationError);
         }
 
-        let amount_bytes: [u8; 8] = bytes[80..88]
+        let amount_bytes: [u8; 16] = bytes[80..96]
             .try_into()
             .map_err(|_| Error::NoteDeserializationError)?;
-        let asset_id_bytes: [u8; 32] = bytes[88..120]
+        let asset_id_bytes: [u8; 32] = bytes[96..128]
             .try_into()
             .map_err(|_| Error::NoteDeserializationError)?;
-        let note_blinding_bytes: [u8; 32] = bytes[120..152]
+        let rseed_bytes: [u8; 32] = bytes[128..160]
             .try_into()
             .map_err(|_| Error::NoteDeserializationError)?;
 
@@ -369,12 +408,12 @@ impl TryFrom<&[u8]> for Note {
                 .try_into()
                 .map_err(|_| Error::NoteDeserializationError)?,
             Value {
-                amount: amount_bytes.into(),
+                amount: crate::asset::Amount::from_le_bytes(amount_bytes),
                 asset_id: asset::Id(
                     Fq::from_bytes(asset_id_bytes).map_err(|_| Error::NoteDeserializationError)?,
                 ),
             },
-            Fq::from_bytes(note_blinding_bytes).map_err(|_| Error::NoteDeserializationError)?,
+            Rseed(rseed_bytes),
         )
     }
 }
@@ -389,6 +428,7 @@ impl TryFrom<[u8; NOTE_LEN_BYTES]> for Note {
 
 #[cfg(test)]
 mod tests {
+    use ark_ff::UniformRand;
     use decaf377::Fr;
     use rand_core::OsRng;
 
@@ -410,10 +450,10 @@ mod tests {
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let note = Note::generate(&mut rng, &dest, value);
-        let esk = ka::Secret::new(&mut rng);
 
-        let ciphertext = note.encrypt(&esk);
+        let ciphertext = note.encrypt();
 
+        let esk = note.ephemeral_secret_key();
         let epk = esk.diversified_public(dest.diversified_generator());
         let plaintext = Note::decrypt(&ciphertext, ivk, &epk).expect("can decrypt note");
 
@@ -443,19 +483,44 @@ mod tests {
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
         };
         let note = Note::generate(&mut rng, &dest, value);
-        let esk = ka::Secret::new(&mut rng);
 
         let value_blinding = Fr::rand(&mut rng);
         let cv = note.value.commit(value_blinding);
 
-        let wrapped_ovk = note.encrypt_key(&esk, ovk, cv);
-        let ciphertext = note.encrypt(&esk);
+        let wrapped_ovk = note.encrypt_key(ovk, cv);
+        let ciphertext = note.encrypt();
 
+        let esk = note.ephemeral_secret_key();
         let epk = esk.diversified_public(dest.diversified_generator());
         let plaintext =
             Note::decrypt_outgoing(&ciphertext, wrapped_ovk, note.commit(), cv, ovk, &epk)
                 .expect("can decrypt note");
 
         assert_eq!(plaintext, note);
+    }
+
+    #[test]
+    fn note_decryption_fails_with_incorrect_epk() {
+        let mut rng = OsRng;
+
+        let seed_phrase = SeedPhrase::generate(rng);
+        let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
+        let fvk = sk.full_viewing_key();
+        let ivk = fvk.incoming();
+        let (dest, _dtk_d) = ivk.payment_address(0u64.into());
+
+        let value = Value {
+            amount: 10u64.into(),
+            asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
+        };
+        let note = Note::generate(&mut rng, &dest, value);
+
+        let ciphertext = note.encrypt();
+
+        let wrong_esk = ka::Secret::new(&mut rng);
+        let wrong_epk = wrong_esk.diversified_public(dest.diversified_generator());
+        let decryption_result = Note::decrypt(&ciphertext, ivk, &wrong_epk);
+
+        assert!(decryption_result.is_err());
     }
 }

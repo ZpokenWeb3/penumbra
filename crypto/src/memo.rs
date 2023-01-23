@@ -176,8 +176,6 @@ mod tests {
         let ovk = fvk.outgoing();
         let (dest, _dtk_d) = ivk.payment_address(0u64.into());
 
-        let esk = ka::Secret::new(&mut rng);
-
         let value = Value {
             amount: 10u64.into(),
             asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
@@ -190,6 +188,7 @@ mod tests {
         let memo_key = PayloadKey::random_key(&mut OsRng);
         let ciphertext =
             MemoCiphertext::encrypt(memo_key.clone(), &memo).expect("can encrypt memo");
+        let esk = note.ephemeral_secret_key();
         let wrapped_memo_key = WrappedMemoKey::encrypt(
             &memo_key,
             esk.clone(),
@@ -199,7 +198,7 @@ mod tests {
 
         let value_blinding = Fr::rand(&mut rng);
         let cv = note.value().commit(value_blinding);
-        let wrapped_ovk = note.encrypt_key(&esk, ovk, cv);
+        let wrapped_ovk = note.encrypt_key(ovk, cv);
 
         // Later, still on the sender side, we decrypt the memo by using the decrypt_outgoing method.
         let epk = esk.diversified_public(dest.diversified_generator());

@@ -19,6 +19,7 @@ pub mod note;
 mod nullifier;
 mod prf;
 pub mod proofs;
+pub mod rseed;
 pub mod stake;
 pub mod symmetric;
 pub mod transaction;
@@ -34,6 +35,7 @@ pub use governance_key::GovernanceKey;
 pub use keys::FullViewingKey;
 pub use note::Note;
 pub use nullifier::Nullifier;
+pub use rseed::Rseed;
 pub use symmetric::PayloadKey;
 pub use value::Value;
 

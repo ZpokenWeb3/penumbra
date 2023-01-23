@@ -5,26 +5,26 @@ use std::{
 
 use anyhow::{anyhow, Result};
 
+use penumbra_chain::params::{ChainParameters, FmdParameters};
 use penumbra_component::stake::{rate::RateData, validator};
 use penumbra_crypto::{
     asset::Amount,
     asset::Denom,
     dex::{swap::SwapPlaintext, TradingPair},
     keys::AddressIndex,
-    rdsa::{SpendAuth, VerificationKey},
     transaction::Fee,
-    Address, FieldExt, Fr, FullViewingKey, Note, Value,
+    Address, FullViewingKey, Note, Value,
 };
 use penumbra_proto::view::v1alpha1::NotesRequest;
 use penumbra_tct as tct;
 use penumbra_transaction::{
-    action::{Proposal, ProposalSubmit, ProposalWithdrawBody, ValidatorVote},
+    action::ValidatorVote,
     plan::{
-        ActionPlan, MemoPlan, OutputPlan, ProposalWithdrawPlan, SpendPlan, SwapClaimPlan, SwapPlan,
-        TransactionPlan, UndelegateClaimPlan,
+        ActionPlan, MemoPlan, OutputPlan, SpendPlan, SwapClaimPlan, SwapPlan, TransactionPlan,
+        UndelegateClaimPlan,
     },
 };
-use penumbra_view::ViewClient;
+use penumbra_view::{SpendableNoteRecord, ViewClient};
 use rand::{CryptoRng, RngCore};
 use tracing::instrument;
 
@@ -36,8 +36,6 @@ pub struct Planner<R: RngCore + CryptoRng> {
     rng: R,
     balance: Balance,
     plan: TransactionPlan,
-    proposal_submits: Vec<Proposal>,
-    proposal_withdraws: Vec<(Address, ProposalWithdrawBody)>,
     // IMPORTANT: if you add more fields here, make sure to clear them when the planner is finished
 }
 
@@ -57,14 +55,31 @@ impl<R: RngCore + CryptoRng> Planner<R> {
             rng,
             balance: Balance::default(),
             plan: TransactionPlan::default(),
-            proposal_submits: Vec::new(),
-            proposal_withdraws: Vec::new(),
         }
     }
 
     /// Get the current transaction balance of the planner.
     pub fn balance(&self) -> &Balance {
         &self.balance
+    }
+
+    /// Get all the note requests necessary to fulfill the current [`Balance`].
+    pub fn notes_requests(
+        &self,
+        fvk: &FullViewingKey,
+        source: Option<AddressIndex>,
+    ) -> Vec<NotesRequest> {
+        self.balance
+            .required()
+            .map(|Value { asset_id, amount }| NotesRequest {
+                account_id: Some(fvk.hash().into()),
+                asset_id: Some(asset_id.into()),
+                address_index: source.map(Into::into),
+                amount_to_spend: amount.into(),
+                include_spent: false,
+                ..Default::default()
+            })
+            .collect()
     }
 
     /// Set the expiry height for the transaction plan.
@@ -127,8 +142,7 @@ impl<R: RngCore + CryptoRng> Planner<R> {
     ) -> Result<&mut Self> {
         // Determine the canonical order for the assets being swapped.
         // This will determine whether the input amount is assigned to delta_1 or delta_2.
-        let trading_pair =
-            TradingPair::canonical_order_for((input_value.asset_id, into_denom.id()))?;
+        let trading_pair = TradingPair::new(input_value.asset_id, into_denom.id());
 
         // If `trading_pair.asset_1` is the input asset, then `delta_1` is the input amount,
         // and `delta_2` is 0.
@@ -213,37 +227,14 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         self
     }
 
-    /// Submit a new governance proposal in this transaction.
-    #[instrument(skip(self))]
-    pub fn proposal_submit(&mut self, proposal: Proposal) -> &mut Self {
-        self.proposal_submits.push(proposal);
-        self
-    }
-
-    /// Withdraw a governance proposal in this transaction.
-    #[instrument(skip(self))]
-    pub fn proposal_withdraw(
-        &mut self,
-        proposal_id: u64,
-        deposit_refund_address: Address,
-        reason: String,
-    ) -> &mut Self {
-        self.proposal_withdraws.push((
-            deposit_refund_address,
-            ProposalWithdrawBody {
-                proposal: proposal_id,
-                reason,
-            },
-        ));
-        self
-    }
-
     /// Cast a validator vote in this transaction.
     #[instrument(skip(self))]
     pub fn validator_vote(&mut self, vote: ValidatorVote) -> &mut Self {
         self.action(ActionPlan::ValidatorVote(vote));
         self
     }
+
+    // TODO: proposal submit, proposal withdraw, proposal deposit claim
 
     fn action(&mut self, action: ActionPlan) -> &mut Self {
         // Track the contribution of the action to the transaction's balance
@@ -258,62 +249,47 @@ impl<R: RngCore + CryptoRng> Planner<R> {
     /// provided to supply the notes and other information.
     ///
     /// Clears the contents of the planner, which can be re-used.
-    #[instrument(skip(self, view, fvk))]
     pub async fn plan<V: ViewClient>(
         &mut self,
         view: &mut V,
         fvk: &FullViewingKey,
         source: Option<AddressIndex>,
     ) -> anyhow::Result<TransactionPlan> {
+        // Gather all the information needed from the view service
+        let chain_params = view.chain_params().await?;
+        let fmd_params = view.fmd_parameters().await?;
+        let mut spendable_notes = Vec::new();
+        for request in self.notes_requests(fvk, source) {
+            let notes = view.notes(request).await?;
+            spendable_notes.extend(notes);
+        }
+
+        // Plan the transaction using the gathered information
+        self.plan_with_spendable_notes(&chain_params, &fmd_params, fvk, source, spendable_notes)
+    }
+
+    /// Add spends and change outputs as required to balance the transaction, using the spendable
+    /// notes provided. It is the caller's responsibility to ensure that the notes are the result of
+    /// collected responses to the requests generated by an immediately preceding call to
+    /// [`Planner::note_requests`].
+    ///
+    /// Clears the contents of the planner, which can be re-used.
+    #[instrument(skip(self, chain_params, fmd_params, fvk, spendable_notes))]
+    pub fn plan_with_spendable_notes(
+        &mut self,
+        chain_params: &ChainParameters,
+        fmd_params: &FmdParameters,
+        fvk: &FullViewingKey,
+        source: Option<AddressIndex>,
+        spendable_notes: Vec<SpendableNoteRecord>,
+    ) -> anyhow::Result<TransactionPlan> {
         tracing::debug!(plan = ?self.plan, balance = ?self.balance, "finalizing transaction");
 
         // Fill in the chain id based on the view service
-        let chain_params = view.chain_params().await?;
-        self.plan.chain_id = chain_params.chain_id;
-
-        // Proposals aren't actually turned into action plans until now, because we need the view
-        // service to fill in the details. Now we have the chain parameters and the FVK, so we can
-        // automatically fill in the rest of the action plan without asking the user for anything:
-        for proposal in mem::take(&mut self.proposal_submits) {
-            let (deposit_refund_address, withdraw_proposal_key) =
-                self.proposal_address_and_withdraw_key(fvk);
-
-            self.action(
-                ProposalSubmit {
-                    proposal,
-                    deposit_amount: chain_params.proposal_deposit_amount,
-                    deposit_refund_address,
-                    withdraw_proposal_key,
-                }
-                .into(),
-            );
-        }
-
-        // Similarly, proposal withdrawals need the FVK to convert the address into the original
-        // randomizer, so we delay adding it to the transaction plan until now
-        for (address, body) in mem::take(&mut self.proposal_withdraws) {
-            let randomizer = self.proposal_withdraw_randomizer(fvk, &address);
-            self.action(ProposalWithdrawPlan { body, randomizer }.into());
-        }
-
-        // Get all notes required to fulfill needed spends
-        let mut spends = Vec::new();
-        for Value { amount, asset_id } in self.balance.required() {
-            spends.extend(
-                view.notes(NotesRequest {
-                    account_id: Some(fvk.hash().into()),
-                    asset_id: Some(asset_id.into()),
-                    address_index: source.map(Into::into),
-                    amount_to_spend: amount.into(),
-                    include_spent: false,
-                    ..Default::default()
-                })
-                .await?,
-            );
-        }
+        self.plan.chain_id = chain_params.chain_id.clone();
 
         // Add the required spends to the planner
-        for record in spends {
+        for record in spendable_notes {
             self.spend(record.note, record.position);
         }
 
@@ -336,7 +312,6 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         }
 
         // Add clue plans for `Output`s.
-        let fmd_params = view.fmd_parameters().await?;
         let precision_bits = fmd_params.precision_bits;
         self.plan
             .add_all_clue_plans(&mut self.rng, precision_bits.into());
@@ -356,66 +331,5 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         let plan = mem::take(&mut self.plan);
 
         Ok(plan)
-    }
-
-    /// Get a random address/withdraw key pair for proposals.
-    fn proposal_address_and_withdraw_key(
-        &mut self,
-        fvk: &FullViewingKey,
-    ) -> (Address, VerificationKey<SpendAuth>) {
-        // The deposit refund address should be an ephemeral address
-        let deposit_refund_address = fvk.incoming().ephemeral_address(&mut self.rng).0;
-
-        // The proposal withdraw verification key is the spend auth verification key randomized by the
-        // deposit refund address's address index
-        let withdraw_proposal_key = {
-            // Use the fvk to get the original address index of the diversifier
-            let deposit_refund_address_index = fvk
-                .incoming()
-                .index_for_diversifier(deposit_refund_address.diversifier());
-
-            // Convert this to a vector
-            let mut deposit_refund_address_index_bytes =
-                deposit_refund_address_index.to_bytes().to_vec();
-
-            // Pad it with zeros to be 32 bytes long (the size expected by a randomizer)
-            deposit_refund_address_index_bytes.extend([0; 16]);
-
-            // Convert it back to exactly 32 bytes
-            let deposit_refund_address_index_bytes = deposit_refund_address_index_bytes
-                .try_into()
-                .expect("exactly 32 bytes");
-
-            // Get the scalar `Fr` element derived from these bytes
-            let withdraw_proposal_key_randomizer =
-                Fr::from_bytes(deposit_refund_address_index_bytes)
-                    .expect("bytes are within range for `Fr`");
-
-            // Randomize the spend verification key for the fvk using this randomizer
-            fvk.spend_verification_key()
-                .randomize(&withdraw_proposal_key_randomizer)
-        };
-
-        (deposit_refund_address, withdraw_proposal_key)
-    }
-
-    /// Get the randomizer from an address using the FVK.
-    fn proposal_withdraw_randomizer(&self, fvk: &FullViewingKey, address: &Address) -> Fr {
-        // Use the fvk to get the original address index of the diversifier
-        let deposit_refund_address_index =
-            fvk.incoming().index_for_diversifier(address.diversifier());
-
-        // Convert this to a vector
-        let mut deposit_refund_address_index_bytes =
-            deposit_refund_address_index.to_bytes().to_vec();
-        // Pad it with zeros to be 32 bytes long (the size expected by a randomizer)
-        deposit_refund_address_index_bytes.extend([0; 16]);
-        // Convert it back to exactly 32 bytes
-        let deposit_refund_address_index_bytes = deposit_refund_address_index_bytes
-            .try_into()
-            .expect("exactly 32 bytes");
-
-        // Get the scalar `Fr` element derived from these bytes
-        Fr::from_bytes(deposit_refund_address_index_bytes).expect("bytes are within range for `Fr`")
     }
 }

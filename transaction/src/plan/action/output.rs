@@ -4,7 +4,7 @@ use penumbra_crypto::{
     keys::{IncomingViewingKey, OutgoingViewingKey},
     proofs::transparent::OutputProof,
     symmetric::WrappedMemoKey,
-    Address, EncryptedNote, FieldExt, Fq, Fr, Note, PayloadKey, Value, STAKING_TOKEN_ASSET_ID,
+    Address, EncryptedNote, FieldExt, Fr, Note, PayloadKey, Rseed, Value, STAKING_TOKEN_ASSET_ID,
 };
 use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
 use rand_core::{CryptoRng, RngCore};
@@ -18,9 +18,8 @@ use crate::action::{output, Output};
 pub struct OutputPlan {
     pub value: Value,
     pub dest_address: Address,
-    pub note_blinding: Fq,
+    pub rseed: Rseed,
     pub value_blinding: Fr,
-    pub esk: ka::Secret,
 }
 
 impl OutputPlan {
@@ -30,15 +29,13 @@ impl OutputPlan {
         value: Value,
         dest_address: Address,
     ) -> OutputPlan {
-        let note_blinding = Fq::rand(rng);
+        let rseed = Rseed::generate(rng);
         let value_blinding = Fr::rand(rng);
-        let esk = ka::Secret::new(rng);
         Self {
             value,
             dest_address,
-            note_blinding,
+            rseed,
             value_blinding,
-            esk,
         }
     }
 
@@ -65,7 +62,7 @@ impl OutputPlan {
     }
 
     pub fn output_note(&self) -> Note {
-        Note::from_parts(self.dest_address, self.value, self.note_blinding)
+        Note::from_parts(self.dest_address, self.value, self.rseed)
             .expect("transmission key in address is always valid")
     }
 
@@ -75,7 +72,6 @@ impl OutputPlan {
         OutputProof {
             note: self.output_note(),
             v_blinding: self.value_blinding,
-            esk: self.esk.clone(),
         }
     }
 
@@ -89,14 +85,15 @@ impl OutputPlan {
 
         // Encrypt the note to the recipient...
         let diversified_generator = note.diversified_generator();
-        let ephemeral_key = self.esk.diversified_public(&diversified_generator);
-        let encrypted_note = note.encrypt(&self.esk);
+        let esk: ka::Secret = note.ephemeral_secret_key();
+        let ephemeral_key = esk.diversified_public(&diversified_generator);
+        let encrypted_note = note.encrypt();
         // ... and wrap the encryption key to ourselves.
-        let ovk_wrapped_key = note.encrypt_key(&self.esk, ovk, balance_commitment);
+        let ovk_wrapped_key = note.encrypt_key(ovk, balance_commitment);
 
         let wrapped_memo_key = WrappedMemoKey::encrypt(
             memo_key,
-            self.esk.clone(),
+            esk,
             note.transmission_key(),
             &note.diversified_generator(),
         );
@@ -130,9 +127,8 @@ impl From<OutputPlan> for pb::OutputPlan {
         Self {
             value: Some(msg.value.into()),
             dest_address: Some(msg.dest_address.into()),
-            note_blinding: msg.note_blinding.to_bytes().to_vec().into(),
+            rseed: msg.rseed.to_bytes().to_vec().into(),
             value_blinding: msg.value_blinding.to_bytes().to_vec().into(),
-            esk: msg.esk.to_bytes().to_vec().into(),
         }
     }
 }
@@ -149,9 +145,8 @@ impl TryFrom<pb::OutputPlan> for OutputPlan {
                 .dest_address
                 .ok_or_else(|| anyhow::anyhow!("missing address"))?
                 .try_into()?,
-            note_blinding: Fq::from_bytes(msg.note_blinding.as_ref().try_into()?)?,
+            rseed: Rseed(msg.rseed.as_ref().try_into()?),
             value_blinding: Fr::from_bytes(msg.value_blinding.as_ref().try_into()?)?,
-            esk: msg.esk.as_ref().try_into()?,
         })
     }
 }
@@ -180,15 +175,14 @@ mod test {
         let output_plan = OutputPlan::new(&mut rng, value, dest_address);
         let blinding_factor = output_plan.value_blinding;
 
-        let body = output_plan.output_body(ovk, &dummy_memo_key);
+        let _body = output_plan.output_body(ovk, &dummy_memo_key);
 
         let balance_commitment = output_plan.balance().commit(blinding_factor);
         let note_commitment = output_plan.output_note().commit();
         let output_proof = output_plan.output_proof();
-        let epk = body.note_payload.ephemeral_key;
 
         output_proof
-            .verify(balance_commitment, note_commitment, epk)
+            .verify(balance_commitment, note_commitment)
             .unwrap();
     }
 }

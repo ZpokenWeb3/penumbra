@@ -81,8 +81,8 @@ message SwapPlaintext {
   crypto.v1alpha1.Fee claim_fee = 4;
   // Address that will claim the swap outputs via SwapClaim.
   crypto.v1alpha1.Address claim_address = 5;
-  // Swap blinding factor
-  bytes swap_blinding = 6;
+  // Swap rseed (blinding factors are derived from this)
+  bytes rseed = 6;
 }
 
 message MockFlowCiphertext {
@@ -111,14 +111,34 @@ message SwapClaimPlan {
 }
 
 message SwapView {
-  dex.v1alpha1.Swap swap = 1;
-  dex.v1alpha1.SwapPlaintext swap_plaintext = 3;
+  message Visible {
+    dex.v1alpha1.Swap swap = 1;
+    dex.v1alpha1.SwapPlaintext swap_plaintext = 3;
+  }
+
+  message Opaque {
+    dex.v1alpha1.Swap swap = 1;
+  }
+
+  oneof swap_view {
+    Visible visible = 1;
+    Opaque opaque = 2;
+  }
 }
 
 message SwapClaimView {
-  dex.v1alpha1.SwapClaim swap_claim = 1;
-  crypto.v1alpha1.Note output_1 = 2;
-  crypto.v1alpha1.Note output_2 = 3;
+  message Visible {
+    dex.v1alpha1.SwapClaim swap_claim = 1;
+    crypto.v1alpha1.Note output_1 = 2;
+    crypto.v1alpha1.Note output_2 = 3;
+  }
+  message Opaque { 
+    dex.v1alpha1.SwapClaim swap_claim = 1;
+  }
+  oneof swap_claim_view {
+    Visible visible = 1;
+    Opaque opaque = 2;
+  }
 }
 
 // Holds two asset IDs. Ordering doesn't reflect trading direction. Instead, we

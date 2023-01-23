@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use penumbra_chain::params::{ChainParameters, FmdParameters};
 use penumbra_crypto::{
     asset::{self, Id},
-    note, Address, Amount, Asset, FieldExt, Fq, FullViewingKey, Note, Nullifier, Value,
+    note, Address, Amount, Asset, FieldExt, Fq, FullViewingKey, Note, Nullifier, Rseed, Value,
 };
 use penumbra_proto::{
     client::v1alpha1::{
@@ -161,6 +161,34 @@ impl Storage {
         })
     }
 
+    /// Query for account balance by address
+    pub async fn balance_by_address(&self, address: Address) -> anyhow::Result<BTreeMap<Id, u64>> {
+        let address = address.to_vec();
+
+        let result = sqlx::query!(
+            "SELECT notes.asset_id,
+                    notes.amount
+            FROM    notes
+            JOIN    spendable_notes ON notes.note_commitment = spendable_notes.note_commitment
+            WHERE   spendable_notes.height_spent IS NULL
+            AND     notes.address IS ?",
+            address
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut balance_by_address = BTreeMap::new();
+
+        for record in result {
+            balance_by_address
+                .entry(Id::try_from(record.asset_id.as_slice())?)
+                .and_modify(|x| *x += record.amount as u64)
+                .or_insert(record.amount as u64);
+        }
+
+        Ok(balance_by_address)
+    }
+
     /// Query for a note by its note commitment, optionally waiting until the note is detected.
     pub fn note_by_commitment(
         &self,
@@ -183,7 +211,7 @@ impl Storage {
                         notes.address,
                         notes.amount,
                         notes.asset_id,
-                        notes.blinding_factor,
+                        notes.rseed,
                         spendable_notes.address_index,
                         spendable_notes.source,
                         spendable_notes.height_spent,
@@ -488,7 +516,7 @@ impl Storage {
                         notes.address,
                         notes.amount,
                         notes.asset_id,
-                        notes.blinding_factor,
+                        notes.rseed,
                         spendable_notes.address_index,
                         spendable_notes.source,
                         spendable_notes.height_spent,
@@ -599,7 +627,7 @@ impl Storage {
                         notes.address,
                         notes.amount,
                         notes.asset_id,
-                        notes.blinding_factor,
+                        notes.rseed,
                         spendable_notes.address_index,
                         spendable_notes.source,
                         spendable_notes.height_spent,
@@ -704,7 +732,7 @@ impl Storage {
         let address = note.address().to_vec();
         let amount = u64::from(note.amount()) as i64;
         let asset_id = note.asset_id().to_bytes().to_vec();
-        let blinding_factor = note.note_blinding().to_bytes().to_vec();
+        let rseed = note.rseed().to_bytes().to_vec();
 
         sqlx::query!(
             "INSERT INTO notes
@@ -713,7 +741,7 @@ impl Storage {
                         address,
                         amount,
                         asset_id,
-                        blinding_factor
+                        rseed
                     )
                     VALUES
                     (?, ?, ?, ?, ?)",
@@ -721,7 +749,7 @@ impl Storage {
             address,
             amount,
             asset_id,
-            blinding_factor,
+            rseed,
         )
         .execute(&mut tx)
         .await?;
@@ -749,7 +777,7 @@ impl Storage {
                 "SELECT notes.address,
                         notes.amount,
                         notes.asset_id,
-                        notes.blinding_factor
+                        notes.rseed
                 FROM notes
                 LEFT OUTER JOIN spendable_notes ON notes.note_commitment = spendable_notes.note_commitment
                 WHERE (spendable_notes.note_commitment IS NULL) AND (notes.note_commitment IN ({}))",
@@ -773,14 +801,9 @@ impl Storage {
                     .try_into()
                     .expect("32 bytes"),
             )?);
-            let blinding_factor = Fq::from_bytes(
-                row.get::<&[u8], _>("blinding_factor")
-                    .try_into()
-                    .expect("32 bytes"),
-            )?;
+            let rseed = Rseed(row.get::<&[u8], _>("rseed").try_into().expect("32 bytes"));
 
-            let note =
-                Note::from_parts(address, Value { amount, asset_id }, blinding_factor).unwrap();
+            let note = Note::from_parts(address, Value { amount, asset_id }, rseed).unwrap();
 
             notes.insert(note.commit(), note);
         }
@@ -803,7 +826,7 @@ impl Storage {
                         notes.address,
                         notes.amount,
                         notes.asset_id,
-                        notes.blinding_factor,
+                        notes.rseed,
                         spendable_notes.address_index,
                         spendable_notes.source,
                         spendable_notes.height_spent,
@@ -864,7 +887,7 @@ impl Storage {
             let address = note_record.note.address().to_vec();
             let amount = u64::from(note_record.note.amount()) as i64;
             let asset_id = note_record.note.asset_id().to_bytes().to_vec();
-            let blinding_factor = note_record.note.note_blinding().to_bytes().to_vec();
+            let rseed = note_record.note.rseed().to_bytes().to_vec();
             let address_index = note_record.address_index.to_bytes().to_vec();
             let nullifier = note_record.nullifier.to_bytes().to_vec();
             let position = (u64::from(note_record.position)) as i64;
@@ -880,7 +903,7 @@ impl Storage {
                         address,
                         amount,
                         asset_id,
-                        blinding_factor
+                        rseed
                     )
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT DO NOTHING",
@@ -888,7 +911,7 @@ impl Storage {
                 address,
                 amount,
                 asset_id,
-                blinding_factor,
+                rseed,
             )
             .execute(&mut dbtx)
             .await?;

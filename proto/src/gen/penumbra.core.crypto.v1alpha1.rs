@@ -176,8 +176,7 @@ pub struct Note {
     #[prost(message, optional, tag = "1")]
     pub value: ::core::option::Option<Value>,
     #[prost(bytes = "vec", tag = "2")]
-    #[serde(with = "crate::serializers::hexstr")]
-    pub note_blinding: ::prost::alloc::vec::Vec<u8>,
+    pub rseed: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "3")]
     pub address: ::core::option::Option<Address>,
 }
@@ -254,5 +253,13 @@ pub struct MerklePathChunk {
 pub struct Clue {
     #[prost(bytes = "vec", tag = "1")]
     #[serde(with = "crate::serializers::hexstr")]
+    pub inner: ::prost::alloc::vec::Vec<u8>,
+}
+/// An authorization hash for a Penumbra transaction.
+#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EffectHash {
+    #[prost(bytes = "vec", tag = "1")]
     pub inner: ::prost::alloc::vec::Vec<u8>,
 }

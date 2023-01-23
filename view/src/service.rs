@@ -11,6 +11,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 use penumbra_crypto::{
     asset,
     keys::{AccountID, AddressIndex, FullViewingKey},
+    Amount,
 };
 use penumbra_proto::{
     client::v1alpha1::{
@@ -212,10 +213,76 @@ impl ViewProtocolService for ViewService {
         Box<dyn futures::Stream<Item = Result<pb::StatusStreamResponse, tonic::Status>> + Send>,
     >;
     type TransactionHashesStream = Pin<
-        Box<dyn futures::Stream<Item = Result<TransactionHashesResponse, tonic::Status>> + Send>,
+        Box<
+            dyn futures::Stream<Item = Result<pb::TransactionHashesResponse, tonic::Status>> + Send,
+        >,
     >;
-    type TransactionsStream =
-        Pin<Box<dyn futures::Stream<Item = Result<TransactionsResponse, tonic::Status>> + Send>>;
+    type TransactionsStream = Pin<
+        Box<dyn futures::Stream<Item = Result<pb::TransactionsResponse, tonic::Status>> + Send>,
+    >;
+    type BalanceByAddressStream = Pin<
+        Box<dyn futures::Stream<Item = Result<pb::BalanceByAddressResponse, tonic::Status>> + Send>,
+    >;
+
+    async fn address_by_index(
+        &self,
+        request: tonic::Request<pb::AddressByIndexRequest>,
+    ) -> Result<tonic::Response<pb::AddressByIndexResponse>, tonic::Status> {
+        let fvk =
+            self.storage.full_viewing_key().await.map_err(|_| {
+                tonic::Status::failed_precondition("Error retrieving full viewing key")
+            })?;
+
+        let address_index = request
+            .into_inner()
+            .address_index
+            .ok_or_else(|| tonic::Status::invalid_argument("Missing address index"))?
+            .try_into()
+            .map_err(|e| {
+                tonic::Status::invalid_argument(format!("Could not parse address index: {:#}", e))
+            })?;
+
+        Ok(tonic::Response::new(pb::AddressByIndexResponse {
+            address: Some(fvk.payment_address(address_index).0.into()),
+        }))
+    }
+
+    async fn index_by_address(
+        &self,
+        request: tonic::Request<pb::IndexByAddressRequest>,
+    ) -> Result<tonic::Response<pb::IndexByAddressResponse>, tonic::Status> {
+        let fvk =
+            self.storage.full_viewing_key().await.map_err(|_| {
+                tonic::Status::failed_precondition("Error retrieving full viewing key")
+            })?;
+
+        let address: penumbra_crypto::Address = request
+            .into_inner()
+            .address
+            .ok_or_else(|| tonic::Status::invalid_argument("Missing address"))?
+            .try_into()
+            .map_err(|e| {
+                tonic::Status::invalid_argument(format!("Could not parse address: {:#}", e))
+            })?;
+
+        Ok(tonic::Response::new(pb::IndexByAddressResponse {
+            address_index: fvk.address_index(&address).map(Into::into),
+        }))
+    }
+
+    async fn ephemeral_address(
+        &self,
+        _request: tonic::Request<pb::EphemeralAddressRequest>,
+    ) -> Result<tonic::Response<pb::EphemeralAddressResponse>, tonic::Status> {
+        let fvk =
+            self.storage.full_viewing_key().await.map_err(|_| {
+                tonic::Status::failed_precondition("Error retrieving full viewing key")
+            })?;
+
+        Ok(tonic::Response::new(pb::EphemeralAddressResponse {
+            address: Some(fvk.ephemeral_address(OsRng).0.into()),
+        }))
+    }
 
     async fn transaction_perspective(
         &self,
@@ -312,6 +379,42 @@ impl ViewProtocolService for ViewService {
         Ok(tonic::Response::new(SwapByCommitmentResponse {
             swap: Some(swap),
         }))
+    }
+
+    async fn balance_by_address(
+        &self,
+        request: tonic::Request<pb::BalanceByAddressRequest>,
+    ) -> Result<tonic::Response<Self::BalanceByAddressStream>, tonic::Status> {
+        let address = request
+            .into_inner()
+            .address
+            .ok_or_else(|| tonic::Status::failed_precondition("Missing address in request"))?
+            .try_into()
+            .map_err(|_| tonic::Status::failed_precondition("Invalid address in request"))?;
+
+        let result = self
+            .storage
+            .balance_by_address(address)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("error: {}", e)))?;
+
+        let stream = try_stream! {
+            for element in result {
+                yield pb::BalanceByAddressResponse {
+                    asset: Some(element.0.into()),
+                    amount: Some(Amount::from(element.1).into())
+
+                }
+            }
+        };
+
+        Ok(tonic::Response::new(
+            stream
+                .map_err(|e: anyhow::Error| {
+                    tonic::Status::unavailable(format!("error getting balances: {}", e))
+                })
+                .boxed(),
+        ))
     }
 
     async fn note_by_commitment(
