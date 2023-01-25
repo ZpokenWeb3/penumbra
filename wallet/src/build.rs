@@ -11,7 +11,7 @@ pub async fn build_transaction<V, C, R>(
     custody: &mut C,
     mut rng: R,
     plan: TransactionPlan,
-) -> Result<Transactio n>
+) -> Result<Transaction>
 where
     V: ViewClient,
     C: CustodyClient,

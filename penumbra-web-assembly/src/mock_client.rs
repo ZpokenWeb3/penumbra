@@ -1,15 +1,13 @@
 use anyhow::Context;
 use penumbra_chain::{CompactBlock, Epoch, StatePayload};
-use penumbra_crypto::Nullifier;
 use penumbra_crypto::{dex::swap::SwapPlaintext, note, FullViewingKey, Note};
 use penumbra_tct as tct;
 use penumbra_tct::Witness::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::{collections::BTreeMap, str::FromStr};
-use tct::storage::{StoredPosition, Updates};
-use tct::structure::Hash;
-use tct::{Forgotten, Position, Tree};
+use tct::storage::{StoredPosition, Updates, StoreCommitment, StoreHash};
+use tct::{Forgotten, Tree};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use web_sys::console as web_console;
@@ -20,23 +18,23 @@ use crate::utils;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredTree {
-    last_position: u64,
-    last_forgotten: u64,
-    hashes: Vec<StoredHash>,
-    commitments: Vec<StoredCommitment>,
+    last_position:  Option<StoredPosition>,
+    last_forgotten:  Option<Forgotten>,
+    hashes: Vec<StoreHash>,
+    commitments: Vec<StoreCommitment>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StoredHash {
-    position: u64,
-    height: u8,
-    hash: [u8; 32],
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StoredCommitment {
-    position: u64,
-    commitment: [u8; 32],
-}
+//#[derive(Clone, Debug, Serialize, Deserialize)]
+//pub struct StoredHash {
+//    position: u64,
+//    height: u8,
+//    hash: [u8; 32],
+//}
+//#[derive(Clone, Debug, Serialize, Deserialize)]
+//pub struct StoredCommitment {
+//    position: u64,
+//    commitment: [u8; 32],
+//}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanBlockResult {
@@ -83,33 +81,11 @@ impl ViewClient {
             .context("The provided string is not a valid FullViewingKey")
             .unwrap();
 
+//        web_console::log_1(&stored_tree);
+
         let stored_tree: StoredTree = serde_wasm_bindgen::from_value(stored_tree).unwrap();
 
-        let position: Position = stored_tree.last_position.try_into().unwrap();
-        let position_option: Option<Position> = Some(position);
-        let stored_position: StoredPosition = position_option.try_into().unwrap();
-
-        let mut add_commitments = Tree::load(
-            stored_position,
-            stored_tree.last_forgotten.try_into().unwrap(),
-        );
-
-        for store_commitment in &stored_tree.commitments {
-            add_commitments.insert(
-                store_commitment.position.try_into().unwrap(),
-                store_commitment.commitment.try_into().unwrap(),
-            )
-        }
-        let mut add_hashes = add_commitments.load_hashes();
-
-        for stored_hash in &stored_tree.hashes {
-            add_hashes.insert(
-                stored_hash.position.try_into().unwrap(),
-                stored_hash.height,
-                Hash::from_bytes(stored_hash.hash).unwrap(),
-            );
-        }
-        let tree = add_hashes.finish();
+       let tree = load_tree(stored_tree);
 
         Self {
             latest_height: u64::MAX,
@@ -121,30 +97,27 @@ impl ViewClient {
         }
     }
 
+
+
     #[wasm_bindgen]
     pub fn scan_block(
         &mut self,
         compact_block: JsValue,
-        last_position: u64,
-        last_forgotten: u64,
+        last_position: JsValue,
+        last_forgotten: JsValue,
     ) -> JsValue {
         utils::set_panic_hook();
-        web_console::log_1(&"Start scan_block()".into());
-        web_console::log_1(&compact_block);
 
-        let position: Position = last_position.try_into().unwrap();
-        let position_option: Option<Position> = Some(position);
-        let stored_position: StoredPosition = position_option.try_into().unwrap();
 
-        web_console::log_1(&"StoredPosition is loaded".into());
+//        web_console::log_1(&compact_block);
 
+        let stored_position: Option<StoredPosition> = serde_wasm_bindgen::from_value(last_position).unwrap();
+        let stored_forgotten: Option<Forgotten> = serde_wasm_bindgen::from_value(last_forgotten).unwrap();
 
         let block_proto: penumbra_proto::core::chain::v1alpha1::CompactBlock =
             serde_wasm_bindgen::from_value(compact_block).unwrap();
 
         let block: CompactBlock = block_proto.try_into().unwrap();
-
-        web_console::log_1(&"Success deserileze".into());
 
         // Trial-decrypt the notes in this block, keeping track of the ones that were meant for us
 
@@ -159,7 +132,6 @@ impl ViewClient {
 
         for state_payload in block.state_payloads {
             let clone_payload = state_payload.clone();
-            web_console::log_1(&"Handle state_payloads".into());
 
             match state_payload {
                 StatePayload::Note { note: payload, .. } => {
@@ -172,7 +144,7 @@ impl ViewClient {
                             let source = clone_payload.source().cloned().unwrap_or_default();
                             let nullifier = self
                                 .fvk
-                                .derive_nullifier(position, clone_payload.commitment());
+                                .derive_nullifier(note_position, clone_payload.commitment());
                             let address_index = self
                                 .fvk
                                 .incoming()
@@ -221,7 +193,7 @@ impl ViewClient {
                             let source = clone_payload.source().cloned().unwrap_or_default();
                             let nullifier = self
                                 .fvk
-                                .derive_nullifier(position, clone_payload.commitment());
+                                .derive_nullifier(swap_position, clone_payload.commitment());
 
                             new_swaps.push(SwapRecord {
                                 swap_commitment: clone_payload.commitment().clone(),
@@ -259,7 +231,7 @@ impl ViewClient {
 
         let nct_updates: Updates = self
             .nct
-            .updates(stored_position, last_forgotten.try_into().unwrap())
+            .updates(stored_position.unwrap_or_default(), stored_forgotten.unwrap_or_default())
             .collect::<Updates>();
 
         let result = ScanBlockResult {
@@ -271,4 +243,34 @@ impl ViewClient {
 
         return serde_wasm_bindgen::to_value(&result).unwrap();
     }
+}
+
+    pub fn load_tree(stored_tree: StoredTree) -> Tree {
+
+    let stored_position: StoredPosition = stored_tree.last_position.unwrap_or_default();
+    //        let position_option: Option<Position> = Some(position);
+        //        let stored_position: StoredPosition = position_option.try_into().unwrap();
+
+        let mut add_commitments = Tree::load(
+                stored_position,
+            stored_tree.last_forgotten.unwrap_or_default(),
+        );
+
+    for store_commitment in &stored_tree.commitments {
+        add_commitments.insert(
+                store_commitment.position,
+                store_commitment.commitment,
+            )
+    }
+        let mut add_hashes = add_commitments.load_hashes();
+
+    for stored_hash in &stored_tree.hashes {
+        add_hashes.insert(
+                stored_hash.position,
+                stored_hash.height,
+                stored_hash.hash,
+            );
+    }
+        let tree = add_hashes.finish();
+    return tree;
 }

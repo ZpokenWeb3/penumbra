@@ -4,6 +4,8 @@ mod utils;
 mod mock_client;
 mod note_record;
 mod swap_record;
+mod planner;
+mod tx;
 
 use penumbra_proto::{Protobuf};
 use std::convert::{TryFrom};
@@ -19,6 +21,7 @@ use penumbra_transaction::plan::TransactionPlan;
 use penumbra_transaction::Transaction;
 
 pub use mock_client::ViewClient;
+pub use tx::send_plan;
 
 
 
@@ -72,20 +75,23 @@ pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
 }
 
 #[wasm_bindgen]
+pub fn get_short_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
+    let fvk = FullViewingKey::from_str(full_viewing_key.as_ref())
+        .context("The provided string is not a valid FullViewingKey").unwrap();
+
+    let (address, _dtk) = fvk
+        .incoming()
+        .payment_address(index.into());
+    let short_address = address.display_short_form();
+    return serde_wasm_bindgen::to_value(&short_address).unwrap();
+}
+
+#[wasm_bindgen]
 pub fn decode_transaction(tx_bytes: &str) -> JsValue {
     let transaction = Transaction::decode(base64::decode(tx_bytes).unwrap().as_slice()).unwrap();
     return serde_wasm_bindgen::to_value(&transaction).unwrap();
 }
 
-#[wasm_bindgen]
-pub fn sign_plan(spend_key_str: &str,
-                 transaction_plan: JsValue) -> JsValue {
-    let spend_key = SpendKey::from_str(spend_key_str).unwrap();
-    let plan: TransactionPlan = serde_wasm_bindgen::from_value(transaction_plan).unwrap();
-
-    let authorization_data = plan.authorize(OsRng, &spend_key).to_proto();
-    return serde_wasm_bindgen::to_value(&authorization_data).unwrap();
-}
 
 
 
