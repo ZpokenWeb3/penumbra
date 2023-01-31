@@ -1,11 +1,10 @@
-use std::convert::{TryFrom, TryInto};
-
 use penumbra_chain::NoteSource;
 use penumbra_crypto::{
-    asset, keys::AddressIndex, note, Address, FieldExt, Fq, Note, Nullifier, Value,
+    asset, keys::AddressIndex, note, Address, FieldExt, Fq, Note, Nullifier, Rseed, Value,
 };
-use penumbra_proto::{view::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{view::v1alpha1 as pb, DomainType};
 use penumbra_tct as tct;
+use std::convert::{TryFrom, TryInto};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +22,9 @@ pub struct SpendableNoteRecord {
     pub source: NoteSource,
 }
 
-impl Protobuf<pb::SpendableNoteRecord> for SpendableNoteRecord {}
+impl DomainType for SpendableNoteRecord {
+    type Proto = pb::SpendableNoteRecord;
+}
 impl From<SpendableNoteRecord> for pb::SpendableNoteRecord {
     fn from(v: SpendableNoteRecord) -> Self {
         pb::SpendableNoteRecord {
@@ -69,3 +70,4 @@ impl TryFrom<pb::SpendableNoteRecord> for SpendableNoteRecord {
         })
     }
 }
+

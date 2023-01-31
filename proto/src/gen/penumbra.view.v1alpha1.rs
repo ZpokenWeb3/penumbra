@@ -145,7 +145,6 @@ pub struct BalanceByAddressResponse {
 /// and numbered as 14 & 15 throughout the view service protocol.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-#[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct ViewAuthToken {
     #[prost(bytes = "vec", tag = "1")]
     pub inner: ::prost::alloc::vec::Vec<u8>,
@@ -216,7 +215,6 @@ pub struct StatusStreamResponse {
 /// to allow various filtering on the returned notes.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-#[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct NotesRequest {
     /// If set, return spent notes as well as unspent notes.
     #[prost(bool, tag = "2")]
