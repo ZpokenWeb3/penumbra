@@ -1,5 +1,5 @@
 use penumbra_proto::{
-    client::v1alpha1::ValidatorInfoResponse, core::stake::v1alpha1 as pb, Protobuf,
+    client::v1alpha1::ValidatorInfoResponse, core::stake::v1alpha1 as pb, DomainType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,9 @@ pub struct Info {
     pub rate_data: RateData,
 }
 
-impl Protobuf<pb::ValidatorInfo> for Info {}
+impl DomainType for Info {
+    type Proto = pb::ValidatorInfo;
+}
 
 impl From<Info> for pb::ValidatorInfo {
     fn from(v: Info) -> Self {

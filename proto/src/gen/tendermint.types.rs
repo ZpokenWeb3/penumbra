@@ -8,7 +8,6 @@ pub struct ValidatorSet {
     #[prost(int64, tag = "3")]
     pub total_voting_power: i64,
 }
-#[derive(::serde::Deserialize, ::serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Validator {
@@ -69,7 +68,7 @@ pub struct Header {
     #[prost(int64, tag = "3")]
     pub height: i64,
     #[prost(message, optional, tag = "4")]
-    pub time: ::core::option::Option<::prost_types::Timestamp>,
+    pub time: ::core::option::Option<::pbjson_types::Timestamp>,
     /// prev block info
     #[prost(message, optional, tag = "5")]
     pub last_block_id: ::core::option::Option<BlockId>,
@@ -132,7 +131,7 @@ pub struct Vote {
     #[prost(message, optional, tag = "4")]
     pub block_id: ::core::option::Option<BlockId>,
     #[prost(message, optional, tag = "5")]
-    pub timestamp: ::core::option::Option<::prost_types::Timestamp>,
+    pub timestamp: ::core::option::Option<::pbjson_types::Timestamp>,
     #[prost(bytes = "vec", tag = "6")]
     pub validator_address: ::prost::alloc::vec::Vec<u8>,
     #[prost(int32, tag = "7")]
@@ -162,7 +161,7 @@ pub struct CommitSig {
     #[prost(bytes = "vec", tag = "2")]
     pub validator_address: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "3")]
-    pub timestamp: ::core::option::Option<::prost_types::Timestamp>,
+    pub timestamp: ::core::option::Option<::pbjson_types::Timestamp>,
     #[prost(bytes = "vec", tag = "4")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
 }
@@ -180,7 +179,7 @@ pub struct Proposal {
     #[prost(message, optional, tag = "5")]
     pub block_id: ::core::option::Option<BlockId>,
     #[prost(message, optional, tag = "6")]
-    pub timestamp: ::core::option::Option<::prost_types::Timestamp>,
+    pub timestamp: ::core::option::Option<::pbjson_types::Timestamp>,
     #[prost(bytes = "vec", tag = "7")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
 }
@@ -245,6 +244,16 @@ impl BlockIdFlag {
             BlockIdFlag::Nil => "BLOCK_ID_FLAG_NIL",
         }
     }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BLOCK_ID_FLAG_UNKNOWN" => Some(Self::Unknown),
+            "BLOCK_ID_FLAG_ABSENT" => Some(Self::Absent),
+            "BLOCK_ID_FLAG_COMMIT" => Some(Self::Commit),
+            "BLOCK_ID_FLAG_NIL" => Some(Self::Nil),
+            _ => None,
+        }
+    }
 }
 /// SignedMsgType is a type of signed message in the consensus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -268,6 +277,16 @@ impl SignedMsgType {
             SignedMsgType::Prevote => "SIGNED_MSG_TYPE_PREVOTE",
             SignedMsgType::Precommit => "SIGNED_MSG_TYPE_PRECOMMIT",
             SignedMsgType::Proposal => "SIGNED_MSG_TYPE_PROPOSAL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SIGNED_MSG_TYPE_UNKNOWN" => Some(Self::Unknown),
+            "SIGNED_MSG_TYPE_PREVOTE" => Some(Self::Prevote),
+            "SIGNED_MSG_TYPE_PRECOMMIT" => Some(Self::Precommit),
+            "SIGNED_MSG_TYPE_PROPOSAL" => Some(Self::Proposal),
+            _ => None,
         }
     }
 }
@@ -301,7 +320,7 @@ pub struct DuplicateVoteEvidence {
     #[prost(int64, tag = "4")]
     pub validator_power: i64,
     #[prost(message, optional, tag = "5")]
-    pub timestamp: ::core::option::Option<::prost_types::Timestamp>,
+    pub timestamp: ::core::option::Option<::pbjson_types::Timestamp>,
 }
 /// LightClientAttackEvidence contains evidence of a set of validators attempting to mislead a light client.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -316,7 +335,7 @@ pub struct LightClientAttackEvidence {
     #[prost(int64, tag = "4")]
     pub total_voting_power: i64,
     #[prost(message, optional, tag = "5")]
-    pub timestamp: ::core::option::Option<::prost_types::Timestamp>,
+    pub timestamp: ::core::option::Option<::pbjson_types::Timestamp>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

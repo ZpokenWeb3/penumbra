@@ -6,7 +6,9 @@ use std::convert::{TryFrom, TryInto};
 
 use decaf377::FieldExt;
 use decaf377_rdsa::{SpendAuth, VerificationKey};
-use penumbra_proto::{core::transparent_proofs::v1alpha1 as transparent_proofs, Message, Protobuf};
+use penumbra_proto::{
+    core::transparent_proofs::v1alpha1 as transparent_proofs, DomainType, Message,
+};
 use penumbra_tct as tct;
 
 use super::transparent_gadgets as gadgets;
@@ -134,7 +136,9 @@ impl OutputProof {
 
 // Conversions
 
-impl Protobuf<transparent_proofs::SpendProof> for SpendProof {}
+impl DomainType for SpendProof {
+    type Proto = transparent_proofs::SpendProof;
+}
 
 impl From<SpendProof> for transparent_proofs::SpendProof {
     fn from(msg: SpendProof) -> Self {
@@ -197,7 +201,9 @@ impl TryFrom<transparent_proofs::SpendProof> for SpendProof {
     }
 }
 
-impl Protobuf<transparent_proofs::OutputProof> for OutputProof {}
+impl DomainType for OutputProof {
+    type Proto = transparent_proofs::OutputProof;
+}
 
 impl From<OutputProof> for transparent_proofs::OutputProof {
     fn from(msg: OutputProof) -> Self {
@@ -400,7 +406,9 @@ impl TryFrom<&[u8]> for SwapClaimProof {
     }
 }
 
-impl Protobuf<transparent_proofs::SwapClaimProof> for SwapClaimProof {}
+impl DomainType for SwapClaimProof {
+    type Proto = transparent_proofs::SwapClaimProof;
+}
 
 impl From<SwapClaimProof> for transparent_proofs::SwapClaimProof {
     fn from(msg: SwapClaimProof) -> Self {
@@ -498,7 +506,9 @@ impl SwapProof {
     }
 }
 
-impl Protobuf<transparent_proofs::SwapProof> for SwapProof {}
+impl DomainType for SwapProof {
+    type Proto = transparent_proofs::SwapProof;
+}
 
 impl From<SwapProof> for transparent_proofs::SwapProof {
     fn from(msg: SwapProof) -> Self {
@@ -581,7 +591,9 @@ impl UndelegateClaimProof {
     }
 }
 
-impl Protobuf<transparent_proofs::UndelegateClaimProof> for UndelegateClaimProof {}
+impl DomainType for UndelegateClaimProof {
+    type Proto = transparent_proofs::UndelegateClaimProof;
+}
 
 impl From<UndelegateClaimProof> for transparent_proofs::UndelegateClaimProof {
     fn from(claim_proof: UndelegateClaimProof) -> Self {

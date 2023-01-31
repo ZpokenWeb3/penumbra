@@ -3,7 +3,7 @@ use std::{
     convert::{TryFrom, TryInto},
 };
 
-use anyhow::Error;
+use anyhow::{Context, Error};
 use ark_ff::Zero;
 use bytes::Bytes;
 use decaf377_fmd::Clue;
@@ -16,7 +16,7 @@ use penumbra_crypto::{
 };
 use penumbra_proto::{
     core::ibc::v1alpha1 as pb_ibc, core::stake::v1alpha1 as pbs,
-    core::transaction::v1alpha1 as pbt, Message, Protobuf,
+    core::transaction::v1alpha1 as pbt, DomainType, Message,
 };
 use penumbra_tct as tct;
 use serde::{Deserialize, Serialize};
@@ -101,21 +101,22 @@ impl Transaction {
                 }
                 // These actions have no payload keys; they're listed explicitly
                 // for exhaustiveness.
-                Action::SwapClaim(_swap_claim) => {}
-                Action::Spend(_) => {}
-                Action::Delegate(_) => {}
-                Action::Undelegate(_) => {}
-                Action::UndelegateClaim(_) => {}
-                Action::ValidatorDefinition(_) => {}
-                Action::IBCAction(_) => {}
-                Action::ProposalSubmit(_) => {}
-                Action::ProposalWithdraw(_) => {}
-                Action::ValidatorVote(_) => {}
-                Action::PositionOpen(_) => {}
-                Action::PositionClose(_) => {}
-                Action::PositionWithdraw(_) => {}
-                Action::PositionRewardClaim(_) => {}
-                Action::Ics20Withdrawal(_) => {}
+                Action::SwapClaim(_)
+                | Action::Spend(_)
+                | Action::Delegate(_)
+                | Action::Undelegate(_)
+                | Action::UndelegateClaim(_)
+                | Action::ValidatorDefinition(_)
+                | Action::IBCAction(_)
+                | Action::ProposalSubmit(_)
+                | Action::ProposalWithdraw(_)
+                | Action::ValidatorVote(_)
+                | Action::ProposalDepositClaim(_)
+                | Action::PositionOpen(_)
+                | Action::PositionClose(_)
+                | Action::PositionWithdraw(_)
+                | Action::PositionRewardClaim(_)
+                | Action::Ics20Withdrawal(_) => {}
             }
         }
 
@@ -321,7 +322,9 @@ impl From<TransactionBody> for Vec<u8> {
     }
 }
 
-impl Protobuf<pbt::TransactionBody> for TransactionBody {}
+impl DomainType for TransactionBody {
+    type Proto = pbt::TransactionBody;
+}
 
 impl From<TransactionBody> for pbt::TransactionBody {
     fn from(msg: TransactionBody) -> Self {
@@ -345,7 +348,7 @@ impl TryFrom<pbt::TransactionBody> for TransactionBody {
             actions.push(
                 action
                     .try_into()
-                    .map_err(|_| anyhow::anyhow!("transaction body malformed"))?,
+                    .context("action malformed while parsing transaction body")?,
             );
         }
 
@@ -355,16 +358,16 @@ impl TryFrom<pbt::TransactionBody> for TransactionBody {
 
         let fee: Fee = proto
             .fee
-            .ok_or_else(|| anyhow::anyhow!("transaction body malformed"))?
+            .ok_or_else(|| anyhow::anyhow!("transaction body missing fee"))?
             .try_into()
-            .map_err(|_| anyhow::anyhow!("clue malformed"))?;
+            .context("fee malformed")?;
 
         let mut fmd_clues = Vec::<Clue>::new();
         for fmd_clue in proto.fmd_clues {
             fmd_clues.push(
                 fmd_clue
                     .try_into()
-                    .map_err(|_| anyhow::anyhow!("clue malformed"))?,
+                    .context("fmd clue malformed while parsing transaction body")?,
             );
         }
 
@@ -372,7 +375,7 @@ impl TryFrom<pbt::TransactionBody> for TransactionBody {
             Some(bytes) => Some(
                 bytes[..]
                     .try_into()
-                    .map_err(|_| anyhow::anyhow!("memo malformed"))?,
+                    .context("encrypted memo malformed while parsing transaction body")?,
             ),
             None => None,
         };
@@ -387,7 +390,9 @@ impl TryFrom<pbt::TransactionBody> for TransactionBody {
         })
     }
 }
-impl Protobuf<pbt::Transaction> for Transaction {}
+impl DomainType for Transaction {
+    type Proto = pbt::Transaction;
+}
 
 impl From<Transaction> for pbt::Transaction {
     fn from(msg: Transaction) -> Self {
@@ -412,19 +417,19 @@ impl TryFrom<pbt::Transaction> for Transaction {
     fn try_from(proto: pbt::Transaction) -> anyhow::Result<Self, Self::Error> {
         let transaction_body = proto
             .body
-            .ok_or_else(|| anyhow::anyhow!("transaction malformed"))?
+            .ok_or_else(|| anyhow::anyhow!("transaction missing body"))?
             .try_into()
-            .map_err(|_| anyhow::anyhow!("transaction body malformed"))?;
+            .context("transaction body malformed")?;
 
         let sig_bytes: [u8; 64] = proto.binding_sig[..]
             .try_into()
-            .map_err(|_| anyhow::anyhow!("transaction malformed"))?;
+            .context("transaction binding signature malformed")?;
 
         let anchor = proto
             .anchor
-            .ok_or_else(|| anyhow::anyhow!("transaction malformed"))?
+            .ok_or_else(|| anyhow::anyhow!("transaction missing anchor"))?
             .try_into()
-            .map_err(|_| anyhow::anyhow!("transaction malformed"))?;
+            .context("transaction anchor malformed")?;
 
         Ok(Transaction {
             transaction_body,
@@ -438,11 +443,7 @@ impl TryFrom<&[u8]> for Transaction {
     type Error = Error;
 
     fn try_from(bytes: &[u8]) -> Result<Transaction, Self::Error> {
-        let protobuf_serialized_proof = pbt::Transaction::decode(bytes)
-            .map_err(|_| anyhow::anyhow!("transaction malformed"))?;
-        protobuf_serialized_proof
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("transaction malformed"))
+        pbt::Transaction::decode(bytes)?.try_into()
     }
 }
 

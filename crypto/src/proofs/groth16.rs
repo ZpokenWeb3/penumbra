@@ -1,4 +1,4 @@
-pub(crate) mod gadgets;
+mod gadgets;
 mod output;
 mod spend;
 mod traits;
@@ -503,7 +503,7 @@ mod tests {
             #![proptest_config(ProptestConfig::with_cases(2))]
         #[test]
         /// Check that the `SpendProof` verification always suceeds for dummy (zero value) spends.
-        fn spend_proof_dummy_verification_suceeds(seed_phrase_randomness in any::<[u8; 32]>(), spend_auth_randomizer in fr_strategy(), value_amount in 2..200u64, v_blinding in fr_strategy()) {
+        fn spend_proof_dummy_verification_suceeds(seed_phrase_randomness in any::<[u8; 32]>(), spend_auth_randomizer in fr_strategy(), v_blinding in fr_strategy()) {
             let (pk, vk) = SpendCircuit::generate_test_parameters();
             let mut rng = OsRng;
 
@@ -514,7 +514,7 @@ mod tests {
             let (sender, _dtk_d) = ivk_sender.payment_address(0u64.into());
 
             let value_to_send = Value {
-                amount: value_amount.into(),
+                amount: 0u64.into(),
                 asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
             };
 

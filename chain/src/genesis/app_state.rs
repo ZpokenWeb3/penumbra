@@ -1,4 +1,4 @@
-use penumbra_proto::{core::chain::v1alpha1 as pb, core::stake::v1alpha1 as pb_stake, Protobuf};
+use penumbra_proto::{core::chain::v1alpha1 as pb, core::stake::v1alpha1 as pb_stake, DomainType};
 use serde::{Deserialize, Serialize};
 
 use super::Allocation;
@@ -74,4 +74,6 @@ impl TryFrom<pb::GenesisAppState> for AppState {
     }
 }
 
-impl Protobuf<pb::GenesisAppState> for AppState {}
+impl DomainType for AppState {
+    type Proto = pb::GenesisAppState;
+}

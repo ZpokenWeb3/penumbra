@@ -6,7 +6,7 @@ use std::{
 };
 
 use ark_ff::fields::PrimeField;
-use penumbra_proto::{core::crypto::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 use crate::{asset, Fq, Value};
@@ -20,7 +20,9 @@ pub struct Denom {
     pub(super) inner: Arc<Inner>,
 }
 
-impl Protobuf<pb::Denom> for Denom {}
+impl DomainType for Denom {
+    type Proto = pb::Denom;
+}
 
 impl From<Denom> for pb::Denom {
     fn from(dn: Denom) -> Self {

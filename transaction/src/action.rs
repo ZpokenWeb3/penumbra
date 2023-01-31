@@ -3,14 +3,14 @@ use std::convert::{TryFrom, TryInto};
 use penumbra_crypto::balance;
 use penumbra_proto::{
     core::ibc::v1alpha1 as pb_ibc, core::stake::v1alpha1 as pbs, core::transaction::v1alpha1 as pb,
-    Protobuf,
+    DomainType,
 };
 
 mod delegate;
 mod ibc;
 pub mod output;
 mod position;
-mod propose;
+pub mod proposal;
 pub mod spend;
 pub mod swap;
 pub mod swap_claim;
@@ -24,8 +24,8 @@ pub use self::ibc::Ics20Withdrawal;
 pub use delegate::Delegate;
 pub use output::Output;
 pub use position::{PositionClose, PositionOpen, PositionRewardClaim, PositionWithdraw};
-pub use propose::{
-    Proposal, ProposalKind, ProposalPayload, ProposalSubmit, ProposalWithdraw, ProposalWithdrawBody,
+pub use proposal::{
+    Proposal, ProposalDepositClaim, ProposalKind, ProposalPayload, ProposalSubmit, ProposalWithdraw,
 };
 pub use spend::Spend;
 pub use swap::Swap;
@@ -54,6 +54,7 @@ pub enum Action {
     ProposalWithdraw(ProposalWithdraw),
     // DelegatorVote(DelegatorVote),
     ValidatorVote(ValidatorVote),
+    ProposalDepositClaim(ProposalDepositClaim),
 
     PositionOpen(PositionOpen),
     PositionClose(PositionClose),
@@ -81,6 +82,7 @@ impl IsAction for Action {
             Action::ProposalWithdraw(withdraw) => withdraw.balance_commitment(),
             // Action::DelegatorVote(_) => ...
             Action::ValidatorVote(v) => v.balance_commitment(),
+            Action::ProposalDepositClaim(p) => p.balance_commitment(),
             Action::PositionOpen(p) => p.balance_commitment(),
             Action::PositionClose(p) => p.balance_commitment(),
             Action::PositionWithdraw(p) => p.balance_commitment(),
@@ -105,6 +107,7 @@ impl IsAction for Action {
             Action::ProposalSubmit(x) => x.view_from_perspective(txp),
             Action::ProposalWithdraw(x) => x.view_from_perspective(txp),
             Action::ValidatorVote(x) => x.view_from_perspective(txp),
+            Action::ProposalDepositClaim(x) => x.view_from_perspective(txp),
             Action::PositionOpen(x) => x.view_from_perspective(txp),
             Action::PositionClose(x) => x.view_from_perspective(txp),
             Action::PositionWithdraw(x) => x.view_from_perspective(txp),
@@ -117,7 +120,9 @@ impl IsAction for Action {
     }
 }
 
-impl Protobuf<pb::Action> for Action {}
+impl DomainType for Action {
+    type Proto = pb::Action;
+}
 
 impl From<Action> for pb::Action {
     fn from(msg: Action) -> Self {
@@ -160,6 +165,9 @@ impl From<Action> for pb::Action {
             // },
             Action::ValidatorVote(inner) => pb::Action {
                 action: Some(pb::action::Action::ValidatorVote(inner.into())),
+            },
+            Action::ProposalDepositClaim(inner) => pb::Action {
+                action: Some(pb::action::Action::ProposalDepositClaim(inner.into())),
             },
             Action::PositionOpen(inner) => pb::Action {
                 action: Some(pb::action::Action::PositionOpen(inner.into())),
@@ -211,6 +219,9 @@ impl TryFrom<pb::Action> for Action {
             // }
             pb::action::Action::ValidatorVote(inner) => {
                 Ok(Action::ValidatorVote(inner.try_into()?))
+            }
+            pb::action::Action::ProposalDepositClaim(inner) => {
+                Ok(Action::ProposalDepositClaim(inner.try_into()?))
             }
 
             pb::action::Action::PositionOpen(inner) => Ok(Action::PositionOpen(inner.try_into()?)),

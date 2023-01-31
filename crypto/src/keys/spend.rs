@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 
 use hmac::Hmac;
 use pbkdf2::pbkdf2;
-use penumbra_proto::{core::crypto::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -22,7 +22,7 @@ pub const SPENDKEY_LEN_BYTES: usize = 32;
 /// TODO(hdevalence): In the future, we should hide the SpendKeyBytes
 /// and force everything to use the proto format / bech32 serialization.
 /// But we can't do this now, because we need it to support existing wallets.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SpendKeyBytes(pub [u8; SPENDKEY_LEN_BYTES]);
 
 /// A key representing a single spending authority.
@@ -34,7 +34,17 @@ pub struct SpendKey {
     fvk: FullViewingKey,
 }
 
-impl Protobuf<pb::SpendKey> for SpendKey {}
+impl PartialEq for SpendKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.seed == other.seed
+    }
+}
+
+impl Eq for SpendKey {}
+
+impl DomainType for SpendKey {
+    type Proto = pb::SpendKey;
+}
 
 impl TryFrom<pb::SpendKey> for SpendKey {
     type Error = anyhow::Error;

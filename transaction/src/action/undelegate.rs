@@ -4,7 +4,7 @@ use penumbra_crypto::{
     stake::{DelegationToken, IdentityKey, UnbondingToken},
     Balance, Fr, Value,
 };
-use penumbra_proto::{core::stake::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::stake::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 use crate::{ActionView, IsAction, TransactionPerspective};
@@ -70,7 +70,9 @@ impl Undelegate {
     }
 }
 
-impl Protobuf<pb::Undelegate> for Undelegate {}
+impl DomainType for Undelegate {
+    type Proto = pb::Undelegate;
+}
 
 impl From<Undelegate> for pb::Undelegate {
     fn from(d: Undelegate) -> Self {

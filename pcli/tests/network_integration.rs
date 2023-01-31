@@ -14,6 +14,7 @@ use std::{thread, time};
 
 use assert_cmd::Command;
 use directories::UserDirs;
+use penumbra_component::stake::validator::ValidatorToml;
 use predicates::prelude::*;
 use regex::Regex;
 use serde_json::Value;
@@ -286,61 +287,60 @@ fn swap() {
     thread::sleep(block_time);
 }
 
-// FIXME: Re-enable this test once proposal submission works again (see #1845).
-// #[ignore]
-// #[test]
-// fn governance_submit_proposal() {
-//     let tmpdir = load_wallet_into_tmpdir();
+#[ignore]
+#[test]
+fn governance_submit_proposal() {
+    let tmpdir = load_wallet_into_tmpdir();
 
-//     // Get template for signaling proposal.
-//     let mut template_cmd = Command::cargo_bin("pcli").unwrap();
-//     template_cmd
-//         .args([
-//             "--data-path",
-//             tmpdir.path().to_str().unwrap(),
-//             "tx",
-//             "proposal",
-//             "template",
-//             "--kind",
-//             "signaling",
-//             "--file",
-//             "proposal.json",
-//         ])
-//         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
-//     template_cmd.assert().success();
+    // Get template for signaling proposal.
+    let mut template_cmd = Command::cargo_bin("pcli").unwrap();
+    template_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "tx",
+            "proposal",
+            "template",
+            "--kind",
+            "signaling",
+            "--file",
+            "proposal.json",
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    template_cmd.assert().success();
 
-//     // Submit signaling proposal.
-//     let mut submit_cmd = Command::cargo_bin("pcli").unwrap();
-//     submit_cmd
-//         .args([
-//             "--data-path",
-//             tmpdir.path().to_str().unwrap(),
-//             "tx",
-//             "proposal",
-//             "submit",
-//             "--file",
-//             "proposal.json",
-//         ])
-//         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
-//     submit_cmd.assert().success();
+    // Submit signaling proposal.
+    let mut submit_cmd = Command::cargo_bin("pcli").unwrap();
+    submit_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "tx",
+            "proposal",
+            "submit",
+            "--file",
+            "proposal.json",
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    submit_cmd.assert().success();
 
-//     // Wait for a couple blocks for the transaction to be confirmed.
-//     let block_time = time::Duration::from_secs(2 * BLOCK_TIME_SECONDS);
-//     thread::sleep(block_time);
+    // Wait for a couple blocks for the transaction to be confirmed.
+    let block_time = time::Duration::from_secs(2 * BLOCK_TIME_SECONDS);
+    thread::sleep(block_time);
 
-//     // Now list the proposals.
-//     let mut proposals_cmd = Command::cargo_bin("pcli").unwrap();
-//     proposals_cmd
-//         .args([
-//             "--data-path",
-//             tmpdir.path().to_str().unwrap(),
-//             "query",
-//             "governance",
-//             "list-proposals",
-//         ])
-//         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
-//     proposals_cmd.assert().success();
-// }
+    // Now list the proposals.
+    let mut proposals_cmd = Command::cargo_bin("pcli").unwrap();
+    proposals_cmd
+        .args([
+            "--data-path",
+            tmpdir.path().to_str().unwrap(),
+            "query",
+            "governance",
+            "list-proposals",
+        ])
+        .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
+    proposals_cmd.assert().success();
+}
 
 #[ignore]
 #[test]
@@ -349,7 +349,6 @@ fn duplicate_consensus_key_forbidden() {
     let validator = get_validator();
     let tmpdir = load_wallet_into_tmpdir();
     let mut query_cmd = Command::cargo_bin("pcli").unwrap();
-    let validator_list_filepath = NamedTempFile::new().unwrap();
     query_cmd
         .args([
             "--data-path",
@@ -358,22 +357,14 @@ fn duplicate_consensus_key_forbidden() {
             "validator",
             "definition",
             validator.as_str(),
-            "--file",
-            (validator_list_filepath.path().to_str().unwrap()),
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     query_cmd.assert().success();
-    let query_result = std::fs::read_to_string(&validator_list_filepath)
-        .expect("Could not read validator list output file");
-    let original_validator_def: Value = serde_json::from_str(&query_result)
-        .expect("Could not parse validator definition query as JSON");
-    let consensus_key = original_validator_def
-        .get("consensus_key")
-        .expect("Validator definition missing consensus_key field");
+    let validator_def_vec = query_cmd.unwrap().stdout;
+    let original_validator_def: ValidatorToml =
+        toml::from_slice(&validator_def_vec).expect("can parse validator template as TOML");
 
     // Get template for promoting our node to validator.
-    // We use a named tempfile so we can get a filepath for pcli cli.
-    let validator_filepath = NamedTempFile::new().unwrap();
     let mut template_cmd = Command::cargo_bin("pcli").unwrap();
     template_cmd
         .args([
@@ -382,25 +373,23 @@ fn duplicate_consensus_key_forbidden() {
             "validator",
             "definition",
             "template",
-            "--file",
-            (validator_filepath.path().to_str().unwrap()),
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
     template_cmd.assert().success();
-    let template_content =
-        std::fs::read_to_string(&validator_filepath).expect("Could not read validator config file");
-    let mut new_validator_def: Value = serde_json::from_str(&template_content)
-        .expect("Could not parse validator config file as JSON");
+    let template_vec = template_cmd.unwrap().stdout;
+    let mut new_validator_def: ValidatorToml =
+        toml::from_slice(&template_vec).expect("can parse validator template as TOML");
 
     // Overwrite randomly generated consensus key with one taken from
     // a real validator.
-    new_validator_def["consensus_key"] = consensus_key.to_owned();
+    new_validator_def.consensus_key = original_validator_def.consensus_key;
 
     // Write out new, intentionally broken validator definition.
+    let validator_filepath = NamedTempFile::new().unwrap();
     std::fs::write(
         &validator_filepath,
-        serde_json::to_string_pretty(&new_validator_def)
-            .expect("Could not marshall new validator config as JSON"),
+        toml::to_string_pretty(&new_validator_def)
+            .expect("Could not marshall new validator config as TOML"),
     )
     .expect("Could not overwrite validator config file with new definition");
 
@@ -443,8 +432,8 @@ fn mismatched_consensus_key_update_fails() {
     template_cmd.assert().success();
     let template_content = std::fs::read_to_string(&validator_filepath)
         .expect("Could not read initial validator config file");
-    let mut new_validator_def: Value = serde_json::from_str(&template_content)
-        .expect("Could not parse initial validator template as JSON");
+    let mut new_validator_def: ValidatorToml = toml::from_str(&template_content)
+        .expect("Could not parse initial validator template as TOML");
 
     // Now we retrieve the actual tendermint consensus key from the testnet data dir.
     // Doing so assumes that the testnet-generated data was previously but in place,
@@ -469,20 +458,23 @@ fn mismatched_consensus_key_update_fails() {
     let tm_key_config: Value =
         serde_json::from_str(&std::fs::read_to_string(&tm_key_filepath).unwrap())
             .expect("Could not read tendermint key config file");
-    let tm_key = &tm_key_config["pub_key"]["value"];
+    let tm_key: tendermint::PublicKey =
+        serde_json::value::from_value(tm_key_config["pub_key"].clone())
+            .expect("Could not parse tendermint key config file");
+
     // Modify initial validator definition template to use actual tm key.
-    new_validator_def["consensus_key"] = tm_key.to_owned();
+    new_validator_def.consensus_key = tm_key;
     // Mark validator definition as "active".
-    new_validator_def["enabled"] = Value::from(true);
-    // Modify our local validator config to contain a different consensus key
-    let seq_num: Value = new_validator_def["sequence_number"].to_owned();
-    new_validator_def["sequence_number"] = Value::from(seq_num.as_i64().unwrap() + 1);
+    new_validator_def.enabled = true;
+    // We used the validator identity in a previous test,
+    // so set the template's sequence number to be higher.
+    new_validator_def.sequence_number = 1000;
 
     // Write out revised (and incorrect!) validator definition.
     std::fs::write(
         &validator_filepath,
-        serde_json::to_string_pretty(&new_validator_def)
-            .expect("Could not marshall revised validator config as JSON"),
+        toml::to_string_pretty(&new_validator_def)
+            .expect("Could not marshall revised validator config as TOML"),
     )
     .expect("Could not overwrite validator config file with revised definition");
 

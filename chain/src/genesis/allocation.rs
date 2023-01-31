@@ -1,5 +1,5 @@
 use penumbra_crypto::{asset, Address, Note, Rseed, Value};
-use penumbra_proto::{core::chain::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::chain::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 /// A (transparent) genesis allocation.
@@ -72,4 +72,6 @@ impl Allocation {
     }
 }
 
-impl Protobuf<pb::genesis_app_state::Allocation> for Allocation {}
+impl DomainType for Allocation {
+    type Proto = pb::genesis_app_state::Allocation;
+}

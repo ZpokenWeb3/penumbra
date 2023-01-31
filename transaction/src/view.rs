@@ -1,6 +1,6 @@
 use decaf377_fmd::Clue;
 use penumbra_crypto::transaction::Fee;
-use penumbra_proto::{core::transaction::v1alpha1 as pbt, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as pbt, DomainType};
 use serde::{Deserialize, Serialize};
 
 pub mod action_view;
@@ -20,7 +20,9 @@ pub struct TransactionView {
     pub memo: Option<String>,
 }
 
-impl Protobuf<pbt::TransactionView> for TransactionView {}
+impl DomainType for TransactionView {
+    type Proto = pbt::TransactionView;
+}
 
 impl TryFrom<pbt::TransactionView> for TransactionView {
     type Error = anyhow::Error;

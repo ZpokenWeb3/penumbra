@@ -12,7 +12,7 @@
 //! └───────┘  format  └──────────────┘   boundary    └──────────────┘
 //! ```
 //!
-//! The [`Protobuf`] marker trait can be implemented on a domain type to ensure
+//! The [`DomainType`] marker trait can be implemented on a domain type to ensure
 //! these conversions exist.
 
 // The autogen code is not clippy-clean, so we disable some clippy warnings for this crate.
@@ -24,7 +24,7 @@ pub use prost::Message;
 pub mod serializers;
 
 mod protobuf;
-pub use protobuf::Protobuf;
+pub use protobuf::DomainType;
 
 #[cfg(feature = "penumbra-storage")]
 mod state;
@@ -43,6 +43,7 @@ pub mod penumbra {
         pub mod crypto {
             pub mod v1alpha1 {
                 include!("gen/penumbra.core.crypto.v1alpha1.rs");
+                include!("gen/penumbra.core.crypto.v1alpha1.serde.rs");
             }
         }
 
@@ -50,6 +51,7 @@ pub mod penumbra {
         pub mod stake {
             pub mod v1alpha1 {
                 include!("gen/penumbra.core.stake.v1alpha1.rs");
+                include!("gen/penumbra.core.stake.v1alpha1.serde.rs");
             }
         }
 
@@ -57,6 +59,7 @@ pub mod penumbra {
         pub mod dex {
             pub mod v1alpha1 {
                 include!("gen/penumbra.core.dex.v1alpha1.rs");
+                include!("gen/penumbra.core.dex.v1alpha1.serde.rs");
             }
         }
 
@@ -64,6 +67,7 @@ pub mod penumbra {
         pub mod governance {
             pub mod v1alpha1 {
                 include!("gen/penumbra.core.governance.v1alpha1.rs");
+                include!("gen/penumbra.core.governance.v1alpha1.serde.rs");
             }
         }
 
@@ -71,6 +75,7 @@ pub mod penumbra {
         pub mod transaction {
             pub mod v1alpha1 {
                 include!("gen/penumbra.core.transaction.v1alpha1.rs");
+                include!("gen/penumbra.core.transaction.v1alpha1.serde.rs");
             }
         }
 
@@ -78,6 +83,7 @@ pub mod penumbra {
         pub mod chain {
             pub mod v1alpha1 {
                 include!("gen/penumbra.core.chain.v1alpha1.rs");
+                include!("gen/penumbra.core.chain.v1alpha1.serde.rs");
             }
         }
 
@@ -85,6 +91,7 @@ pub mod penumbra {
         pub mod ibc {
             pub mod v1alpha1 {
                 include!("gen/penumbra.core.ibc.v1alpha1.rs");
+                include!("gen/penumbra.core.ibc.v1alpha1.serde.rs");
             }
         }
 
@@ -95,6 +102,7 @@ pub mod penumbra {
         pub mod transparent_proofs {
             pub mod v1alpha1 {
                 include!("gen/penumbra.core.transparent_proofs.v1alpha1.rs");
+                include!("gen/penumbra.core.transparent_proofs.v1alpha1.serde.rs");
             }
         }
     }
@@ -102,11 +110,14 @@ pub mod penumbra {
     pub mod client {
         pub mod v1alpha1 {
             include!("gen/penumbra.client.v1alpha1.rs");
+            include!("gen/penumbra.client.v1alpha1.serde.rs");
 
             // TODO(erwan): this is one way to flatten the complex proto hierarchy, should be easy to lift
             pub mod tendermint_proxy {
                 pub use crate::cosmos::base::tendermint::v1beta1::*;
             }
+
+            // TODO(hdevalence): do we want any of this code?
 
             use async_stream::try_stream;
             use futures::Stream;
@@ -148,11 +159,10 @@ pub mod penumbra {
                 }
 
                 /// Get the typed domain value corresponding to a state key.
-                pub async fn key_domain<T, P>(&mut self, key: impl AsRef<str>) -> anyhow::Result<T>
+                pub async fn key_domain<T>(&mut self, key: impl AsRef<str>) -> anyhow::Result<T>
                 where
-                    T: crate::Protobuf<P> + TryFrom<P>,
-                    T::Error: Into<anyhow::Error> + Send + Sync + 'static,
-                    P: prost::Message + Default + From<T>,
+                    T: crate::DomainType,
+                    <T as TryFrom<T::Proto>>::Error: Into<anyhow::Error> + Send + Sync + 'static,
                     C: tonic::client::GrpcService<BoxBody> + 'static,
                     C::ResponseBody: Send,
                     <C as tonic::client::GrpcService<BoxBody>>::ResponseBody:
@@ -171,16 +181,15 @@ pub mod penumbra {
                 }
 
                 /// Get the typed domain value corresponding to prefixes of a state key.
-                pub async fn prefix_domain<T, P>(
+                pub async fn prefix_domain<T>(
                     &mut self,
                     prefix: impl AsRef<str>,
                 ) -> anyhow::Result<
                     Pin<Box<dyn Stream<Item = anyhow::Result<(String, T)>> + Send + 'static>>,
                 >
                 where
-                    T: crate::Protobuf<P> + TryFrom<P> + Send + Sync + 'static + Unpin,
-                    T::Error: Into<anyhow::Error> + Send + Sync + 'static,
-                    P: prost::Message + Default + From<T>,
+                    T: crate::DomainType + Send + 'static + Unpin,
+                    <T as TryFrom<T::Proto>>::Error: Into<anyhow::Error> + Send + Sync + 'static,
                     C: tonic::client::GrpcService<BoxBody> + 'static,
                     C::ResponseBody: Send,
                     <C as tonic::client::GrpcService<BoxBody>>::ResponseBody:
@@ -210,6 +219,7 @@ pub mod penumbra {
     pub mod view {
         pub mod v1alpha1 {
             include!("gen/penumbra.view.v1alpha1.rs");
+            include!("gen/penumbra.view.v1alpha1.serde.rs");
         }
     }
 
@@ -217,6 +227,7 @@ pub mod penumbra {
     pub mod custody {
         pub mod v1alpha1 {
             include!("gen/penumbra.custody.v1alpha1.rs");
+            include!("gen/penumbra.custody.v1alpha1.serde.rs");
         }
     }
 }

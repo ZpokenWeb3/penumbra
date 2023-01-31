@@ -1,3 +1,4 @@
+use anyhow::Context;
 use ark_ff::Zero;
 use decaf377::Fr;
 use penumbra_crypto::asset::Amount;
@@ -6,7 +7,7 @@ use penumbra_crypto::dex::TradingPair;
 use penumbra_crypto::proofs::transparent::SwapProof;
 use penumbra_crypto::Value;
 use penumbra_crypto::{balance, dex::swap::SwapCiphertext, Balance};
-use penumbra_proto::{core::dex::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::dex::v1alpha1 as pb, DomainType};
 
 use crate::view::action_view::SwapView;
 use crate::{ActionView, IsAction, TransactionPerspective};
@@ -58,7 +59,9 @@ impl IsAction for Swap {
     }
 }
 
-impl Protobuf<pb::Swap> for Swap {}
+impl DomainType for Swap {
+    type Proto = pb::Swap;
+}
 
 impl From<Swap> for pb::Swap {
     fn from(s: Swap) -> Self {
@@ -73,13 +76,12 @@ impl TryFrom<pb::Swap> for Swap {
     type Error = anyhow::Error;
     fn try_from(s: pb::Swap) -> Result<Self, Self::Error> {
         Ok(Self {
-            proof: s.proof[..]
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("Swap proof malformed"))?,
+            proof: s.proof[..].try_into().context("swap proof malformed")?,
             body: s
                 .body
-                .ok_or_else(|| anyhow::anyhow!("missing body"))?
-                .try_into()?,
+                .ok_or_else(|| anyhow::anyhow!("missing swap body"))?
+                .try_into()
+                .context("swap body malformed")?,
         })
     }
 }
@@ -93,7 +95,9 @@ pub struct Body {
     pub payload: SwapPayload,
 }
 
-impl Protobuf<pb::SwapBody> for Body {}
+impl DomainType for Body {
+    type Proto = pb::SwapBody;
+}
 
 impl From<Body> for pb::SwapBody {
     fn from(s: Body) -> Self {

@@ -1,15 +1,12 @@
 use std::str::FromStr;
 
 use ark_r1cs_std::uint8::UInt8;
-use decaf377::{
-    r1cs::{ElementVar, FqVar},
-    Bls12_377, Fq, Fr,
-};
-use decaf377::{Element, FieldExt};
+use decaf377::FieldExt;
+use decaf377::{Bls12_377, Fq, Fr};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 
-use ark_ff::{PrimeField, ToConstraintField};
+use ark_ff::ToConstraintField;
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
@@ -18,7 +15,10 @@ use rand::{CryptoRng, Rng};
 use rand_core::OsRng;
 
 use crate::proofs::groth16::{gadgets, ParameterSetup};
-use crate::{balance, keys::Diversifier, note, Address, Note, Rseed, Value};
+use crate::{
+    balance, balance::commitment::BalanceCommitmentVar, keys::Diversifier, note, Address, Note,
+    Rseed, Value,
+};
 
 // Public:
 // * vcm (value commitment)
@@ -48,55 +48,28 @@ pub struct OutputCircuit {
 impl ConstraintSynthesizer<Fq> for OutputCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fq>) -> ark_relations::r1cs::Result<()> {
         // Witnesses
-        let note_blinding_var =
-            FqVar::new_witness(cs.clone(), || Ok(self.note.note_blinding().clone()))?;
-        let value_amount_var =
-            FqVar::new_witness(cs.clone(), || Ok(Fq::from(self.note.value().amount)))?;
-        let value_asset_id_var =
-            FqVar::new_witness(cs.clone(), || Ok(self.note.value().asset_id.0))?;
-        let diversified_generator_var: ElementVar =
-            AllocVar::<Element, Fq>::new_witness(cs.clone(), || {
-                Ok(self.note.diversified_generator().clone())
-            })?;
-        let transmission_key_s_var =
-            FqVar::new_witness(cs.clone(), || Ok(self.note.transmission_key_s().clone()))?;
-        let clue_key_var = FqVar::new_witness(cs.clone(), || {
-            Ok(Fq::from_le_bytes_mod_order(&self.note.clue_key().0[..]))
-        })?;
+        let note_var = note::NoteVar::new_witness(cs.clone(), || Ok(self.note.clone()))?;
         let v_blinding_arr: [u8; 32] = self.v_blinding.to_bytes();
         let v_blinding_vars = UInt8::new_witness_vec(cs.clone(), &v_blinding_arr)?;
-        let value_amount_arr = self.note.value().amount.to_le_bytes();
-        let value_vars = UInt8::new_witness_vec(cs.clone(), &value_amount_arr)?;
 
         // Public inputs
-        let note_commitment_var = FqVar::new_input(cs.clone(), || Ok(self.note_commitment.0))?;
-        let balance_commitment_var =
-            ElementVar::new_input(cs.clone(), || Ok(self.balance_commitment.0))?;
+        let claimed_note_commitment =
+            note::NoteCommitmentVar::new_input(cs.clone(), || Ok(self.note_commitment))?;
+        let claimed_balance_commitment =
+            BalanceCommitmentVar::new_input(cs.clone(), || Ok(self.balance_commitment))?;
 
-        gadgets::diversified_basepoint_not_identity(
+        gadgets::element_not_identity(
             cs.clone(),
             &Boolean::TRUE,
-            diversified_generator_var.clone(),
+            note_var.diversified_generator(),
         )?;
-        gadgets::value_commitment_integrity(
-            cs.clone(),
-            &Boolean::TRUE,
-            value_vars,
-            value_asset_id_var.clone(),
-            v_blinding_vars,
-            balance_commitment_var,
-        )?;
-        gadgets::note_commitment_integrity(
-            cs,
-            &Boolean::TRUE,
-            note_blinding_var,
-            value_amount_var,
-            value_asset_id_var,
-            diversified_generator_var,
-            transmission_key_s_var,
-            clue_key_var,
-            note_commitment_var,
-        )?;
+        // Check integrity of balance commitment.
+        let balance_commitment = note_var.value().commit(v_blinding_vars)?;
+        balance_commitment.enforce_equal(&claimed_balance_commitment)?;
+
+        // Note commitment integrity
+        let note_commitment = note_var.commit()?;
+        note_commitment.enforce_equal(&claimed_note_commitment)?;
 
         Ok(())
     }
@@ -105,7 +78,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
 impl ParameterSetup for OutputCircuit {
     fn generate_test_parameters() -> (ProvingKey<Bls12_377>, VerifyingKey<Bls12_377>) {
         let diversifier_bytes = [1u8; 16];
-        let pk_d_bytes = [1u8; 32];
+        let pk_d_bytes = decaf377::basepoint().vartime_compress().0;
         let clue_key_bytes = [1; 32];
         let diversifier = Diversifier(diversifier_bytes);
         let address = Address::from_components(

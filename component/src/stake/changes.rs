@@ -1,5 +1,5 @@
 use anyhow::Result;
-use penumbra_proto::{core::stake::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::stake::v1alpha1 as pb, DomainType};
 use penumbra_transaction::action::{Delegate, Undelegate};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,9 @@ pub struct DelegationChanges {
     pub undelegations: Vec<Undelegate>,
 }
 
-impl Protobuf<pb::DelegationChanges> for DelegationChanges {}
+impl DomainType for DelegationChanges {
+    type Proto = pb::DelegationChanges;
+}
 
 impl From<DelegationChanges> for pb::DelegationChanges {
     fn from(changes: DelegationChanges) -> pb::DelegationChanges {

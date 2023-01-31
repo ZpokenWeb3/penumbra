@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use penumbra_proto::{core::stake::v1alpha1 as pbs, Protobuf};
+use penumbra_proto::{core::stake::v1alpha1 as pbs, DomainType};
 use serde::{Deserialize, Serialize};
 
 use crate::{asset, Amount, Balance, Value, STAKING_TOKEN_ASSET_ID};
@@ -79,7 +79,9 @@ impl std::fmt::Display for Penalty {
     }
 }
 
-impl Protobuf<pbs::Penalty> for Penalty {}
+impl DomainType for Penalty {
+    type Proto = pbs::Penalty;
+}
 
 impl From<Penalty> for pbs::Penalty {
     fn from(v: Penalty) -> Self {

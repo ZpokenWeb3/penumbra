@@ -12,7 +12,7 @@ use penumbra_component::governance::{
 };
 use penumbra_crypto::stake::IdentityKey;
 use penumbra_proto::client::v1alpha1::MutableParametersRequest;
-use penumbra_transaction::action::{Proposal, ProposalPayload, Vote};
+use penumbra_transaction::action::{Proposal, Vote};
 use penumbra_view::ViewClient;
 use serde::Serialize;
 use serde_json::json;
@@ -81,8 +81,8 @@ impl GovernanceCmd {
             }
             GovernanceCmd::ListProposals { inactive } => {
                 let proposal_id_list: Vec<u64> = if *inactive {
-                    let latest: u64 = client.key_proto(latest_proposal_id()).await?;
-                    (0..=latest).collect()
+                    let next: u64 = client.key_proto(next_proposal_id()).await?;
+                    (0..next).collect()
                 } else {
                     let unfinished: ProposalList =
                         client.key_domain(unfinished_proposals()).await?;
@@ -91,8 +91,9 @@ impl GovernanceCmd {
 
                 let mut writer = stdout();
                 for proposal_id in proposal_id_list {
-                    let proposal_title: String =
-                        client.key_proto(proposal_title(proposal_id)).await?;
+                    let proposal: Proposal =
+                        client.key_domain(proposal_definition(proposal_id)).await?;
+                    let proposal_title = proposal.title;
                     let proposal_state: proposal::State =
                         client.key_domain(proposal_state(proposal_id)).await?;
 
@@ -105,16 +106,8 @@ impl GovernanceCmd {
             }
             GovernanceCmd::Proposal { proposal_id, query } => match query {
                 Definition => {
-                    let title: String = client.key_proto(proposal_title(*proposal_id)).await?;
-                    let description: String =
-                        client.key_proto(proposal_description(*proposal_id)).await?;
-                    let payload: ProposalPayload =
-                        client.key_domain(proposal_payload(*proposal_id)).await?;
-                    let proposal = Proposal {
-                        title,
-                        description,
-                        payload,
-                    };
+                    let proposal: Proposal =
+                        client.key_domain(proposal_definition(*proposal_id)).await?;
                     json(&proposal)?;
                 }
                 State => {
@@ -136,7 +129,7 @@ impl GovernanceCmd {
                 ValidatorVotes => {
                     let mut votes: BTreeMap<IdentityKey, Vote> = BTreeMap::new();
                     client
-                        .prefix_domain::<Vote, _>(voting_validators_list(*proposal_id))
+                        .prefix_domain::<Vote>(voting_validators_list(*proposal_id))
                         .await?
                         .next()
                         .await

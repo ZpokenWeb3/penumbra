@@ -5,12 +5,14 @@ use anyhow::Result;
 use penumbra_crypto::{transaction::Fee, Address};
 use penumbra_proto::{
     core::ibc::v1alpha1 as pb_ibc, core::stake::v1alpha1 as pb_stake,
-    core::transaction::v1alpha1 as pb, Protobuf,
+    core::transaction::v1alpha1 as pb, DomainType,
 };
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 
-use crate::action::{Delegate, ProposalSubmit, Undelegate, ValidatorVote};
+use crate::action::{
+    Delegate, ProposalDepositClaim, ProposalSubmit, ProposalWithdraw, Undelegate, ValidatorVote,
+};
 
 mod action;
 mod auth;
@@ -19,8 +21,8 @@ mod clue;
 mod memo;
 
 pub use action::{
-    ActionPlan, DelegatorVotePlan, OutputPlan, ProposalWithdrawPlan, SpendPlan, SwapClaimPlan,
-    SwapPlan, UndelegateClaimPlan,
+    ActionPlan, DelegatorVotePlan, OutputPlan, SpendPlan, SwapClaimPlan, SwapPlan,
+    UndelegateClaimPlan,
 };
 pub use clue::CluePlan;
 pub use memo::MemoPlan;
@@ -124,7 +126,7 @@ impl TransactionPlan {
         })
     }
 
-    pub fn proposal_withdraws(&self) -> impl Iterator<Item = &ProposalWithdrawPlan> {
+    pub fn proposal_withdraws(&self) -> impl Iterator<Item = &ProposalWithdraw> {
         self.actions.iter().filter_map(|action| {
             if let ActionPlan::ProposalWithdraw(p) = action {
                 Some(p)
@@ -148,6 +150,16 @@ impl TransactionPlan {
         self.actions.iter().filter_map(|action| {
             if let ActionPlan::ValidatorVote(v) = action {
                 Some(v)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn proposal_deposit_claims(&self) -> impl Iterator<Item = &ProposalDepositClaim> {
+        self.actions.iter().filter_map(|action| {
+            if let ActionPlan::ProposalDepositClaim(p) = action {
+                Some(p)
             } else {
                 None
             }
@@ -206,7 +218,9 @@ impl TransactionPlan {
     }
 }
 
-impl Protobuf<pb::TransactionPlan> for TransactionPlan {}
+impl DomainType for TransactionPlan {
+    type Proto = pb::TransactionPlan;
+}
 
 impl From<TransactionPlan> for pb::TransactionPlan {
     fn from(msg: TransactionPlan) -> Self {

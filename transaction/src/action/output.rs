@@ -1,6 +1,6 @@
 use std::convert::{TryFrom, TryInto};
 
-use anyhow::Error;
+use anyhow::{Context, Error};
 use bytes::Bytes;
 use penumbra_crypto::{
     balance,
@@ -8,7 +8,7 @@ use penumbra_crypto::{
     symmetric::{OvkWrappedKey, WrappedMemoKey},
     EncryptedNote, Note,
 };
-use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as pb, DomainType};
 
 use crate::{view::action_view::OutputView, ActionView, TransactionPerspective};
 
@@ -72,7 +72,9 @@ pub struct Body {
     pub wrapped_memo_key: WrappedMemoKey,
 }
 
-impl Protobuf<pb::Output> for Output {}
+impl DomainType for Output {
+    type Proto = pb::Output;
+}
 
 impl From<Output> for pb::Output {
     fn from(output: Output) -> Self {
@@ -95,12 +97,14 @@ impl TryFrom<pb::Output> for Output {
                 .try_into()?,
             proof: proto.proof[..]
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("output body malformed"))?,
+                .context("output proof malformed")?,
         })
     }
 }
 
-impl Protobuf<pb::OutputBody> for Body {}
+impl DomainType for Body {
+    type Proto = pb::OutputBody;
+}
 
 impl From<Body> for pb::OutputBody {
     fn from(output: Body) -> Self {
@@ -121,20 +125,21 @@ impl TryFrom<pb::OutputBody> for Body {
             .note_payload
             .ok_or_else(|| anyhow::anyhow!("missing note payload"))?
             .try_into()
-            .map_err(|e: Error| e.context("output body malformed"))?;
+            .context("malformed note payload")?;
 
         let wrapped_memo_key = proto.wrapped_memo_key[..]
             .try_into()
-            .map_err(|_| anyhow::anyhow!("output malformed"))?;
+            .context("malformed wrapped memo key")?;
 
         let ovk_wrapped_key: OvkWrappedKey = proto.ovk_wrapped_key[..]
             .try_into()
-            .map_err(|_| anyhow::anyhow!("output malformed"))?;
+            .context("malformed ovk wrapped key")?;
 
         let balance_commitment = proto
             .balance_commitment
             .ok_or_else(|| anyhow::anyhow!("missing value commitment"))?
-            .try_into()?;
+            .try_into()
+            .context("malformed balance commitment")?;
 
         Ok(Body {
             note_payload,

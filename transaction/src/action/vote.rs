@@ -6,16 +6,14 @@ use std::{
 use anyhow::anyhow;
 use decaf377_rdsa::{Signature, SpendAuth};
 use penumbra_crypto::{stake::IdentityKey, GovernanceKey};
-use penumbra_proto::{
-    core::governance::v1alpha1 as pb_g, core::transaction::v1alpha1 as pb_t, Protobuf,
-};
+use penumbra_proto::{core::governance::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 use crate::{ActionView, IsAction, TransactionPerspective};
 
 /// A vote on a proposal.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(try_from = "pb_g::Vote", into = "pb_g::Vote")]
+#[serde(try_from = "pb::Vote", into = "pb::Vote")]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub enum Vote {
     /// The vote is to approve the proposal.
@@ -31,61 +29,65 @@ pub enum Vote {
 impl FromStr for Vote {
     type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let pb_vote = pb_g::vote::Vote::from_str(s)?;
-        let vote = pb_g::Vote {
-            vote: pb_vote as i32,
+    fn from_str(s: &str) -> anyhow::Result<Vote> {
+        match s.replace(['-', '_', ' '], "").to_lowercase().as_str() {
+            "yes" | "y" => Ok(Vote::Yes),
+            "no" | "n" => Ok(Vote::No),
+            "abstain" | "a" => Ok(Vote::Abstain),
+            "veto" | "noveto" | "nowithveto" | "v" => Ok(Vote::NoWithVeto),
+            _ => Err(anyhow::anyhow!("invalid vote: {}", s)),
         }
-        .try_into()?;
-        Ok(vote)
     }
 }
 
 impl Display for Vote {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        pb_g::vote::Vote::from_i32(pb_g::Vote::from(*self).vote)
-            .unwrap()
-            .fmt(f)
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), fmt::Error> {
+        match self {
+            Vote::Yes => write!(f, "yes"),
+            Vote::No => write!(f, "no"),
+            Vote::Abstain => write!(f, "abstain"),
+            Vote::NoWithVeto => write!(f, "no_with_veto"),
+        }
     }
 }
 
-impl From<Vote> for pb_g::Vote {
+impl From<Vote> for pb::Vote {
     fn from(value: Vote) -> Self {
         pb_from_vote(value)
     }
 }
 
 // Factored out so it can be used in a const
-const fn pb_from_vote(vote: Vote) -> pb_g::Vote {
+const fn pb_from_vote(vote: Vote) -> pb::Vote {
     match vote {
-        Vote::Yes => pb_g::Vote {
-            vote: pb_g::vote::Vote::Yes as i32,
+        Vote::Yes => pb::Vote {
+            vote: pb::vote::Vote::Yes as i32,
         },
-        Vote::No => pb_g::Vote {
-            vote: pb_g::vote::Vote::No as i32,
+        Vote::No => pb::Vote {
+            vote: pb::vote::Vote::No as i32,
         },
-        Vote::Abstain => pb_g::Vote {
-            vote: pb_g::vote::Vote::Abstain as i32,
+        Vote::Abstain => pb::Vote {
+            vote: pb::vote::Vote::Abstain as i32,
         },
-        Vote::NoWithVeto => pb_g::Vote {
-            vote: pb_g::vote::Vote::NoWithVeto as i32,
+        Vote::NoWithVeto => pb::Vote {
+            vote: pb::vote::Vote::NoWithVeto as i32,
         },
     }
 }
 
-impl TryFrom<pb_g::Vote> for Vote {
+impl TryFrom<pb::Vote> for Vote {
     type Error = anyhow::Error;
 
-    fn try_from(msg: pb_g::Vote) -> Result<Self, Self::Error> {
-        let Some(vote_state) = pb_g::vote::Vote::from_i32(msg.vote) else {
+    fn try_from(msg: pb::Vote) -> Result<Self, Self::Error> {
+        let Some(vote_state) = pb::vote::Vote::from_i32(msg.vote) else {
             return Err(anyhow!("invalid vote state"))
         };
         match vote_state {
-            pb_g::vote::Vote::Abstain => Ok(Vote::Abstain),
-            pb_g::vote::Vote::Yes => Ok(Vote::Yes),
-            pb_g::vote::Vote::No => Ok(Vote::No),
-            pb_g::vote::Vote::NoWithVeto => Ok(Vote::NoWithVeto),
-            pb_g::vote::Vote::Unspecified => Err(anyhow!("unspecified vote state")),
+            pb::vote::Vote::Abstain => Ok(Vote::Abstain),
+            pb::vote::Vote::Yes => Ok(Vote::Yes),
+            pb::vote::Vote::No => Ok(Vote::No),
+            pb::vote::Vote::NoWithVeto => Ok(Vote::NoWithVeto),
+            pb::vote::Vote::Unspecified => Err(anyhow!("unspecified vote state")),
         }
     }
 }
@@ -97,18 +99,20 @@ mod test {
     proptest! {
         #[test]
         fn vote_roundtrip_serialize(vote: super::Vote) {
-            let pb_vote: super::pb_g::Vote = vote.into();
+            let pb_vote: super::pb::Vote = vote.into();
             let vote2 = super::Vote::try_from(pb_vote).unwrap();
             assert_eq!(vote, vote2);
         }
     }
 }
 
-impl Protobuf<pb_g::Vote> for Vote {}
+impl DomainType for Vote {
+    type Proto = pb::Vote;
+}
 
 /// A vote by a validator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "pb_t::ValidatorVote", into = "pb_t::ValidatorVote")]
+#[serde(try_from = "pb::ValidatorVote", into = "pb::ValidatorVote")]
 pub struct ValidatorVote {
     /// The body of the validator vote.
     pub body: ValidatorVoteBody,
@@ -126,7 +130,7 @@ impl IsAction for ValidatorVote {
     }
 }
 
-impl From<ValidatorVote> for pb_t::ValidatorVote {
+impl From<ValidatorVote> for pb::ValidatorVote {
     fn from(msg: ValidatorVote) -> Self {
         Self {
             body: Some(msg.body.into()),
@@ -135,10 +139,10 @@ impl From<ValidatorVote> for pb_t::ValidatorVote {
     }
 }
 
-impl TryFrom<pb_t::ValidatorVote> for ValidatorVote {
+impl TryFrom<pb::ValidatorVote> for ValidatorVote {
     type Error = anyhow::Error;
 
-    fn try_from(msg: pb_t::ValidatorVote) -> Result<Self, Self::Error> {
+    fn try_from(msg: pb::ValidatorVote) -> Result<Self, Self::Error> {
         Ok(Self {
             body: msg
                 .body
@@ -154,7 +158,7 @@ impl TryFrom<pb_t::ValidatorVote> for ValidatorVote {
 
 /// A public vote as a validator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "pb_t::ValidatorVoteBody", into = "pb_t::ValidatorVoteBody")]
+#[serde(try_from = "pb::ValidatorVoteBody", into = "pb::ValidatorVoteBody")]
 pub struct ValidatorVoteBody {
     /// The proposal ID to vote on.
     pub proposal: u64,
@@ -166,9 +170,9 @@ pub struct ValidatorVoteBody {
     pub governance_key: GovernanceKey,
 }
 
-impl From<ValidatorVoteBody> for pb_t::ValidatorVoteBody {
+impl From<ValidatorVoteBody> for pb::ValidatorVoteBody {
     fn from(value: ValidatorVoteBody) -> Self {
-        pb_t::ValidatorVoteBody {
+        pb::ValidatorVoteBody {
             proposal: value.proposal,
             vote: Some(value.vote.into()),
             identity_key: Some(value.identity_key.into()),
@@ -177,10 +181,10 @@ impl From<ValidatorVoteBody> for pb_t::ValidatorVoteBody {
     }
 }
 
-impl TryFrom<pb_t::ValidatorVoteBody> for ValidatorVoteBody {
+impl TryFrom<pb::ValidatorVoteBody> for ValidatorVoteBody {
     type Error = anyhow::Error;
 
-    fn try_from(msg: pb_t::ValidatorVoteBody) -> Result<Self, Self::Error> {
+    fn try_from(msg: pb::ValidatorVoteBody) -> Result<Self, Self::Error> {
         Ok(ValidatorVoteBody {
             proposal: msg.proposal,
             vote: msg
@@ -201,7 +205,9 @@ impl TryFrom<pb_t::ValidatorVoteBody> for ValidatorVoteBody {
     }
 }
 
-impl Protobuf<pb_t::ValidatorVoteBody> for ValidatorVoteBody {}
+impl DomainType for ValidatorVoteBody {
+    type Proto = pb::ValidatorVoteBody;
+}
 
 #[derive(Debug, Clone)]
 pub struct DelegatorVote {

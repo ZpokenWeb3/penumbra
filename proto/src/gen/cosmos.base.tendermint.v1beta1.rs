@@ -32,7 +32,7 @@ pub struct Header {
     #[prost(int64, tag = "3")]
     pub height: i64,
     #[prost(message, optional, tag = "4")]
-    pub time: ::core::option::Option<::prost_types::Timestamp>,
+    pub time: ::core::option::Option<::pbjson_types::Timestamp>,
     /// prev block info
     #[prost(message, optional, tag = "5")]
     pub last_block_id: ::core::option::Option<
@@ -125,7 +125,7 @@ pub struct Validator {
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
-    pub pub_key: ::core::option::Option<::prost_types::Any>,
+    pub pub_key: ::core::option::Option<::pbjson_types::Any>,
     #[prost(int64, tag = "3")]
     pub voting_power: i64,
     #[prost(int64, tag = "4")]
@@ -531,7 +531,7 @@ pub mod service_client {
 pub mod service_server {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
-    ///Generated trait containing gRPC methods that should be implemented for use with ServiceServer.
+    /// Generated trait containing gRPC methods that should be implemented for use with ServiceServer.
     #[async_trait]
     pub trait Service: Send + Sync + 'static {
         /// GetNodeInfo queries the current node info.

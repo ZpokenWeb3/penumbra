@@ -1,5 +1,5 @@
 use penumbra_crypto::dex::swap::SwapPlaintext;
-use penumbra_proto::{core::dex::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::dex::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 use crate::action::Swap;
@@ -17,7 +17,9 @@ pub enum SwapView {
     },
 }
 
-impl Protobuf<pb::SwapView> for SwapView {}
+impl DomainType for SwapView {
+    type Proto = pb::SwapView;
+}
 
 impl TryFrom<pb::SwapView> for SwapView {
     type Error = anyhow::Error;

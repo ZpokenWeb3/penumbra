@@ -6,7 +6,10 @@ use std::{
 use anyhow::{anyhow, Result};
 
 use penumbra_chain::params::{ChainParameters, FmdParameters};
-use penumbra_component::stake::{rate::RateData, validator};
+use penumbra_component::{
+    governance::proposal::Outcome,
+    stake::{rate::RateData, validator},
+};
 use penumbra_crypto::{
     asset::Amount,
     asset::Denom,
@@ -18,7 +21,7 @@ use penumbra_crypto::{
 use penumbra_proto::view::v1alpha1::NotesRequest;
 use penumbra_tct as tct;
 use penumbra_transaction::{
-    action::ValidatorVote,
+    action::{Proposal, ProposalDepositClaim, ProposalSubmit, ProposalWithdraw, ValidatorVote},
     plan::{
         ActionPlan, MemoPlan, OutputPlan, SpendPlan, SwapClaimPlan, SwapPlan, TransactionPlan,
         UndelegateClaimPlan,
@@ -227,14 +230,48 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         self
     }
 
+    /// Submit a new governance proposal in this transaction.
+    #[instrument(skip(self))]
+    pub fn proposal_submit(&mut self, proposal: Proposal, deposit_amount: Amount) -> &mut Self {
+        self.action(ActionPlan::ProposalSubmit(ProposalSubmit {
+            proposal,
+            deposit_amount,
+        }));
+        self
+    }
+
+    /// Withdraw a governance proposal in this transaction.
+    #[instrument(skip(self))]
+    pub fn proposal_withdraw(&mut self, proposal: u64, reason: String) -> &mut Self {
+        self.action(ActionPlan::ProposalWithdraw(ProposalWithdraw {
+            proposal,
+            reason,
+        }));
+        self
+    }
+
+    /// Claim a governance proposal deposit in this transaction.
+    #[instrument(skip(self))]
+    pub fn proposal_deposit_claim(
+        &mut self,
+        proposal: u64,
+        deposit_amount: Amount,
+        outcome: Outcome<()>,
+    ) -> &mut Self {
+        self.action(ActionPlan::ProposalDepositClaim(ProposalDepositClaim {
+            proposal,
+            deposit_amount,
+            outcome,
+        }));
+        self
+    }
+
     /// Cast a validator vote in this transaction.
     #[instrument(skip(self))]
     pub fn validator_vote(&mut self, vote: ValidatorVote) -> &mut Self {
         self.action(ActionPlan::ValidatorVote(vote));
         self
     }
-
-    // TODO: proposal submit, proposal withdraw, proposal deposit claim
 
     fn action(&mut self, action: ActionPlan) -> &mut Self {
         // Track the contribution of the action to the transaction's balance

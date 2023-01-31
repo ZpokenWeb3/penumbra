@@ -1,4 +1,4 @@
-use penumbra_proto::{custody::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{custody::v1alpha1 as pb, DomainType};
 use penumbra_transaction::plan::TransactionPlan;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +34,9 @@ impl Ed25519 {
     }
 }
 
-impl Protobuf<pb::PreAuthorization> for PreAuthorization {}
+impl DomainType for PreAuthorization {
+    type Proto = pb::PreAuthorization;
+}
 
 impl TryFrom<pb::PreAuthorization> for PreAuthorization {
     type Error = anyhow::Error;
@@ -62,7 +64,9 @@ impl From<PreAuthorization> for pb::PreAuthorization {
     }
 }
 
-impl Protobuf<pb::pre_authorization::Ed25519> for Ed25519 {}
+impl DomainType for Ed25519 {
+    type Proto = pb::pre_authorization::Ed25519;
+}
 
 impl TryFrom<pb::pre_authorization::Ed25519> for Ed25519 {
     type Error = anyhow::Error;

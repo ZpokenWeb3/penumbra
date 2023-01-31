@@ -1,6 +1,6 @@
 use std::convert::{TryFrom, TryInto};
 
-use anyhow::Error;
+use anyhow::{Context, Error};
 use bytes::Bytes;
 use penumbra_crypto::{
     balance,
@@ -8,7 +8,7 @@ use penumbra_crypto::{
     rdsa::{Signature, SpendAuth, VerificationKey},
     Nullifier,
 };
-use penumbra_proto::{core::transaction::v1alpha1 as transaction, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as transaction, DomainType};
 
 use crate::{view::action_view::SpendView, ActionView, TransactionPerspective};
 
@@ -41,7 +41,9 @@ impl IsAction for Spend {
     }
 }
 
-impl Protobuf<transaction::Spend> for Spend {}
+impl DomainType for Spend {
+    type Proto = transaction::Spend;
+}
 
 impl From<Spend> for transaction::Spend {
     fn from(msg: Spend) -> Self {
@@ -60,16 +62,18 @@ impl TryFrom<transaction::Spend> for Spend {
     fn try_from(proto: transaction::Spend) -> anyhow::Result<Self, Self::Error> {
         let body = proto
             .body
-            .ok_or_else(|| anyhow::anyhow!("spend body malformed"))?
-            .try_into()?;
+            .ok_or_else(|| anyhow::anyhow!("missing spend body"))?
+            .try_into()
+            .context("malformed spend body")?;
         let auth_sig = proto
             .auth_sig
-            .ok_or_else(|| anyhow::anyhow!("spend body malformed"))?
-            .try_into()?;
+            .ok_or_else(|| anyhow::anyhow!("missing auth sig"))?
+            .try_into()
+            .context("malformed auth sig")?;
 
         let proof = (proto.proof[..])
             .try_into()
-            .map_err(|_| anyhow::anyhow!("spend body malformed"))?;
+            .context("malformed spend proof")?;
 
         Ok(Spend {
             body,
@@ -86,7 +90,9 @@ pub struct Body {
     pub rk: VerificationKey<SpendAuth>,
 }
 
-impl Protobuf<transaction::SpendBody> for Body {}
+impl DomainType for Body {
+    type Proto = transaction::SpendBody;
+}
 
 impl From<Body> for transaction::SpendBody {
     fn from(msg: Body) -> Self {
@@ -107,18 +113,17 @@ impl TryFrom<transaction::SpendBody> for Body {
         let balance_commitment: balance::Commitment = proto
             .balance_commitment
             .ok_or_else(|| anyhow::anyhow!("missing value commitment"))?
-            .try_into()?;
+            .try_into()
+            .context("malformed balance commitment")?;
 
         let nullifier = (proto.nullifier[..])
             .try_into()
-            .map_err(|_| anyhow::anyhow!("spend body malformed"))?;
+            .context("malformed nullifier")?;
 
         let rk_bytes: [u8; 32] = (proto.rk[..])
             .try_into()
-            .map_err(|_| anyhow::anyhow!("spend body malformed"))?;
-        let rk = rk_bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("spend body malformed"))?;
+            .map_err(|_| anyhow::anyhow!("expected 32-byte rk"))?;
+        let rk = rk_bytes.try_into().context("malformed rk")?;
 
         Ok(Body {
             balance_commitment,

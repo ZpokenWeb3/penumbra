@@ -1,7 +1,11 @@
-use crate::{Fq, Fr};
-use penumbra_proto::{core::crypto::v1alpha1 as pb, Protobuf};
+use ark_r1cs_std::prelude::*;
+use ark_relations::r1cs::SynthesisError;
+use penumbra_proto::{core::crypto::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, iter::Sum, num::NonZeroU128, ops};
+
+use crate::{Fq, Fr};
+use decaf377::r1cs::FqVar;
 
 #[derive(Serialize, Deserialize, PartialEq, PartialOrd, Eq, Clone, Debug, Copy)]
 #[serde(try_from = "pb::Amount", into = "pb::Amount")]
@@ -26,6 +30,33 @@ impl Amount {
     pub fn from_le_bytes(bytes: [u8; 16]) -> Amount {
         Amount {
             inner: u128::from_le_bytes(bytes),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AmountVar {
+    pub amount: FqVar,
+}
+
+impl AllocVar<Amount, Fq> for AmountVar {
+    fn new_variable<T: std::borrow::Borrow<Amount>>(
+        cs: impl Into<ark_relations::r1cs::Namespace<Fq>>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: ark_r1cs_std::prelude::AllocationMode,
+    ) -> Result<Self, SynthesisError> {
+        let ns = cs.into();
+        let cs = ns.cs();
+        let amount: Amount = *f()?.borrow();
+        match mode {
+            AllocationMode::Constant => unimplemented!(),
+            AllocationMode::Input => unimplemented!(),
+            AllocationMode::Witness => {
+                let inner_amount_var = FqVar::new_witness(cs, || Ok(Fq::from(amount)))?;
+                Ok(Self {
+                    amount: inner_amount_var,
+                })
+            }
         }
     }
 }
@@ -72,7 +103,9 @@ impl TryFrom<std::string::String> for Amount {
     }
 }
 
-impl Protobuf<pb::Amount> for Amount {}
+impl DomainType for Amount {
+    type Proto = pb::Amount;
+}
 
 impl From<u64> for Amount {
     fn from(amount: u64) -> Amount {

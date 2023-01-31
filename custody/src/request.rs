@@ -1,5 +1,5 @@
 use penumbra_crypto::keys::AccountID;
-use penumbra_proto::{custody::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{custody::v1alpha1 as pb, DomainType};
 use penumbra_transaction::plan::TransactionPlan;
 
 use crate::PreAuthorization;
@@ -15,7 +15,9 @@ pub struct AuthorizeRequest {
     pub pre_authorizations: Vec<PreAuthorization>,
 }
 
-impl Protobuf<pb::AuthorizeRequest> for AuthorizeRequest {}
+impl DomainType for AuthorizeRequest {
+    type Proto = pb::AuthorizeRequest;
+}
 
 impl TryFrom<pb::AuthorizeRequest> for AuthorizeRequest {
     type Error = anyhow::Error;

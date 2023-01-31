@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use penumbra_proto::{core::chain::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::chain::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -9,7 +9,6 @@ pub enum NoteSource {
     Unknown,
     Genesis,
     FundingStreamReward { epoch_index: u64 },
-    ProposalDepositRefund { proposal_id: u64 },
 }
 
 impl Default for NoteSource {
@@ -36,12 +35,6 @@ impl NoteSource {
                 bytes[24..].copy_from_slice(&epoch_index.to_le_bytes());
                 bytes
             }
-            Self::ProposalDepositRefund { proposal_id } => {
-                let mut bytes = [0u8; 32];
-                bytes[CODE_INDEX] = 3;
-                bytes[24..].copy_from_slice(&proposal_id.to_le_bytes());
-                bytes
-            }
         }
     }
 }
@@ -60,12 +53,6 @@ impl TryFrom<[u8; 32]> for NoteSource {
                         u64::from_le_bytes(epoch_bytes.try_into().expect("slice is of length 8"));
                     Ok(Self::FundingStreamReward { epoch_index })
                 }
-                (3, proposal_id_bytes) => {
-                    let proposal_id = u64::from_le_bytes(
-                        proposal_id_bytes.try_into().expect("slice is of length 8"),
-                    );
-                    Ok(Self::ProposalDepositRefund { proposal_id })
-                }
                 (code, data) => Err(anyhow!(
                     "unknown note source with code {} and data {:?}",
                     code,
@@ -83,13 +70,20 @@ impl TryFrom<&[u8]> for NoteSource {
     }
 }
 
-impl Protobuf<pb::NoteSource> for NoteSource {}
+impl DomainType for NoteSource {
+    type Proto = pb::NoteSource;
+}
 
 impl TryFrom<pb::NoteSource> for NoteSource {
     type Error = anyhow::Error;
     fn try_from(note_source: pb::NoteSource) -> Result<Self> {
         <[u8; 32]>::try_from(note_source.inner)
-            .map_err(|_| anyhow!("expected 32 bytes"))?
+            .map_err(|bytes| {
+                anyhow!(format!(
+                    "expected 32 byte note source, found {} bytes",
+                    bytes.len()
+                ))
+            })?
             .try_into()
     }
 }
@@ -113,10 +107,6 @@ impl std::fmt::Debug for NoteSource {
             NoteSource::FundingStreamReward { epoch_index } => f.write_fmt(format_args!(
                 "NoteSource::FundingStreamReward({})",
                 epoch_index
-            )),
-            NoteSource::ProposalDepositRefund { proposal_id } => f.write_fmt(format_args!(
-                "NoteSource::ProposalDepositRefund({})",
-                proposal_id
             )),
         }
     }

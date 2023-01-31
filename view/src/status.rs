@@ -1,4 +1,4 @@
-use penumbra_proto::{view::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{view::v1alpha1 as pb, DomainType};
 
 #[derive(Clone, Copy, Debug)]
 pub struct StatusStreamResponse {
@@ -6,7 +6,9 @@ pub struct StatusStreamResponse {
     pub sync_height: u64,
 }
 
-impl Protobuf<pb::StatusStreamResponse> for StatusStreamResponse {}
+impl DomainType for StatusStreamResponse {
+    type Proto = pb::StatusStreamResponse;
+}
 
 impl TryFrom<pb::StatusStreamResponse> for StatusStreamResponse {
     type Error = anyhow::Error;

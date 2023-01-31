@@ -4,16 +4,16 @@ use decaf377_fmd::Clue;
 use penumbra_crypto::{
     dex::TradingPair, transaction::Fee, EncryptedNote, FullViewingKey, PayloadKey,
 };
-use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, Message, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, DomainType, Message};
 
 use crate::{
     action::{
-        output, spend, swap, swap_claim, Delegate, Ics20Withdrawal, PositionClose, PositionOpen,
-        PositionRewardClaim, PositionWithdraw, Proposal, ProposalSubmit, ProposalWithdraw,
-        ProposalWithdrawBody, Undelegate, UndelegateClaimBody, ValidatorVote, ValidatorVoteBody,
-        Vote,
+        output, proposal, spend, swap, swap_claim, Delegate, Ics20Withdrawal, PositionClose,
+        PositionOpen, PositionRewardClaim, PositionWithdraw, Proposal, ProposalDepositClaim,
+        ProposalSubmit, ProposalWithdraw, Undelegate, UndelegateClaimBody, ValidatorVote,
+        ValidatorVoteBody, Vote,
     },
-    plan::{ProposalWithdrawPlan, TransactionPlan},
+    plan::TransactionPlan,
     Action, Transaction, TransactionBody,
 };
 
@@ -44,12 +44,14 @@ impl std::fmt::Debug for EffectHash {
     }
 }
 
-impl Protobuf<pb_crypto::EffectHash> for EffectHash {}
+impl DomainType for EffectHash {
+    type Proto = pb_crypto::EffectHash;
+}
 
 impl From<EffectHash> for pb_crypto::EffectHash {
     fn from(msg: EffectHash) -> Self {
         Self {
-            inner: msg.0.to_vec().into(),
+            inner: msg.0.to_vec(),
         }
     }
 }
@@ -188,6 +190,9 @@ impl TransactionPlan {
         for _delegator_vote in self.delegator_vote_plans() {
             // TODO: get the effecthash of the delegator vote body for each plan
         }
+        for proposal_deposit_claim in self.proposal_deposit_claims() {
+            state.update(proposal_deposit_claim.effect_hash().as_bytes());
+        }
         // These are data payloads, so just hash them directly,
         // since they are effecting data.
         for payload in self.validator_definitions() {
@@ -228,6 +233,7 @@ impl EffectingData for Action {
             Action::UndelegateClaim(claim) => claim.body.effect_hash(),
             Action::ProposalSubmit(submit) => submit.effect_hash(),
             Action::ProposalWithdraw(withdraw) => withdraw.effect_hash(),
+            Action::ProposalDepositClaim(claim) => claim.effect_hash(),
             Action::ValidatorVote(vote) => vote.effect_hash(),
             Action::SwapClaim(swap_claim) => swap_claim.body.effect_hash(),
             Action::Swap(swap) => swap.body.effect_hash(),
@@ -399,9 +405,6 @@ impl EffectingData for ProposalSubmit {
 
         // These fields are all fixed-size
         state.update(&self.deposit_amount.to_le_bytes());
-        // The address is hashed as a string, which is the canonical bech32 encoding of the address
-        state.update(self.deposit_refund_address.to_string().as_bytes());
-        state.update(&self.withdraw_proposal_key.to_bytes());
 
         // The proposal itself is variable-length, so we hash it, and then hash its hash in
         state.update(self.proposal.effect_hash().as_bytes());
@@ -411,18 +414,6 @@ impl EffectingData for ProposalSubmit {
 }
 
 impl EffectingData for ProposalWithdraw {
-    fn effect_hash(&self) -> EffectHash {
-        self.body.effect_hash()
-    }
-}
-
-impl EffectingData for ProposalWithdrawPlan {
-    fn effect_hash(&self) -> EffectHash {
-        self.body.effect_hash()
-    }
-}
-
-impl EffectingData for ProposalWithdrawBody {
     fn effect_hash(&self) -> EffectHash {
         let mut state = blake2b_simd::Params::default()
             .personal(b"PAH:prop_withdrw")
@@ -467,6 +458,91 @@ impl EffectingData for ValidatorVoteBody {
         state.update(&self.proposal.to_le_bytes());
         state.update(self.vote.effect_hash().as_bytes());
         state.update(&self.identity_key.0.to_bytes());
+
+        EffectHash(state.finalize().as_array().clone())
+    }
+}
+
+impl EffectingData for ProposalDepositClaim {
+    fn effect_hash(&self) -> EffectHash {
+        let mut state = blake2b_simd::Params::default()
+            .personal(b"PAH:prop_dep_clm")
+            .to_state();
+
+        // All of these fields are fixed-length, so we can just throw them in the hash one after the
+        // other.
+        state.update(&self.proposal.to_le_bytes());
+        state.update(self.outcome.effect_hash().as_bytes());
+        state.update(&self.deposit_amount.to_le_bytes());
+
+        EffectHash(state.finalize().as_array().clone())
+    }
+}
+
+impl<W> EffectingData for proposal::Outcome<W>
+where
+    proposal::Withdrawn<W>: EffectingData,
+{
+    fn effect_hash(&self) -> EffectHash {
+        let mut state = blake2b_simd::Params::default()
+            .personal(b"PAH:prop_outcome")
+            .to_state();
+
+        match self {
+            // Manually choose a distinct byte string prefix for each outcome type, all same length
+            proposal::Outcome::Passed => {
+                state.update(b"Passed");
+            }
+            proposal::Outcome::Failed { withdrawn } => {
+                state.update(b"Failed");
+                state.update(withdrawn.effect_hash().as_bytes());
+            }
+            proposal::Outcome::Vetoed { withdrawn } => {
+                state.update(b"Vetoed");
+                state.update(withdrawn.effect_hash().as_bytes());
+            }
+        }
+
+        EffectHash(state.finalize().as_array().clone())
+    }
+}
+
+impl EffectingData for proposal::Withdrawn<String> {
+    fn effect_hash(&self) -> EffectHash {
+        let mut state = blake2b_simd::Params::default()
+            .personal(b"PAH:withdrawn")
+            .to_state();
+
+        match self {
+            // Manually choose a distinct byte prefix for each case
+            proposal::Withdrawn::No => {
+                state.update(b"N");
+            }
+            proposal::Withdrawn::WithReason { reason } => {
+                state.update(b"Y");
+                state.update(reason.as_bytes());
+            }
+        }
+
+        EffectHash(state.finalize().as_array().clone())
+    }
+}
+
+impl EffectingData for proposal::Withdrawn<()> {
+    fn effect_hash(&self) -> EffectHash {
+        let mut state = blake2b_simd::Params::default()
+            .personal(b"PAH:withdrawn_yn")
+            .to_state();
+
+        match self {
+            // Manually choose a distinct byte prefix for each case
+            proposal::Withdrawn::No => {
+                state.update(b"N");
+            }
+            proposal::Withdrawn::WithReason { reason: () } => {
+                state.update(b"Y");
+            }
+        }
 
         EffectHash(state.finalize().as_array().clone())
     }

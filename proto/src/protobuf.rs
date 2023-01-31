@@ -1,13 +1,17 @@
-/// A marker trait that captures the relationships between a domain type (`Self`) and a protobuf type (`P`).
-pub trait Protobuf<P>: Sized
+use std::convert::{From, TryFrom};
+
+/// A marker type that captures the relationships between a domain type (`Self`) and a protobuf type (`Self::Proto`).
+pub trait DomainType
 where
-    P: prost::Message + Default,
-    P: std::convert::From<Self>,
-    Self: std::convert::TryFrom<P> + Clone,
-    <Self as std::convert::TryFrom<P>>::Error: Into<anyhow::Error>,
+    Self: Clone + Sized + TryFrom<Self::Proto>,
+    Self::Proto: prost::Message + Default + From<Self> + Send + Sync + 'static,
+    <Self as TryFrom<Self::Proto>>::Error: Into<anyhow::Error> + Send + Sync + 'static,
 {
+    type Proto;
+
     /// Encode this domain type to a byte vector, via proto type `P`.
     fn encode_to_vec(&self) -> Vec<u8> {
+        use prost::Message;
         self.to_proto().encode_to_vec()
     }
 
@@ -15,13 +19,13 @@ where
     ///
     /// This uses the `From` impl internally, so it works exactly
     /// like `.into()`, but does not require type inference.
-    fn to_proto(&self) -> P {
-        P::from(self.clone())
+    fn to_proto(&self) -> Self::Proto {
+        Self::Proto::from(self.clone())
     }
 
     /// Decode this domain type from a byte buffer, via proto type `P`.
     fn decode<B: bytes::Buf>(buf: B) -> Result<Self, anyhow::Error> {
-        <P as prost::Message>::decode(buf)?
+        <Self::Proto as prost::Message>::decode(buf)?
             .try_into()
             .map_err(Into::into)
     }
@@ -37,9 +41,15 @@ use crate::core::ibc::v1alpha1::IbcAction;
 use decaf377_rdsa::{Binding, Signature, SpendAuth, VerificationKey};
 use ibc_rs::clients::ics07_tendermint;
 
-impl Protobuf<SpendAuthSignature> for Signature<SpendAuth> {}
-impl Protobuf<BindingSignature> for Signature<Binding> {}
-impl Protobuf<SpendVerificationKey> for VerificationKey<SpendAuth> {}
+impl DomainType for Signature<SpendAuth> {
+    type Proto = SpendAuthSignature;
+}
+impl DomainType for Signature<Binding> {
+    type Proto = BindingSignature;
+}
+impl DomainType for VerificationKey<SpendAuth> {
+    type Proto = SpendVerificationKey;
+}
 
 impl From<Signature<SpendAuth>> for SpendAuthSignature {
     fn from(sig: Signature<SpendAuth>) -> Self {
@@ -90,7 +100,9 @@ impl TryFrom<SpendVerificationKey> for VerificationKey<SpendAuth> {
 use crate::core::crypto::v1alpha1::Clue as ProtoClue;
 use decaf377_fmd::Clue;
 
-impl Protobuf<ProtoClue> for Clue {}
+impl DomainType for Clue {
+    type Proto = ProtoClue;
+}
 
 impl From<Clue> for ProtoClue {
     fn from(msg: Clue) -> Self {
@@ -106,7 +118,7 @@ impl TryFrom<ProtoClue> for Clue {
     fn try_from(proto: ProtoClue) -> anyhow::Result<Self, Self::Error> {
         let clue: [u8; 68] = proto.inner[..]
             .try_into()
-            .map_err(|_| anyhow::anyhow!("clue malformed"))?;
+            .map_err(|_| anyhow::anyhow!("expected 68-byte clue"))?;
 
         Ok(Clue(clue))
     }
@@ -118,7 +130,9 @@ impl TryFrom<ProtoClue> for Clue {
 // this redefines its proto, because the encodings are consensus-critical
 // and we don't vendor all of the tendermint protos.
 
-impl Protobuf<crate::core::crypto::v1alpha1::ConsensusKey> for tendermint::PublicKey {}
+impl DomainType for tendermint::PublicKey {
+    type Proto = crate::core::crypto::v1alpha1::ConsensusKey;
+}
 
 impl From<tendermint::PublicKey> for crate::core::crypto::v1alpha1::ConsensusKey {
     fn from(v: tendermint::PublicKey) -> Self {
@@ -136,7 +150,9 @@ impl TryFrom<crate::core::crypto::v1alpha1::ConsensusKey> for tendermint::Public
     }
 }
 
-impl Protobuf<crate::core::chain::v1alpha1::Ratio> for num_rational::Ratio<u64> {}
+impl DomainType for num_rational::Ratio<u64> {
+    type Proto = crate::core::chain::v1alpha1::Ratio;
+}
 
 impl From<num_rational::Ratio<u64>> for crate::core::chain::v1alpha1::Ratio {
     fn from(v: num_rational::Ratio<u64>) -> Self {
@@ -166,22 +182,32 @@ use ibc_rs::core::ics03_connection::connection::ConnectionEnd;
 use ibc_rs::core::ics04_channel::channel::ChannelEnd;
 use ibc_rs::Height;
 
-impl Protobuf<RawConnectionEnd> for ConnectionEnd {}
-impl Protobuf<RawChannel> for ChannelEnd {}
-impl Protobuf<RawHeight> for Height {}
+impl DomainType for ConnectionEnd {
+    type Proto = RawConnectionEnd;
+}
+impl DomainType for ChannelEnd {
+    type Proto = RawChannel;
+}
+impl DomainType for Height {
+    type Proto = RawHeight;
+}
 
 // TODO(erwan): create ticket to switch to a trait object based approach
-impl Protobuf<Any> for ics07_tendermint::client_state::ClientState {}
-impl Protobuf<Any> for ics07_tendermint::consensus_state::ConsensusState {}
+impl DomainType for ics07_tendermint::client_state::ClientState {
+    type Proto = Any;
+}
+impl DomainType for ics07_tendermint::consensus_state::ConsensusState {
+    type Proto = Any;
+}
 
 impl<T> From<T> for IbcAction
 where
     T: ibc::tx_msg::Msg,
 {
     fn from(v: T) -> Self {
-        let any = prost_types::Any {
+        let any = pbjson_types::Any {
             type_url: v.type_url(),
-            value: v.to_any().value,
+            value: v.to_any().value.into(),
         };
 
         Self {

@@ -1,5 +1,5 @@
 use penumbra_crypto::Address;
-use penumbra_proto::{core::stake::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::stake::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 use crate::stake::rate::BaseRateData;
@@ -37,7 +37,9 @@ impl FundingStream {
     }
 }
 
-impl Protobuf<pb::FundingStream> for FundingStream {}
+impl DomainType for FundingStream {
+    type Proto = pb::FundingStream;
+}
 
 impl From<FundingStream> for pb::FundingStream {
     fn from(fs: FundingStream) -> Self {

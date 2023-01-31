@@ -1,8 +1,8 @@
-use anyhow::Error;
+use anyhow::{Context, Error};
 
 use bytes::Bytes;
 
-use penumbra_proto::{core::crypto::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::crypto::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 
 use crate::{asset::Amount, ka, note, FullViewingKey, Note};
@@ -72,7 +72,9 @@ impl std::fmt::Debug for EncryptedNote {
     }
 }
 
-impl Protobuf<pb::EncryptedNote> for EncryptedNote {}
+impl DomainType for EncryptedNote {
+    type Proto = pb::EncryptedNote;
+}
 
 impl From<EncryptedNote> for pb::EncryptedNote {
     fn from(msg: EncryptedNote) -> Self {
@@ -94,10 +96,10 @@ impl TryFrom<pb::EncryptedNote> for EncryptedNote {
                 .ok_or_else(|| anyhow::anyhow!("missing note commitment"))?
                 .try_into()?,
             ephemeral_key: ka::Public::try_from(&proto.ephemeral_key[..])
-                .map_err(|_| anyhow::anyhow!("output body malformed"))?,
+                .context("ephemeral key malformed")?,
             encrypted_note: proto.encrypted_note[..]
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("output body malformed"))?,
+                .context("encrypted note malformed")?,
         })
     }
 }

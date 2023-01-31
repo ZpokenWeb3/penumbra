@@ -1,11 +1,12 @@
 use crate::view::action_view::SwapClaimView;
 use crate::{ActionView, IsAction, TransactionPerspective};
+use anyhow::Context;
 use ark_ff::Zero;
 use penumbra_crypto::dex::BatchSwapOutputData;
 use penumbra_crypto::transaction::Fee;
 use penumbra_crypto::{proofs::transparent::SwapClaimProof, Fr};
 use penumbra_crypto::{Balance, Nullifier};
-use penumbra_proto::{core::dex::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::dex::v1alpha1 as pb, DomainType};
 use penumbra_tct as tct;
 
 #[derive(Debug, Clone)]
@@ -52,7 +53,9 @@ impl SwapClaim {
     }
 }
 
-impl Protobuf<pb::SwapClaim> for SwapClaim {}
+impl DomainType for SwapClaim {
+    type Proto = pb::SwapClaim;
+}
 
 impl From<SwapClaim> for pb::SwapClaim {
     fn from(sc: SwapClaim) -> Self {
@@ -70,11 +73,12 @@ impl TryFrom<pb::SwapClaim> for SwapClaim {
         Ok(Self {
             proof: sc.proof[..]
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("SwapClaim proof malformed"))?,
+                .context("swap claim proof malformed")?,
             body: sc
                 .body
-                .ok_or_else(|| anyhow::anyhow!("missing nullifier"))?
-                .try_into()?,
+                .ok_or_else(|| anyhow::anyhow!("missing swap claim body"))?
+                .try_into()
+                .context("swap claim body malformed")?,
             epoch_duration: sc.epoch_duration,
         })
     }
@@ -89,7 +93,9 @@ pub struct Body {
     pub output_data: BatchSwapOutputData,
 }
 
-impl Protobuf<pb::SwapClaimBody> for Body {}
+impl DomainType for Body {
+    type Proto = pb::SwapClaimBody;
+}
 
 impl From<Body> for pb::SwapClaimBody {
     fn from(s: Body) -> Self {

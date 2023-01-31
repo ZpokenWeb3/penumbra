@@ -4,6 +4,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use anyhow::Context as _;
 use futures::FutureExt;
 use penumbra_storage::Storage;
 use tendermint::abci::{
@@ -80,10 +81,7 @@ impl tower_service::Service<MempoolRequest> for Mempool {
                 CheckTxKind::Recheck => "recheck",
             };
 
-            match rx
-                .await
-                .map_err(|_| anyhow::anyhow!("mempool worker terminated or panicked"))?
-            {
+            match rx.await.context("mempool worker terminated or panicked")? {
                 Ok(()) => {
                     tracing::info!("tx accepted");
                     metrics::increment_counter!(
@@ -102,7 +100,8 @@ impl tower_service::Service<MempoolRequest> for Mempool {
                     );
                     Ok(MempoolResponse::CheckTx(CheckTxRsp {
                         code: 1,
-                        log: e.to_string(),
+                        // Use the alternate format specifier to include the chain of error causes.
+                        log: format!("{:#}", e),
                         ..Default::default()
                     }))
                 }

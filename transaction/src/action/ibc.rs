@@ -3,7 +3,7 @@ use ibc::core::ics24_host::identifier::{ChannelId, PortId};
 use penumbra_crypto::{asset, value, Address, Amount, Balance, Fr};
 use penumbra_proto::{
     core::ibc::v1alpha1::{self as pb, FungibleTokenPacketData},
-    Message, Protobuf,
+    DomainType, Message,
 };
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -88,7 +88,9 @@ impl Ics20Withdrawal {
     }
 }
 
-impl Protobuf<pb::Ics20Withdrawal> for Ics20Withdrawal {}
+impl DomainType for Ics20Withdrawal {
+    type Proto = pb::Ics20Withdrawal;
+}
 
 impl From<Ics20Withdrawal> for pb::Ics20Withdrawal {
     fn from(w: Ics20Withdrawal) -> Self {

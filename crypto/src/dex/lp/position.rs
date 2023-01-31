@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use penumbra_proto::{core::dex::v1alpha1 as pb, serializers::bech32str, Protobuf};
+use penumbra_proto::{core::dex::v1alpha1 as pb, serializers::bech32str, DomainType};
 use serde::{Deserialize, Serialize};
 
 use super::trading_function::TradingFunction;
@@ -26,8 +26,8 @@ impl Position {
             .to_state();
 
         state.update(&self.nonce);
-        state.update(&self.phi.pair.asset_1.to_bytes());
-        state.update(&self.phi.pair.asset_2.to_bytes());
+        state.update(&self.phi.pair.asset_1().to_bytes());
+        state.update(&self.phi.pair.asset_2().to_bytes());
         state.update(&self.phi.component.fee.to_le_bytes());
         state.update(&self.phi.component.p.to_le_bytes());
         state.update(&self.phi.component.q.to_le_bytes());
@@ -118,7 +118,9 @@ impl std::str::FromStr for State {
 
 // ==== Protobuf impls
 
-impl Protobuf<pb::Position> for Position {}
+impl DomainType for Position {
+    type Proto = pb::Position;
+}
 
 impl TryFrom<pb::Position> for Position {
     type Error = anyhow::Error;
@@ -147,7 +149,9 @@ impl From<Position> for pb::Position {
     }
 }
 
-impl Protobuf<pb::PositionId> for Id {}
+impl DomainType for Id {
+    type Proto = pb::PositionId;
+}
 
 impl TryFrom<pb::PositionId> for Id {
     type Error = anyhow::Error;
@@ -171,7 +175,9 @@ impl From<Id> for pb::PositionId {
     }
 }
 
-impl Protobuf<pb::PositionState> for State {}
+impl DomainType for State {
+    type Proto = pb::PositionState;
+}
 
 impl From<State> for pb::PositionState {
     fn from(v: State) -> Self {

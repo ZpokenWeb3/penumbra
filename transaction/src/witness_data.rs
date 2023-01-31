@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use penumbra_crypto::note;
-use penumbra_proto::{core::transaction::v1alpha1 as pb, Protobuf};
+use penumbra_proto::{core::transaction::v1alpha1 as pb, DomainType};
 use penumbra_tct as tct;
 
 #[derive(Clone, Debug)]
@@ -17,7 +17,9 @@ impl WitnessData {
     }
 }
 
-impl Protobuf<pb::WitnessData> for WitnessData {}
+impl DomainType for WitnessData {
+    type Proto = pb::WitnessData;
+}
 
 impl From<WitnessData> for pb::WitnessData {
     fn from(msg: WitnessData) -> Self {
