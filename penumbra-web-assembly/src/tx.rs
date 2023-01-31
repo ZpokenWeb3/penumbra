@@ -77,12 +77,10 @@ pub fn send_plan(
 pub fn encode_tx(transaction: JsValue) -> JsValue {
     utils::set_panic_hook();
     let tx: Transaction = serde_wasm_bindgen::from_value(transaction).unwrap();
+    let tx_encoding = tx.encode_to_vec();
 
-    valid_binding_signature(tx);
-    let tx_encoding = &tx.encode_to_vec();
-
-
-    return serde_wasm_bindgen::to_value(tx_encoding).unwrap();
+    let hextx = hex::encode(tx_encoding);
+    return serde_wasm_bindgen::to_value(&hextx).unwrap();
 }
 
 #[wasm_bindgen]
