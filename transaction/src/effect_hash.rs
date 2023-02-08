@@ -310,7 +310,6 @@ impl EffectingData for swap::Body {
         state.update(&self.delta_2_i.to_le_bytes());
         state.update(&self.fee_commitment.to_bytes());
         state.update(&self.payload.commitment.0.to_bytes());
-        state.update(&self.payload.ephemeral_key.0);
         state.update(&self.payload.encrypted_swap.0);
 
         EffectHash(state.finalize().as_array().clone())
@@ -709,7 +708,7 @@ mod tests {
         let fvk = sk.full_viewing_key();
         let (addr, _dtk) = fvk.incoming().payment_address(0u64.into());
 
-        let mut nct = tct::Tree::new();
+        let mut sct = tct::Tree::new();
 
         let note0 = Note::generate(
             &mut OsRng,
@@ -728,8 +727,8 @@ mod tests {
             },
         );
 
-        nct.insert(tct::Witness::Keep, note0.commit()).unwrap();
-        nct.insert(tct::Witness::Keep, note1.commit()).unwrap();
+        sct.insert(tct::Witness::Keep, note0.commit()).unwrap();
+        sct.insert(tct::Witness::Keep, note1.commit()).unwrap();
 
         let trading_pair = TradingPair::new(
             asset::REGISTRY.parse_denom("nala").unwrap().id(),
@@ -778,13 +777,13 @@ mod tests {
 
         let auth_data = plan.authorize(rng, &sk);
         let witness_data = WitnessData {
-            anchor: nct.root(),
-            note_commitment_proofs: plan
+            anchor: sct.root(),
+            state_commitment_proofs: plan
                 .spend_plans()
                 .map(|spend| {
                     (
                         spend.note.commit(),
-                        nct.witness(spend.note.commit()).unwrap(),
+                        sct.witness(spend.note.commit()).unwrap(),
                     )
                 })
                 .collect(),

@@ -15,6 +15,17 @@ pub struct Worker {
     app: App,
 }
 
+fn trace_events(events: &[abci::Event]) {
+    for event in events {
+        let span = tracing::info_span!("event", kind = ?event.kind);
+        span.in_scope(|| {
+            for attr in &event.attributes {
+                tracing::info!(k = ?attr.key, v=?attr.value);
+            }
+        })
+    }
+}
+
 impl Worker {
     #[instrument(skip(storage, queue), name = "consensus::Worker::new")]
     pub async fn new(storage: Storage, queue: mpsc::Receiver<Message>) -> Result<Self> {
@@ -118,6 +129,9 @@ impl Worker {
         &mut self,
         begin_block: abci::request::BeginBlock,
     ) -> Result<abci::response::BeginBlock> {
+        // We don't need to print the block height, because it will already be
+        // included in the span modeling the abci request handling.
+        tracing::info!(time = ?begin_block.header.time, "beginning block");
         let events = self.app.begin_block(&begin_block).await;
         Ok(abci::response::BeginBlock { events })
     }
@@ -132,7 +146,7 @@ impl Worker {
 
         match rsp {
             Ok(events) => {
-                tracing::info!("deliver_tx succeeded");
+                trace_events(&events);
                 abci::response::DeliverTx {
                     events,
                     ..Default::default()
@@ -155,6 +169,7 @@ impl Worker {
         end_block: abci::request::EndBlock,
     ) -> Result<abci::response::EndBlock> {
         let events = self.app.end_block(&end_block).await;
+        trace_events(&events);
 
         // Set `tm_validator_updates` to the complete set of
         // validators and voting power. This must be the last step performed,
@@ -175,10 +190,11 @@ impl Worker {
     }
 
     async fn commit(&mut self) -> Result<abci::response::Commit> {
-        let app_hash = self.app.commit(self.storage.clone()).await.0.to_vec();
+        let app_hash = self.app.commit(self.storage.clone()).await;
+        tracing::info!(?app_hash, "committed block");
 
         Ok(abci::response::Commit {
-            data: app_hash.into(),
+            data: app_hash.0.to_vec().into(),
             retain_height: 0u32.into(),
         })
     }

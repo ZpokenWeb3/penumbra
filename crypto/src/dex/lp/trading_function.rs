@@ -18,25 +18,6 @@ impl TradingFunction {
             pair,
         }
     }
-
-    /// Compose two trading functions together.
-    /// TODO(erwan): doc.
-    pub fn compose(
-        &self,
-        psi: TradingFunction,
-        pair: TradingPair,
-    ) -> anyhow::Result<TradingFunction> {
-        // TODO(erwan): we should fail to compose trading functions with non-overlapping assets.
-        //  however, since we're not using `DirectedTradingPair` here, the logic to check what
-        // TODO: * insert scaling code here
-        //       * overflow handling
-        //  should be the resulting pair is tedious. I will re-insert it later.
-        let fee = self.component.fee * psi.component.fee;
-        // TODO: insert scaling code here
-        let r1 = self.component.p * psi.component.p;
-        let r2 = self.component.q * psi.component.q;
-        Ok(TradingFunction::new(pair, fee, r1, r2))
-    }
 }
 
 impl TryFrom<pb::TradingFunction> for TradingFunction {
@@ -97,12 +78,23 @@ impl BareTradingFunction {
         Self { fee, p, q }
     }
 
-    /// Represent the trading function as a big-endian fixed point encoding
-    /// with 128 bits to the right of the decimal.
+    pub fn flip(&self) -> Self {
+        Self {
+            fee: self.fee,
+            p: self.q,
+            q: self.p,
+        }
+    }
+
+    /// Returns a byte key for this trading function with the property that the
+    /// lexicographic ordering on byte keys is the same as ordering the
+    /// corresponding trading functions by effective price.
+    ///
+    /// This allows trading functions to be indexed by price using a key-value store.
     ///
     /// Note: Currently this uses floating point to derive the encoding, which
     /// is a placeholder and should be replaced by width-expanding polynomial arithmetic.
-    pub fn to_bytes(&self) -> [u8; 32] {
+    pub fn effective_price_key_bytes(&self) -> [u8; 32] {
         let effective_price = self.effective_price();
         let integer = effective_price.trunc() as u128;
         let fractional = effective_price.fract() as u128;
@@ -125,6 +117,14 @@ impl BareTradingFunction {
     /// Note: the float math is a placehodler
     pub fn gamma(&self) -> f64 {
         (10_000.0 - self.fee as f64) / 10_000.0
+    }
+
+    /// Returns the composition of two trading functions.
+    pub fn compose(&self, phi: BareTradingFunction) -> BareTradingFunction {
+        let fee = self.fee * phi.fee;
+        let r1 = self.p * phi.p;
+        let r2 = self.q * phi.q;
+        BareTradingFunction::new(fee, r1, r2)
     }
 }
 
@@ -174,7 +174,7 @@ mod tests {
 
         assert_eq!(btf.gamma(), 1.0);
         assert_eq!(btf.effective_price(), 0.5);
-        let bytes = btf.to_bytes();
+        let bytes = btf.effective_price_key_bytes();
         let integer = u128::from_be_bytes(bytes[..16].try_into().unwrap());
         let fractional = u128::from_be_bytes(bytes[16..].try_into().unwrap());
 
@@ -189,7 +189,7 @@ mod tests {
 
         assert_eq!(btf.gamma(), 0.99);
         assert_eq!(btf.effective_price(), 0.99);
-        let bytes = btf.to_bytes();
+        let bytes = btf.effective_price_key_bytes();
         let integer = u128::from_be_bytes(bytes[..16].try_into().unwrap());
         let fractional = u128::from_be_bytes(bytes[16..].try_into().unwrap());
 

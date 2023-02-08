@@ -19,13 +19,13 @@ depending on your distribution. For a bare-bones Ubuntu installation, you can
 run:
 
 ```bash
-sudo apt-get install build-essential pkg-config libssl-dev clang
+sudo apt-get install build-essential pkg-config libssl-dev clang git-lfs
 ```
 
-For a minimal Fedora image, you can run:
+For a minimal Fedora/CentOS/RHEL image, you can run:
 
 ```bash
-sudo dnf install openssl-dev clang
+sudo dnf install openssl-devel clang git cargo rustfmt git-lfs
 ```
 
 #### macOS
@@ -36,10 +36,10 @@ so:
 xcode-select --install
 ```
 
-You will need to install the Protobuf compiler, using Homebrew or [another
-method][protoc-install]:
-```
-brew install protobuf
+You'll also need to install Git LFS, which you can do [via Homebrew](https://docs.github.com/en/repositories/working-with-files/managing-large-files/installing-git-large-file-storage?platform=mac):
+
+```bash
+brew install git-lfs
 ```
 
 ### Cloning the repository
@@ -56,7 +56,7 @@ latest tag for the current
 [testnet](https://github.com/penumbra-zone/penumbra/releases):
 
 ```bash
-cd penumbra && git fetch && git checkout 042-adraste
+cd penumbra && git fetch && git checkout 043-leda
 ```
 
 ### Building the `pcli` client software

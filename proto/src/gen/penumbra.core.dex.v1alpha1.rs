@@ -85,10 +85,7 @@ pub struct SwapPayload {
     pub commitment: ::core::option::Option<
         super::super::crypto::v1alpha1::StateCommitment,
     >,
-    /// TODO: replace with ovk-based encryption
     #[prost(bytes = "vec", tag = "2")]
-    pub ephemeral_key: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "3")]
     pub encrypted_swap: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -129,9 +126,6 @@ pub struct SwapPlan {
     /// The blinding factor for the fee commitment. The fee in the SwapPlan is private to prevent linkability with the SwapClaim.
     #[prost(bytes = "vec", tag = "2")]
     pub fee_blinding: ::prost::alloc::vec::Vec<u8>,
-    /// The ephemeral secret used to encrypt the swap payload.
-    #[prost(bytes = "vec", tag = "3")]
-    pub esk: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -398,6 +392,17 @@ pub mod position_state {
         }
     }
 }
+/// The data recorded about a position on-chain.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PositionMetadata {
+    #[prost(message, optional, tag = "1")]
+    pub position: ::core::option::Option<Position>,
+    #[prost(message, optional, tag = "2")]
+    pub state: ::core::option::Option<PositionState>,
+    #[prost(message, optional, tag = "3")]
+    pub reserves: ::core::option::Option<Reserves>,
+}
 /// An LPNFT tracking both ownership and state of a position.
 ///
 /// Tracking the state as part of the LPNFT means that all LP-related actions can
@@ -500,7 +505,7 @@ pub struct Path {
     #[prost(message, repeated, tag = "2")]
     pub route: ::prost::alloc::vec::Vec<super::super::crypto::v1alpha1::AssetId>,
     #[prost(message, optional, tag = "3")]
-    pub phi: ::core::option::Option<TradingFunction>,
+    pub phi: ::core::option::Option<BareTradingFunction>,
 }
 /// A path and the amount of the assets on either side that were traded.
 #[allow(clippy::derive_partial_eq_without_eq)]

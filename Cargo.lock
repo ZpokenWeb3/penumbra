@@ -3499,6 +3499,7 @@ dependencies = [
  "ark-ff",
  "assert_cmd",
  "async-stream 0.2.1",
+ "base64 0.13.1",
  "bincode",
  "blake2b_simd 0.5.11",
  "bytes",
@@ -3549,6 +3550,7 @@ dependencies = [
  "tracing-subscriber 0.3.16",
  "url",
  "vergen",
+ "walkdir",
 ]
 
 [[package]]
@@ -3841,6 +3843,30 @@ dependencies = [
  "tracing-subscriber 0.3.16",
  "url",
  "vergen",
+]
+
+[[package]]
+name = "penumbra-proof-params"
+version = "0.1.0"
+dependencies = [
+ "ark-ff",
+ "ark-groth16",
+ "ark-nonnative-field",
+ "ark-r1cs-std",
+ "ark-relations",
+ "ark-serialize",
+ "ark-snark",
+ "ark-std",
+ "decaf377 0.1.0 (git+https://github.com/penumbra-zone/decaf377)",
+ "num-bigint",
+ "once_cell",
+ "penumbra-crypto",
+ "penumbra-tct",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_with 1.14.0",
+ "tracing",
 ]
 
 [[package]]

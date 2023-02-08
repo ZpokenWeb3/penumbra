@@ -1,14 +1,14 @@
-use std::{any::Any, collections::BTreeMap, pin::Pin};
+use std::{any::Any, collections::BTreeMap, future::Future, pin::Pin};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{FutureExt, Stream};
 use tendermint::abci;
 
 use crate::State;
 
 use super::{
-    read::{nonconsensus_prefix_raw_with_cache, prefix_raw_with_cache},
+    read::{nonconsensus_prefix_raw_with_cache, prefix_keys_with_cache, prefix_raw_with_cache},
     StateRead, StateWrite,
 };
 
@@ -103,14 +103,28 @@ impl<'a> StateWrite for Transaction<'a> {
 
 #[async_trait]
 impl<'tx> StateRead for Transaction<'tx> {
-    async fn get_raw(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        // If the key is available in the unwritten_changes cache, return it.
-        if let Some(v) = self.unwritten_changes.get(key) {
-            return Ok(v.clone());
-        }
+    fn get_raw(
+        &self,
+        key: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>>> + Send + 'static>> {
+        // We want to return a 'static future, so we need to get all our references
+        // to &self done upfront, before we bundle the results into a future.
 
-        // Otherwise, if the key is available in the state, return it.
-        self.state.get_raw(key).await
+        // If the key is available in the unwritten_changes cache, extract it now,
+        // so we can move it into the future we'll return.
+        let cached_value = self.unwritten_changes.get(key).cloned();
+        // Prepare a query to the state; this won't start executing until we poll it.
+        let state_value = self.state.get_raw(key);
+
+        async move {
+            match cached_value {
+                // If the key is available in the unwritten_changes cache, return it.
+                Some(v) => Ok(v),
+                // Otherwise, if the key is available in the state, return it.
+                None => state_value.await,
+            }
+        }
+        .boxed()
     }
 
     async fn nonconsensus_get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
@@ -128,6 +142,13 @@ impl<'tx> StateRead for Transaction<'tx> {
         prefix: &'a str,
     ) -> Pin<Box<dyn Stream<Item = Result<(String, Vec<u8>)>> + Sync + Send + 'a>> {
         prefix_raw_with_cache(self.state, &self.unwritten_changes, prefix)
+    }
+
+    fn prefix_keys<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Stream<Item = Result<String>> + Sync + Send + 'a>> {
+        prefix_keys_with_cache(self.state, &self.unwritten_changes, prefix)
     }
 
     fn nonconsensus_prefix_raw<'a>(

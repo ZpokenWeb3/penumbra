@@ -1,11 +1,15 @@
 // Implementation of a pd component for the staking system.
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    pin::Pin,
+};
 
 use crate::Component;
 use ::metrics::{decrement_gauge, gauge, increment_gauge};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use futures::TryStreamExt;
+use futures::{FutureExt, TryFutureExt, TryStreamExt};
 use penumbra_chain::{genesis, Epoch, NoteSource, StateReadExt as _};
 use penumbra_crypto::stake::Penalty;
 use penumbra_crypto::{
@@ -23,6 +27,7 @@ use tendermint::{
     },
     block, PublicKey,
 };
+use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
 
 use crate::stake::{
@@ -35,7 +40,7 @@ use crate::stake::{
 
 use crate::shielded_pool::{NoteManager, SupplyRead, SupplyWrite};
 
-use super::CurrentConsensusKeys;
+use super::{event, CurrentConsensusKeys};
 
 // Max validator power is 1152921504606846975 (i64::MAX / 8)
 // https://github.com/tendermint/tendermint/blob/master/types/validator_set.go#L25
@@ -467,14 +472,14 @@ pub(crate) trait StakingImpl: StateWriteExt {
         // A list of validators with zero power, who must be inactive.
         let mut zero_power = Vec::new();
 
-        for v in self.validator_list().await? {
-            let state = self.validator_state(&v.identity_key).await?.unwrap();
-            let power = self.validator_power(&v.identity_key).await?.unwrap();
+        for v in self.validator_identity_list().await? {
+            let state = self.validator_state(&v).await?.unwrap();
+            let power = self.validator_power(&v).await?.unwrap();
             if matches!(state, validator::State::Active | validator::State::Inactive) {
                 if power == 0 {
-                    zero_power.push((v.identity_key, power));
+                    zero_power.push((v, power));
                 } else {
-                    validators_by_power.push((v.identity_key, power));
+                    validators_by_power.push((v, power));
                 }
             }
         }
@@ -508,21 +513,15 @@ pub(crate) trait StakingImpl: StateWriteExt {
     async fn process_validator_unbondings(&mut self) -> Result<()> {
         let current_epoch = self.get_current_epoch().await?;
 
-        for v in self.validator_list().await? {
-            let state = self
-                .validator_bonding_state(&v.identity_key)
-                .await?
-                .unwrap();
+        for v in self.validator_identity_list().await? {
+            let state = self.validator_bonding_state(&v).await?.unwrap();
             if let validator::BondingState::Unbonding { unbonding_epoch } = state {
                 if unbonding_epoch <= current_epoch.index {
-                    self.set_validator_bonding_state(
-                        &v.identity_key,
-                        validator::BondingState::Unbonded,
-                    )
-                    // Instrument the call with a span that includes the validator ID,
-                    // since our current span doesn't have any per-validator information.
-                    .instrument(tracing::debug_span!("unbonding", ?v.identity_key))
-                    .await;
+                    self.set_validator_bonding_state(&v, validator::BondingState::Unbonded)
+                        // Instrument the call with a span that includes the validator ID,
+                        // since our current span doesn't have any per-validator information.
+                        .instrument(tracing::debug_span!("unbonding", ?v))
+                        .await;
                 }
             }
         }
@@ -548,26 +547,38 @@ pub(crate) trait StakingImpl: StateWriteExt {
         let mut voting_power_by_consensus_key = BTreeMap::<PublicKey, u64>::new();
 
         // First, build a mapping of consensus key to voting power for all known validators.
-        for v in self.validator_list().await?.iter() {
-            let info = self
-                .validator_info(&v.identity_key)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("validator missing info"))?;
 
-            // Compute the effective power of this validator; this is the
-            // validator power, clamped to zero for all non-Active validators.
-            let effective_power = if info.status.state == validator::State::Active {
-                let info = self
-                    .validator_info(&v.identity_key)
+        // Using a JoinSet, run each validator's state queries concurrently.
+        let mut js = JoinSet::new();
+        for v in self.validator_identity_list().await?.iter() {
+            let state = self.validator_state(&v);
+            let power = self.validator_power(&v);
+            let consensus_key = self.validator_consensus_key(&v);
+            js.spawn(async move {
+                let state = state
                     .await?
-                    .expect("validator is in state");
+                    .expect("every known validator must have a recorded state");
+                // Compute the effective power of this validator; this is the
+                // validator power, clamped to zero for all non-Active validators.
+                let effective_power = if state == validator::State::Active {
+                    power
+                        .await?
+                        .expect("every known validator must have a recorded power")
+                } else {
+                    0
+                };
 
-                info.status.voting_power
-            } else {
-                0
-            };
+                let consensus_key = consensus_key
+                    .await?
+                    .expect("every known validator must have a recorded consensus key");
 
-            voting_power_by_consensus_key.insert(info.validator.consensus_key, effective_power);
+                anyhow::Ok((consensus_key, effective_power))
+            });
+        }
+        // Now collect the computed results into the lookup table.
+        while let Some(pair) = js.join_next().await.transpose()? {
+            let (consensus_key, effective_power) = pair?;
+            voting_power_by_consensus_key.insert(consensus_key, effective_power);
         }
 
         // Next, filter that mapping to exclude any zero-power validators, UNLESS they
@@ -979,14 +990,34 @@ pub trait StateReadExt: StateRead {
             .await
     }
 
-    #[instrument(skip(self))]
-    async fn validator_power(&self, identity_key: &IdentityKey) -> Result<Option<u64>> {
+    fn validator_power(
+        &self,
+        identity_key: &IdentityKey,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<u64>>> + Send + 'static>> {
         self.get_proto(&state_key::power_by_validator(identity_key))
-            .await
     }
 
     async fn validator(&self, identity_key: &IdentityKey) -> Result<Option<Validator>> {
         self.get(&state_key::validators::by_id(identity_key)).await
+    }
+
+    fn validator_consensus_key(
+        &self,
+        identity_key: &IdentityKey,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<PublicKey>>> + Send + 'static>> {
+        // TODO: this is pulling out the whole proto, but only parsing
+        // the consensus key.  Alternatively, we could store the consensus
+        // keys in a separate index.
+        self.get_proto::<penumbra_proto::penumbra::core::stake::v1alpha1::Validator>(
+            &state_key::validators::by_id(identity_key),
+        )
+        .map_ok(|opt| {
+            opt.map(|v| {
+                tendermint::PublicKey::from_raw_ed25519(v.consensus_key.as_slice())
+                    .expect("validator consensus key must be valid ed25519 key")
+            })
+        })
+        .boxed()
     }
 
     // Tendermint validators are referenced to us by their Tendermint consensus key,
@@ -1030,11 +1061,11 @@ pub trait StateReadExt: StateRead {
         }
     }
 
-    async fn validator_state(
+    fn validator_state(
         &self,
         identity_key: &IdentityKey,
-    ) -> Result<Option<validator::State>> {
-        self.get(&state_key::state_by_validator(identity_key)).await
+    ) -> Pin<Box<dyn Future<Output = Result<Option<validator::State>>> + Send + 'static>> {
+        self.get(&state_key::state_by_validator(identity_key))
     }
 
     async fn validator_bonding_state(
@@ -1063,6 +1094,17 @@ pub trait StateReadExt: StateRead {
             })),
             _ => Ok(None),
         }
+    }
+
+    async fn validator_identity_list(&self) -> Result<Vec<IdentityKey>> {
+        self.prefix_keys(state_key::validators::list())
+            .map_ok(|key| {
+                key.as_str()[state_key::validators::list().len()..]
+                    .parse::<IdentityKey>()
+                    .expect("state keys should only have valid identity keys")
+            })
+            .try_collect()
+            .await
     }
 
     async fn validator_list(&self) -> Result<Vec<Validator>> {
@@ -1128,12 +1170,14 @@ pub trait StateWriteExt: StateWrite {
     }
 
     fn stub_push_delegation(&mut self, delegation: Delegate) {
+        self.record(event::delegate(&delegation));
         let mut changes = self.stub_delegation_changes();
         changes.delegations.push(delegation);
         self.put_stub_delegation_changes(changes);
     }
 
     fn stub_push_undelegation(&mut self, undelegation: Undelegate) {
+        self.record(event::undelegate(&undelegation));
         let mut changes = self.stub_delegation_changes();
         changes.undelegations.push(undelegation);
         self.put_stub_delegation_changes(changes);

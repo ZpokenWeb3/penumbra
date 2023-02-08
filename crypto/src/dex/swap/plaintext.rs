@@ -1,7 +1,9 @@
+use crate::keys::OutgoingViewingKey;
 use crate::transaction::Fee;
-use crate::{asset, ka, Address, Amount, Note, Rseed, Value};
+use crate::{asset, ka, Address, Amount, Note, PayloadKey, Rseed, Value};
 use anyhow::{anyhow, Error, Result};
 use ark_ff::PrimeField;
+
 use decaf377::{FieldExt, Fq};
 use once_cell::sync::Lazy;
 use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, core::dex::v1alpha1 as pb, DomainType};
@@ -10,7 +12,6 @@ use poseidon377::{hash_1, hash_4, hash_7};
 use rand::{CryptoRng, RngCore};
 
 use crate::dex::TradingPair;
-use crate::symmetric::{PayloadKey, PayloadKind};
 
 use super::{
     BatchSwapOutputData, SwapCiphertext, SwapPayload, DOMAIN_SEPARATOR, SWAP_CIPHERTEXT_BYTES,
@@ -125,15 +126,11 @@ impl SwapPlaintext {
         self.claim_address.transmission_key()
     }
 
-    pub fn encrypt(&self, esk: &ka::Secret) -> SwapPayload {
-        let epk = esk.diversified_public(self.diversified_generator());
-        let shared_secret = esk
-            .key_agreement_with(self.transmission_key())
-            .expect("key agreement succeeds");
-
-        let key = PayloadKey::derive(&shared_secret, &epk);
+    pub fn encrypt(&self, ovk: &OutgoingViewingKey) -> SwapPayload {
+        let commitment = self.swap_commitment();
+        let key = PayloadKey::derive_swap(ovk, commitment);
         let swap_plaintext: [u8; SWAP_LEN_BYTES] = self.into();
-        let encryption_result = key.encrypt(swap_plaintext.to_vec(), PayloadKind::Swap);
+        let encryption_result = key.encrypt_swap(swap_plaintext.to_vec(), commitment);
 
         let ciphertext: [u8; SWAP_CIPHERTEXT_BYTES] = encryption_result
             .try_into()
@@ -141,8 +138,7 @@ impl SwapPlaintext {
 
         SwapPayload {
             encrypted_swap: SwapCiphertext(ciphertext),
-            ephemeral_key: epk,
-            commitment: self.swap_commitment(),
+            commitment,
         }
     }
 
@@ -305,6 +301,7 @@ mod tests {
     };
 
     #[test]
+    /// Check the swap plaintext can be encrypted and decrypted with the OVK.
     fn swap_encryption_and_decryption() {
         let mut rng = OsRng;
 
@@ -312,6 +309,7 @@ mod tests {
         let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
         let fvk = sk.full_viewing_key();
         let ivk = fvk.incoming();
+        let ovk = fvk.outgoing();
         let (dest, _dtk_d) = ivk.payment_address(0u64.into());
         let trading_pair = TradingPair {
             asset_1: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
@@ -330,14 +328,9 @@ mod tests {
             dest,
         );
 
-        let esk = ka::Secret::new(&mut rng);
-
-        let ciphertext = swap.encrypt(&esk).encrypted_swap;
-        let diversified_basepoint = dest.diversified_generator();
-        let transmission_key = swap.transmission_key();
-        let plaintext =
-            SwapCiphertext::decrypt(&ciphertext, &esk, transmission_key, diversified_basepoint)
-                .expect("can decrypt swap");
+        let ciphertext = swap.encrypt(ovk).encrypted_swap;
+        let plaintext = SwapCiphertext::decrypt(&ciphertext, ovk, swap.swap_commitment())
+            .expect("can decrypt swap");
 
         assert_eq!(plaintext, swap);
     }

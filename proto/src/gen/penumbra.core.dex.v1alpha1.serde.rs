@@ -1063,6 +1063,131 @@ impl<'de> serde::Deserialize<'de> for PositionId {
         deserializer.deserialize_struct("penumbra.core.dex.v1alpha1.PositionId", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PositionMetadata {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.position.is_some() {
+            len += 1;
+        }
+        if self.state.is_some() {
+            len += 1;
+        }
+        if self.reserves.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.dex.v1alpha1.PositionMetadata", len)?;
+        if let Some(v) = self.position.as_ref() {
+            struct_ser.serialize_field("position", v)?;
+        }
+        if let Some(v) = self.state.as_ref() {
+            struct_ser.serialize_field("state", v)?;
+        }
+        if let Some(v) = self.reserves.as_ref() {
+            struct_ser.serialize_field("reserves", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PositionMetadata {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "position",
+            "state",
+            "reserves",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Position,
+            State,
+            Reserves,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "position" => Ok(GeneratedField::Position),
+                            "state" => Ok(GeneratedField::State),
+                            "reserves" => Ok(GeneratedField::Reserves),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PositionMetadata;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.dex.v1alpha1.PositionMetadata")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<PositionMetadata, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut position__ = None;
+                let mut state__ = None;
+                let mut reserves__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Position => {
+                            if position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("position"));
+                            }
+                            position__ = map.next_value()?;
+                        }
+                        GeneratedField::State => {
+                            if state__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("state"));
+                            }
+                            state__ = map.next_value()?;
+                        }
+                        GeneratedField::Reserves => {
+                            if reserves__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reserves"));
+                            }
+                            reserves__ = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(PositionMetadata {
+                    position: position__,
+                    state: state__,
+                    reserves: reserves__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.dex.v1alpha1.PositionMetadata", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PositionOpen {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -2822,18 +2947,12 @@ impl serde::Serialize for SwapPayload {
         if self.commitment.is_some() {
             len += 1;
         }
-        if !self.ephemeral_key.is_empty() {
-            len += 1;
-        }
         if !self.encrypted_swap.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.dex.v1alpha1.SwapPayload", len)?;
         if let Some(v) = self.commitment.as_ref() {
             struct_ser.serialize_field("commitment", v)?;
-        }
-        if !self.ephemeral_key.is_empty() {
-            struct_ser.serialize_field("ephemeralKey", pbjson::private::base64::encode(&self.ephemeral_key).as_str())?;
         }
         if !self.encrypted_swap.is_empty() {
             struct_ser.serialize_field("encryptedSwap", pbjson::private::base64::encode(&self.encrypted_swap).as_str())?;
@@ -2849,8 +2968,6 @@ impl<'de> serde::Deserialize<'de> for SwapPayload {
     {
         const FIELDS: &[&str] = &[
             "commitment",
-            "ephemeral_key",
-            "ephemeralKey",
             "encrypted_swap",
             "encryptedSwap",
         ];
@@ -2858,7 +2975,6 @@ impl<'de> serde::Deserialize<'de> for SwapPayload {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Commitment,
-            EphemeralKey,
             EncryptedSwap,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -2882,7 +2998,6 @@ impl<'de> serde::Deserialize<'de> for SwapPayload {
                     {
                         match value {
                             "commitment" => Ok(GeneratedField::Commitment),
-                            "ephemeralKey" | "ephemeral_key" => Ok(GeneratedField::EphemeralKey),
                             "encryptedSwap" | "encrypted_swap" => Ok(GeneratedField::EncryptedSwap),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -2904,7 +3019,6 @@ impl<'de> serde::Deserialize<'de> for SwapPayload {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut commitment__ = None;
-                let mut ephemeral_key__ = None;
                 let mut encrypted_swap__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
@@ -2913,14 +3027,6 @@ impl<'de> serde::Deserialize<'de> for SwapPayload {
                                 return Err(serde::de::Error::duplicate_field("commitment"));
                             }
                             commitment__ = map.next_value()?;
-                        }
-                        GeneratedField::EphemeralKey => {
-                            if ephemeral_key__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ephemeralKey"));
-                            }
-                            ephemeral_key__ = 
-                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
-                            ;
                         }
                         GeneratedField::EncryptedSwap => {
                             if encrypted_swap__.is_some() {
@@ -2934,7 +3040,6 @@ impl<'de> serde::Deserialize<'de> for SwapPayload {
                 }
                 Ok(SwapPayload {
                     commitment: commitment__,
-                    ephemeral_key: ephemeral_key__.unwrap_or_default(),
                     encrypted_swap: encrypted_swap__.unwrap_or_default(),
                 })
             }
@@ -3139,18 +3244,12 @@ impl serde::Serialize for SwapPlan {
         if !self.fee_blinding.is_empty() {
             len += 1;
         }
-        if !self.esk.is_empty() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.dex.v1alpha1.SwapPlan", len)?;
         if let Some(v) = self.swap_plaintext.as_ref() {
             struct_ser.serialize_field("swapPlaintext", v)?;
         }
         if !self.fee_blinding.is_empty() {
             struct_ser.serialize_field("feeBlinding", pbjson::private::base64::encode(&self.fee_blinding).as_str())?;
-        }
-        if !self.esk.is_empty() {
-            struct_ser.serialize_field("esk", pbjson::private::base64::encode(&self.esk).as_str())?;
         }
         struct_ser.end()
     }
@@ -3166,14 +3265,12 @@ impl<'de> serde::Deserialize<'de> for SwapPlan {
             "swapPlaintext",
             "fee_blinding",
             "feeBlinding",
-            "esk",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             SwapPlaintext,
             FeeBlinding,
-            Esk,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3197,7 +3294,6 @@ impl<'de> serde::Deserialize<'de> for SwapPlan {
                         match value {
                             "swapPlaintext" | "swap_plaintext" => Ok(GeneratedField::SwapPlaintext),
                             "feeBlinding" | "fee_blinding" => Ok(GeneratedField::FeeBlinding),
-                            "esk" => Ok(GeneratedField::Esk),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3219,7 +3315,6 @@ impl<'de> serde::Deserialize<'de> for SwapPlan {
             {
                 let mut swap_plaintext__ = None;
                 let mut fee_blinding__ = None;
-                let mut esk__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::SwapPlaintext => {
@@ -3236,20 +3331,11 @@ impl<'de> serde::Deserialize<'de> for SwapPlan {
                                 Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::Esk => {
-                            if esk__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("esk"));
-                            }
-                            esk__ = 
-                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
-                            ;
-                        }
                     }
                 }
                 Ok(SwapPlan {
                     swap_plaintext: swap_plaintext__,
                     fee_blinding: fee_blinding__.unwrap_or_default(),
-                    esk: esk__.unwrap_or_default(),
                 })
             }
         }

@@ -7,17 +7,17 @@ use penumbra_tct::Commitment;
 
 #[derive(Debug, clap::Subcommand)]
 pub enum ShieldedPool {
-    /// Queries the note commitment tree anchor for a given height.
+    /// Queries the state commitment tree anchor for a given height.
     Anchor {
         /// The height to query.
         height: u64,
     },
-    /// Queries the note commitment tree's block anchor for a given height.
+    /// Queries the state commitment tree's block anchor for a given height.
     BlockAnchor {
         /// The height to query.
         height: u64,
     },
-    /// Queries the note commitment tree's epoch anchor for a given epoch index.
+    /// Queries the state commitment tree's epoch anchor for a given epoch index.
     EpochAnchor {
         /// The epoch to query.
         epoch: u64,
@@ -47,7 +47,7 @@ impl ShieldedPool {
             ShieldedPool::EpochAnchor { epoch } => state_key::epoch_anchor_by_index(*epoch),
             ShieldedPool::CompactBlock { height } => state_key::compact_block(*height),
             ShieldedPool::Commitment { commitment } => state_key::note_source(commitment),
-            ShieldedPool::Nullifier { nullifier } => state_key::spent_nullifier_lookup(*nullifier),
+            ShieldedPool::Nullifier { nullifier } => state_key::spent_nullifier_lookup(nullifier),
         }
     }
 

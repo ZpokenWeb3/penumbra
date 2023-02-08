@@ -1,8 +1,8 @@
-use std::{any::Any, pin::Pin, sync::Arc};
+use std::{any::Any, future::Future, pin::Pin, sync::Arc};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{FutureExt, Stream};
 use jmt::storage::{LeafNode, Node, NodeKey, TreeReader};
 use tokio::sync::mpsc;
 use tracing::Span;
@@ -87,14 +87,20 @@ impl Snapshot {
 #[async_trait]
 impl StateRead for Snapshot {
     /// Fetch a key from the JMT column family.
-    async fn get_raw(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    fn get_raw(
+        &self,
+        key: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>>> + Send + 'static>> {
         let span = Span::current();
         let key_hash = jmt::KeyHash::from(key);
         let self2 = self.clone();
-        tokio::task::Builder::new()
-            .name("Snapshot::get_raw")
-            .spawn_blocking(move || span.in_scope(|| self2.get_jmt(key_hash)))?
-            .await?
+        async move {
+            tokio::task::Builder::new()
+                .name("Snapshot::get_raw")
+                .spawn_blocking(move || span.in_scope(|| self2.get_jmt(key_hash)))?
+                .await?
+        }
+        .boxed()
     }
 
     /// Fetch a key from the nonconsensus column family.
@@ -155,6 +161,47 @@ impl StateRead for Snapshot {
                             .get_jmt(k.as_bytes().into())?
                             .expect("keys in jmt_keys should have a corresponding value in jmt");
                         tx.blocking_send(Ok((k, v)))?;
+                    }
+                    Ok::<(), anyhow::Error>(())
+                })
+            })
+            .expect("should be able to spawn_blocking");
+
+        Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+    }
+
+    // NOTE: this implementation is almost the same as the above, but without
+    // fetching the values. not totally clear if this could be combined, or if that would
+    // be better overall.
+    fn prefix_keys<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Stream<Item = Result<String>> + Sync + Send + 'a>> {
+        let span = Span::current();
+        let self2 = self.clone();
+
+        let mut options = rocksdb::ReadOptions::default();
+        options.set_iterate_range(rocksdb::PrefixRange(prefix.as_bytes()));
+        let mode = rocksdb::IteratorMode::Start;
+
+        let (tx, rx) = mpsc::channel(10);
+        tokio::task::Builder::new()
+            .name("Snapshot::prefix_keys")
+            .spawn_blocking(move || {
+                span.in_scope(|| {
+                    let keys_cf = self2
+                        .0
+                        .db
+                        .cf_handle("jmt_keys")
+                        .expect("jmt_keys column family not found");
+                    let iter = self2.0.snapshot.iterator_cf_opt(keys_cf, options, mode);
+                    for i in iter {
+                        // For each key that matches the prefix, fetch the value from the JMT column family.
+                        let (key_preimage, _key_hash) = i?;
+                        let k = std::str::from_utf8(key_preimage.as_ref())
+                            .expect("saved jmt keys are utf-8 strings")
+                            .to_string();
+                        tx.blocking_send(Ok(k))?;
                     }
                     Ok::<(), anyhow::Error>(())
                 })
