@@ -392,6 +392,12 @@ impl ViewClient {
         };
         return serde_wasm_bindgen::to_value(&result).unwrap();
     }
+
+    pub fn get_nct_root(&mut self) -> JsValue {
+        let root = self.nct.root();
+        return serde_wasm_bindgen::to_value(&root).unwrap();
+
+    }
 }
 
 pub fn load_tree(stored_tree: StoredTree) -> Tree {

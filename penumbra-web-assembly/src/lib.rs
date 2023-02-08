@@ -50,7 +50,6 @@ pub fn decrypt_note(full_viewing_key: &str, encrypted_note: &str, ephemeral_key:
 #[wasm_bindgen]
 pub fn generate_spend_key(seed_phrase: &str) -> JsValue {
     utils::set_panic_hook();
-    web_console::log_1(&seed_phrase.into());
     let seed = SeedPhrase::from_str(seed_phrase).unwrap();
     let spend_key = SpendKey::from_seed_phrase(seed, 0);
 
@@ -80,6 +79,8 @@ pub fn get_full_viewing_key(spend_key_str: &str) -> JsValue {
     );
     return serde_wasm_bindgen::to_value(&fvk_str).unwrap();
 }
+
+
 
 #[wasm_bindgen]
 pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
@@ -118,6 +119,16 @@ pub fn decode_transaction(tx_bytes: &str) -> JsValue {
     let transaction: Transaction = Transaction::try_from(tx_vec).unwrap();
     return serde_wasm_bindgen::to_value(&transaction).unwrap();
 }
+
+#[wasm_bindgen]
+pub fn decode_nct_root(tx_bytes: &str) -> JsValue {
+    utils::set_panic_hook();
+    let tx_vec: Vec<u8> = hex::decode(tx_bytes).unwrap();
+    let root = penumbra_tct::Root::decode(tx_vec.as_slice()).unwrap();
+    return serde_wasm_bindgen::to_value(&root).unwrap();
+}
+
+
 
 // #[wasm_bindgen]
 // pub fn nct_insert_empty_block(stored_position: JsValue,

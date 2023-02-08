@@ -4093,7 +4093,7 @@ dependencies = [
 
 [[package]]
 name = "penumbra-web-assembly"
-version = "0.42.6"
+version = "0.42.12"
 dependencies = [
  "anyhow",
  "async-global-executor",

@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use anyhow::Context;
 use penumbra_chain::params::{ChainParameters, FmdParameters};
-use penumbra_crypto::FullViewingKey;
+use penumbra_crypto::{FullViewingKey, Address};
 
 use penumbra_crypto::keys::SpendKey;
 use penumbra_tct::{Commitment, Proof, Tree};
@@ -33,22 +33,20 @@ pub struct SendTx {
 pub fn send_plan(
     full_viewing_key: &str,
     valueJs: JsValue,
-    dest_addressJs: JsValue,
+    dest_address: &str,
     view_service_data: JsValue,
 ) -> JsValue {
     utils::set_panic_hook();
     web_console::log_1(&valueJs);
-    web_console::log_1(&dest_addressJs);
 
     let value: penumbra_proto::core::crypto::v1alpha1::Value =
         serde_wasm_bindgen::from_value(valueJs).unwrap();
 
-    let dest_address: penumbra_proto::core::crypto::v1alpha1::Address =
-        serde_wasm_bindgen::from_value(dest_addressJs).unwrap();
 
+    let address = Address::from_str(dest_address).unwrap();
     let mut planner = Planner::new(OsRng);
     planner.fee(Default::default());
-    planner.output(value.try_into().unwrap(), dest_address.try_into().unwrap());
+    planner.output(value.try_into().unwrap(), address);
 
     let fvk = FullViewingKey::from_str(full_viewing_key.as_ref())
         .context("The provided string is not a valid FullViewingKey")
@@ -77,9 +75,7 @@ pub fn encode_tx(transaction: JsValue) -> JsValue {
     utils::set_panic_hook();
     let tx: Transaction = serde_wasm_bindgen::from_value(transaction).unwrap();
     let tx_encoding :Vec<u8> = tx.try_into().unwrap();
-
-    let hextx = hex::encode(tx_encoding);
-    return serde_wasm_bindgen::to_value(&hextx).unwrap();
+    return serde_wasm_bindgen::to_value(&tx_encoding).unwrap();
 }
 
 #[wasm_bindgen]
