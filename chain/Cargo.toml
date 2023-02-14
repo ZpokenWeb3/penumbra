@@ -8,12 +8,12 @@ edition = "2021"
 penumbra-proto = { path = "../proto" }
 penumbra-storage = { path = "../storage",  optional = true }
 penumbra-crypto = { path = "../crypto" }
-penumbra-transaction = { path = "../transaction" }
+penumbra-transaction = { path = "../transaction", optional = true }
 penumbra-tct = { path = "../tct" }
 
 # Penumbra dependencies
 decaf377 = { git = "https://github.com/penumbra-zone/decaf377" }
-jmt = "0.2.0"
+#jmt = "0.2.0"
 
 tendermint = "0.26.0"
 ibc = "0.23.0"
