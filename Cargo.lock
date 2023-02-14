@@ -2724,7 +2724,8 @@ checksum = "fad582f4b9e86b6caa621cabeb0963332d92eea04729ab12892c2533951e6440"
 [[package]]
 name = "jmt"
 version = "0.2.0"
-source = "git+https://github.com/penumbra-zone/jmt?branch=upstream-ics23#d4f4fab429cc14f0074f1bb8937dc9f21799827b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bae31f4b3d6e8334847c67dd16070c4ed0f49a5ccb15aa43bc8d2eacd6cf41a7"
 dependencies = [
  "anyhow",
  "bcs",
@@ -3542,7 +3543,7 @@ dependencies = [
  "tendermint-rpc",
  "tokio",
  "tokio-stream",
- "tokio-util 0.6.10",
+ "tokio-util 0.7.4",
  "toml 0.4.10",
  "tonic",
  "tower",
@@ -3905,23 +3906,17 @@ dependencies = [
  "anyhow",
  "async-stream 0.3.3",
  "async-trait",
- "bincode",
  "futures",
  "hex",
- "ibc",
- "ibc-proto",
  "ics23",
  "jmt",
  "metrics",
- "once_cell",
  "parking_lot 0.12.1",
  "rocksdb",
- "sha2 0.9.9",
  "tempfile",
  "tendermint",
  "tokio",
  "tokio-stream",
- "tonic",
  "tracing",
  "tracing-subscriber 0.3.16",
 ]
@@ -4041,6 +4036,7 @@ dependencies = [
  "serde_with 1.14.0",
  "sha2 0.9.9",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -5878,9 +5874,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.21.1"
+version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0020c875007ad96677dcc890298f4b942882c5d4eb7cc8f439fc3bf813dc9c95"
+checksum = "c8e00990ebabbe4c14c08aca901caed183ecd5c09562a12c824bb53d3c3fd3af"
 dependencies = [
  "autocfg",
  "bytes",
@@ -5888,14 +5884,13 @@ dependencies = [
  "memchr",
  "mio",
  "num_cpus",
- "once_cell",
  "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "tracing",
- "winapi",
+ "windows-sys",
 ]
 
 [[package]]

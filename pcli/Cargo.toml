@@ -17,7 +17,7 @@ sct-divergence-check = ["penumbra-view/sct-divergence-check"]
 
 [dependencies]
 # Workspace dependencies
-jmt = { git = "https://github.com/penumbra-zone/jmt", branch = "upstream-ics23" }
+jmt = "0.2.0"
 penumbra-proto = { path = "../proto" }
 penumbra-chain = { path = "../chain" }
 penumbra-crypto = { path = "../crypto" }
@@ -48,9 +48,9 @@ bytes = "1"
 comfy-table = "5"
 directories = "4.0.1"
 fslock = "0.2"
-tokio = { version = "1.21.1", features = ["full"] }
+tokio = { version = "1.22", features = ["full"] }
 tokio-stream = "0.1"
-tokio-util = "0.6"
+tokio-util = "0.7"
 tower = { version = "0.4", features = ["full"] }
 tracing = "0.1"
 tonic = "0.8.1"

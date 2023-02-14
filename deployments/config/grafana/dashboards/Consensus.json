@@ -120,7 +120,7 @@
         "x": 0,
         "y": 0
       },
-      "id": 2,
+      "id": 4,
       "options": {
         "legend": {
           "calcs": [],
@@ -139,8 +139,8 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(penumbra_pd_oblivious_client_compact_block_served_total[5m])",
-          "legendFormat": "Rate of served compact blocks (5m)",
+          "expr": "tendermint_consensus_missing_validators",
+          "legendFormat": "Missing Validators",
           "range": true,
           "refId": "A"
         },
@@ -150,14 +150,14 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(penumbra_pd_oblivious_client_compact_block_served_total[30s])",
+          "expr": "tendermint_consensus_validators",
           "hide": false,
-          "legendFormat": "Rate of served compact blocks (30s)",
+          "legendFormat": "Validators",
           "range": true,
           "refId": "B"
         }
       ],
-      "title": "Compact Blocks",
+      "title": "Validators",
       "type": "timeseries"
     },
     {
@@ -173,7 +173,93 @@
           "custom": {
             "axisLabel": "",
             "axisPlacement": "auto",
-            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(tendermint_consensus_latest_block_height[5m])",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocks Per Second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 0,
@@ -217,12 +303,12 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 5,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 17
       },
-      "id": 4,
+      "id": 6,
       "options": {
         "legend": {
           "calcs": [],
@@ -240,11 +326,11 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "penumbra_pd_oblivious_client_compact_active_connections",
+          "expr": "tendermint_consensus_rounds",
           "refId": "A"
         }
       ],
-      "title": "Active Client Connections",
+      "title": "Consensus Rounds",
       "type": "timeseries"
     }
   ],
@@ -252,7 +338,18 @@
   "style": "dark",
   "tags": [],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "hide": 0,
+        "label": "datasource",
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      }
+    ]
   },
   "time": {
     "from": "now-6h",
@@ -260,8 +357,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Client Info",
-  "uid": "Uq0N5097k",
-  "version": 5,
+  "title": "Consensus",
+  "uid": "i_UiDu_7z",
+  "version": 1,
   "weekStart": ""
 }
