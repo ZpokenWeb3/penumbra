@@ -217,6 +217,8 @@ impl ViewClient {
                         self.nct.insert(Forget, commitment).unwrap();
                     }
                 }
+                StatePayload::Position { lpnft, commitment } => todo!(),
+
             }
         }
 
@@ -250,7 +252,7 @@ impl ViewClient {
     pub fn scan_block_without_updates(
             &mut self,
             compact_block: JsValue,
-            )  {
+            ) -> JsValue  {
         utils::set_panic_hook();
 
         //        web_console::log_1(&compact_block);
@@ -266,6 +268,11 @@ impl ViewClient {
         //        if self.latest_height.wrapping_add(1) != block.height {
         //            return Default::default();
         //        }
+
+        // Newly detected spendable notes.
+        let mut new_notes = Vec::new();
+        // Newly detected claimable swaps.
+        let mut new_swaps: Vec<SwapRecord> = Vec::new();
 
         for state_payload in block.state_payloads {
             let clone_payload = state_payload.clone();
@@ -298,6 +305,7 @@ impl ViewClient {
                                 position: note_position,
                                 source,
                             };
+                            new_notes.push(note_record.clone());
                             self.notes.insert(payload.note_commitment, note_record);
                         }
                         None => {
@@ -339,6 +347,7 @@ impl ViewClient {
                                 output_data: batch_data.clone(),
                                 height_claimed: None,
                             };
+                            new_swaps.push(swap_record.clone());
                             self.swaps.insert(payload.commitment, swap_record);
                         }
                         None => {
@@ -355,6 +364,7 @@ impl ViewClient {
                         self.nct.insert(Forget, commitment).unwrap();
                     }
                 }
+                StatePayload::Position { lpnft, commitment } => todo!(),
             }
         }
 
@@ -364,6 +374,15 @@ impl ViewClient {
         }
 
         self.latest_height = block.height;
+
+        let result = ScanBlockResult {
+            height: self.latest_height,
+            nct_updates: Default::default(),
+            new_notes,
+            new_swaps,
+        };
+
+        return serde_wasm_bindgen::to_value(&result).unwrap();
 
     }
 

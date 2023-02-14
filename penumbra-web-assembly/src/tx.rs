@@ -149,7 +149,7 @@ fn witness(nct: Tree, plan: TransactionPlan) -> WitnessData {
 
     let mut witness_data = WitnessData {
         anchor,
-        note_commitment_proofs: auth_paths
+        state_commitment_proofs: auth_paths
             .into_iter()
             .map(|proof| (proof.commitment(), proof))
             .collect(),
