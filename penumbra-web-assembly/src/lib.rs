@@ -8,7 +8,7 @@ mod tx;
 mod utils;
 use penumbra_proto::{core::crypto::v1alpha1 as pb, serializers::bech32str, DomainType};
 
-use penumbra_crypto::{ka, FullViewingKey, Note};
+use penumbra_crypto::{ka, FullViewingKey, Note, Address};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
@@ -98,6 +98,29 @@ pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
             bech32str::Bech32m);
 
     return serde_wasm_bindgen::to_value(&address_str).unwrap();
+}
+
+
+#[wasm_bindgen]
+pub fn base64_to_bech32(prefix: &str, base64_str: &str) -> JsValue {
+    utils::set_panic_hook();
+
+    let bech32 = &bech32str::encode(
+            &base64::decode(base64_str).unwrap(),
+            prefix,
+            bech32str::Bech32m);
+    return serde_wasm_bindgen::to_value(bech32).unwrap();
+}
+#[wasm_bindgen]
+pub fn is_controlled_address(full_viewing_key: &str, address: &str) -> JsValue {
+    utils::set_panic_hook();
+    let fvk = FullViewingKey::from_str(full_viewing_key.as_ref())
+        .context("The provided string is not a valid FullViewingKey")
+        .unwrap();
+
+    let index = fvk.address_index(&Address::from_str(address.as_ref()).unwrap());
+
+    return serde_wasm_bindgen::to_value(&index).unwrap();
 }
 
 #[wasm_bindgen]

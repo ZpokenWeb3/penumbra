@@ -4035,6 +4035,7 @@ dependencies = [
  "serde_with 1.14.0",
  "sha2 0.9.9",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -4113,7 +4114,7 @@ dependencies = [
 
 [[package]]
 name = "penumbra-web-assembly"
-version = "0.43.1"
+version = "0.44.2"
 dependencies = [
  "anyhow",
  "async-global-executor",
