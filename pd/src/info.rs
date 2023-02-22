@@ -37,7 +37,7 @@ impl Info {
     }
 
     async fn info(&self, info: abci::request::Info) -> Result<abci::response::Info, anyhow::Error> {
-        let state = self.storage.latest_state();
+        let state = self.storage.latest_snapshot();
         tracing::info!(?info, version = ?state.version());
 
         let last_block_height = match state.version() {
@@ -49,7 +49,7 @@ impl Info {
         .try_into()
         .unwrap();
 
-        let last_block_app_hash = state.app_hash().await?.0.to_vec().into();
+        let last_block_app_hash = state.app_hash().await?.0.to_vec().try_into()?;
 
         Ok(abci::response::Info {
             data: "penumbra".to_string(),
@@ -74,17 +74,17 @@ impl Info {
                 let _height: u64 = query.height.into();
                 let key = hex::decode(&query.data).unwrap_or_else(|_| query.data.to_vec());
 
-                let state = self.storage.latest_state();
+                let state = self.storage.latest_snapshot();
                 let height = state.version();
 
-                let (value, proof) = state.get_with_proof_to_apphash_tm(key).await?;
+                let (value, proof_ops) = state.get_with_proof_to_apphash_tm(key).await?;
 
                 Ok(abci::response::Query {
-                    code: 0,
+                    code: 0.into(),
                     key: query.data,
                     log: "".to_string(),
                     value: value.into(),
-                    proof: Some(proof),
+                    proof: Some(proof_ops),
                     height: height.try_into().unwrap(),
                     codespace: "".to_string(),
                     info: "".to_string(),
@@ -123,7 +123,7 @@ impl tower_service::Service<InfoRequest> for Info {
                 InfoRequest::Query(query) => match self2.query(query).await {
                     Ok(rsp) => Ok(InfoResponse::Query(rsp)),
                     Err(e) => Ok(InfoResponse::Query(abci::response::Query {
-                        code: 1,
+                        code: 1.into(),
                         log: e.to_string(),
                         ..Default::default()
                     })),

@@ -29,7 +29,7 @@ fn trace_events(events: &[abci::Event]) {
 impl Worker {
     #[instrument(skip(storage, queue), name = "consensus::Worker::new")]
     pub async fn new(storage: Storage, queue: mpsc::Receiver<Message>) -> Result<Self> {
-        let app = App::new(storage.latest_state());
+        let app = App::new(storage.latest_snapshot());
 
         Ok(Self {
             queue,
@@ -121,7 +121,7 @@ impl Worker {
         Ok(abci::response::InitChain {
             consensus_params: Some(init_chain.consensus_params),
             validators,
-            app_hash: app_hash.0.to_vec().into(),
+            app_hash: app_hash.0.to_vec().try_into()?,
         })
     }
 
@@ -155,7 +155,7 @@ impl Worker {
             Err(e) => {
                 tracing::info!(?e, "deliver_tx failed");
                 abci::response::DeliverTx {
-                    code: 1,
+                    code: 1.into(),
                     // Use the alternate format specifier to include the chain of error causes.
                     log: format!("{:#}", e),
                     ..Default::default()

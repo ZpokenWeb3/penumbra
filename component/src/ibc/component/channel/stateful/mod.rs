@@ -31,7 +31,7 @@ pub mod channel_open_init {
                 &self,
                 msg: &MsgChannelOpenInit,
             ) -> anyhow::Result<()> {
-                self.get_connection(&msg.chan_end_on_a.connection_hops[0])
+                self.get_connection(&msg.connection_hops_on_a[0])
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("connection not found"))
                     .map(|_| ())
@@ -59,7 +59,6 @@ pub mod channel_open_init {
 }
 
 pub mod channel_open_try {
-    use ibc::proofs::Proofs;
 
     use super::super::*;
     use super::proof_verification::ChannelProofVerifier;
@@ -78,27 +77,20 @@ pub mod channel_open_try {
 
             let expected_channel = ChannelEnd {
                 state: ChannelState::Init,
-                ordering: msg.chan_end_on_b.ordering,
+                ordering: msg.ordering,
                 remote: expected_counterparty,
                 connection_hops: vec![connection
                     .counterparty()
                     .connection_id
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("no counterparty connection id provided"))?],
-                version: msg.version_on_a.clone(),
+                version: msg.version_supported_on_a.clone(),
             };
-
-            let proof = Proofs::new(
-                msg.proof_chan_end_on_a.clone(),
-                None,
-                None,
-                None,
-                msg.proof_height_on_a,
-            )?;
 
             self.verify_channel_proof(
                 &connection,
-                &proof,
+                &msg.proof_chan_end_on_a,
+                &msg.proof_height_on_a,
                 &channel_id,
                 &msg.port_id_on_b,
                 &expected_channel,
@@ -117,7 +109,7 @@ pub mod channel_open_try {
                 msg: &MsgChannelOpenTry,
             ) -> anyhow::Result<ConnectionEnd> {
                 let connection = self
-                    .get_connection(&msg.chan_end_on_b.connection_hops[0])
+                    .get_connection(&msg.connection_hops_on_b[0])
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("connection not found"))?;
 
@@ -134,7 +126,6 @@ pub mod channel_open_try {
 }
 
 pub mod channel_open_ack {
-    use ibc::proofs::Proofs;
 
     use super::super::*;
     use super::proof_verification::ChannelProofVerifier;
@@ -178,17 +169,10 @@ pub mod channel_open_ack {
                 version: msg.version_on_b.clone(),
             };
 
-            let proof = Proofs::new(
-                msg.proof_chan_end_on_b.clone(),
-                None,
-                None,
-                None,
-                msg.proof_height_on_b,
-            )?;
-
             self.verify_channel_proof(
                 &connection,
-                &proof,
+                &msg.proof_chan_end_on_b,
+                &msg.proof_height_on_b,
                 &msg.chan_id_on_b,
                 &channel.remote.port_id,
                 &expected_channel,
@@ -225,8 +209,6 @@ pub mod channel_open_ack {
 }
 
 pub mod channel_open_confirm {
-    use ibc::proofs::Proofs;
-
     use crate::ibc::component::connection::StateReadExt as _;
 
     use super::super::*;
@@ -270,17 +252,10 @@ pub mod channel_open_confirm {
                 version: channel.version.clone(),
             };
 
-            let proof = Proofs::new(
-                msg.proof_chan_end_on_a.clone(),
-                None,
-                None,
-                None,
-                msg.proof_height_on_a,
-            )?;
-
             self.verify_channel_proof(
                 &connection,
-                &proof,
+                &msg.proof_chan_end_on_a,
+                &msg.proof_height_on_a,
                 &channel
                     .remote
                     .channel_id
@@ -332,7 +307,6 @@ pub mod channel_close_init {
 }
 
 pub mod channel_close_confirm {
-    use ibc::proofs::Proofs;
 
     use crate::ibc::component::connection::StateReadExt as _;
 
@@ -380,17 +354,10 @@ pub mod channel_close_confirm {
                 version: channel.version.clone(),
             };
 
-            let proof = Proofs::new(
-                msg.proof_chan_end_on_a.clone(),
-                None,
-                None,
-                None,
-                msg.proof_height_on_a,
-            )?;
-
             self.verify_channel_proof(
                 &connection,
-                &proof,
+                &msg.proof_chan_end_on_a,
+                &msg.proof_height_on_a,
                 &channel
                     .remote
                     .channel_id
@@ -417,10 +384,7 @@ pub mod recv_packet {
     pub trait RecvPacketCheck: PacketProofVerifier {
         async fn validate(&self, msg: &MsgRecvPacket) -> anyhow::Result<()> {
             let channel = self
-                .get_channel(
-                    &msg.packet.destination_channel,
-                    &msg.packet.destination_port,
-                )
+                .get_channel(&msg.packet.chan_on_b, &msg.packet.port_on_b)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("channel not found"))?;
             if !channel.state_matches(&ChannelState::Open) {
@@ -429,7 +393,7 @@ pub mod recv_packet {
 
             // TODO: capability authentication?
 
-            if msg.packet.source_port != channel.counterparty().port_id {
+            if msg.packet.port_on_a != channel.counterparty().port_id {
                 return Err(anyhow::anyhow!("packet source port does not match channel"));
             }
             let counterparty_channel = channel
@@ -437,7 +401,7 @@ pub mod recv_packet {
                 .channel_id()
                 .ok_or_else(|| anyhow::anyhow!("missing channel id"))?;
 
-            if msg.packet.source_channel.ne(counterparty_channel) {
+            if msg.packet.chan_on_a.ne(counterparty_channel) {
                 return Err(anyhow::anyhow!(
                     "packet source channel does not match channel"
                 ));
@@ -455,13 +419,13 @@ pub mod recv_packet {
             let block_height = self.get_block_height().await?;
             let height = IBCHeight::new(0, block_height)?;
 
-            if msg.packet.timeout_height.has_expired(height) {
+            if msg.packet.timeout_height_on_b.has_expired(height) {
                 return Err(anyhow::anyhow!("packet has timed out"));
             }
 
             let packet_timeout = msg
                 .packet
-                .timeout_timestamp
+                .timeout_timestamp_on_b
                 .into_tm_time()
                 .ok_or_else(|| anyhow::anyhow!("invalid timestamp"))?;
 
@@ -473,10 +437,7 @@ pub mod recv_packet {
 
             if channel.ordering == ChannelOrder::Ordered {
                 let next_sequence_recv = self
-                    .get_recv_sequence(
-                        &msg.packet.destination_channel,
-                        &msg.packet.destination_port,
-                    )
+                    .get_recv_sequence(&msg.packet.chan_on_b, &msg.packet.port_on_b)
                     .await?;
 
                 if msg.packet.sequence != next_sequence_recv.into() {
@@ -504,7 +465,7 @@ pub mod acknowledge_packet {
     pub trait AcknowledgePacketCheck: PacketProofVerifier {
         async fn validate(&self, msg: &MsgAcknowledgement) -> anyhow::Result<()> {
             let channel = self
-                .get_channel(&msg.packet.source_channel, &msg.packet.source_port)
+                .get_channel(&msg.packet.chan_on_a, &msg.packet.port_on_a)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("channel not found"))?;
             if !channel.state_matches(&ChannelState::Open) {
@@ -513,13 +474,7 @@ pub mod acknowledge_packet {
 
             // TODO: capability authentication?
 
-            // TODO(erwan): MERGEBLOCK partialeq only works through explicit method call? why?
-            // TODO(erwan): realizing now that there are a bunch of helper methods we could rather use POLISH
-            if channel
-                .counterparty()
-                .port_id()
-                .ne(&msg.packet.destination_port)
-            {
+            if channel.counterparty().port_id().ne(&msg.packet.port_on_b) {
                 return Err(anyhow::anyhow!(
                     "packet destination port does not match channel"
                 ));
@@ -546,7 +501,7 @@ pub mod acknowledge_packet {
 
             if channel.ordering == ChannelOrder::Ordered {
                 let next_sequence_ack = self
-                    .get_ack_sequence(&msg.packet.source_channel, &msg.packet.source_port)
+                    .get_ack_sequence(&msg.packet.chan_on_a, &msg.packet.port_on_a)
                     .await?;
                 if msg.packet.sequence != next_sequence_ack.into() {
                     return Err(anyhow::anyhow!("packet sequence number does not match"));
@@ -571,7 +526,7 @@ pub mod timeout {
     pub trait TimeoutCheck: PacketProofVerifier {
         async fn validate(&self, msg: &MsgTimeout) -> anyhow::Result<()> {
             let channel = self
-                .get_channel(&msg.packet.source_channel, &msg.packet.source_port)
+                .get_channel(&msg.packet.chan_on_a, &msg.packet.port_on_a)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("channel not found"))?;
             if !channel.state_matches(&ChannelState::Open) {
@@ -579,7 +534,7 @@ pub mod timeout {
             }
 
             // TODO: capability authentication?
-            if msg.packet.destination_channel.ne(channel
+            if msg.packet.chan_on_b.ne(channel
                 .counterparty()
                 .channel_id()
                 .ok_or_else(|| anyhow::anyhow!("missing channel id"))?)
@@ -588,7 +543,7 @@ pub mod timeout {
                     "packet destination channel does not match channel"
                 ));
             }
-            if msg.packet.destination_port != channel.counterparty().port_id {
+            if msg.packet.port_on_b != channel.counterparty().port_id {
                 return Err(anyhow::anyhow!(
                     "packet destination port does not match channel"
                 ));
@@ -600,9 +555,9 @@ pub mod timeout {
                 .ok_or_else(|| anyhow::anyhow!("connection not found for channel"))?;
 
             let chain_ts = self
-                .get_client_update_time(connection.client_id(), &msg.proofs.height())
+                .get_client_update_time(connection.client_id(), &msg.proof_height_on_b)
                 .await?;
-            let chain_height = msg.proofs.height();
+            let chain_height = msg.proof_height_on_b;
 
             // check that timeout height or timeout timestamp has passed on the other end
             if !msg.packet.timed_out(&chain_ts, chain_height) {
@@ -622,7 +577,7 @@ pub mod timeout {
 
             if channel.ordering == ChannelOrder::Ordered {
                 // ordered channel: check that packet has not been received
-                if msg.next_sequence_recv > msg.packet.sequence {
+                if msg.next_seq_recv_on_b != msg.packet.sequence {
                     return Err(anyhow::anyhow!("packet sequence number does not match"));
                 }
 

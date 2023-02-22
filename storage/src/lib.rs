@@ -36,14 +36,23 @@
 //! [`penumbra_proto::Protobuf`] trait to automatically (de)serialize into proto
 //! or domain types, allowing its use as an object store.
 
+mod cache;
+mod delta;
 mod metrics;
+mod read;
 mod snapshot;
 mod snapshot_cache;
-mod state;
 mod storage;
+mod write;
+
+use cache::Cache;
 
 pub use crate::metrics::register_metrics;
+pub use delta::{ArcStateDeltaExt, StateDelta};
 pub use jmt::{ics23_spec, RootHash};
+pub use read::StateRead;
 pub use snapshot::Snapshot;
-pub use state::{ArcStateExt, State, StateRead, StateTransaction, StateWrite};
-pub use storage::{StateNotification, Storage, TempStorage};
+pub use storage::{Storage, TempStorage};
+pub use write::StateWrite;
+
+pub mod future;

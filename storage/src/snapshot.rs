@@ -1,13 +1,12 @@
-use std::{any::Any, future::Future, pin::Pin, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{FutureExt, Stream};
 use jmt::storage::{LeafNode, Node, NodeKey, TreeReader};
 use tokio::sync::mpsc;
 use tracing::Span;
 
-use crate::state::StateRead;
+use crate::{metrics, StateRead};
 
 mod rocks_wrapper;
 use rocks_wrapper::RocksDbSnapshot;
@@ -20,7 +19,7 @@ use rocks_wrapper::RocksDbSnapshot;
 /// snapshot](https://github.com/facebook/rocksdb/wiki/Snapshot) with a pinned
 /// JMT version number for the snapshot.
 #[derive(Clone)]
-pub struct Snapshot(Arc<Inner>);
+pub struct Snapshot(pub(crate) Arc<Inner>);
 
 impl std::fmt::Debug for Snapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,7 +31,7 @@ impl std::fmt::Debug for Snapshot {
 
 // We don't want to expose the `TreeReader` implementation outside of this crate.
 #[derive(Debug)]
-struct Inner {
+pub(crate) struct Inner {
     snapshot: RocksDbSnapshot,
     version: jmt::Version,
     // Used to retrieve column family handles.
@@ -52,13 +51,58 @@ impl Snapshot {
         self.0.version
     }
 
+    /// Gets a value by key alongside an ICS23 existence proof of that value.
+    ///
+    /// Errors if the key is not present.
+    /// TODO: change return type to `Option<Vec<u8>>` and an
+    /// existence-or-nonexistence proof.
+    pub async fn get_with_proof(&self, key: Vec<u8>) -> Result<(Vec<u8>, ics23::ExistenceProof)> {
+        let span = Span::current();
+        let snapshot = self.clone();
+
+        tokio::task::Builder::new()
+            .name("State::get_with_proof")
+            .spawn_blocking(move || {
+                span.in_scope(|| {
+                    let tree = jmt::JellyfishMerkleTree::new(&*snapshot.0);
+                    let proof = tree.get_with_ics23_proof(key, snapshot.version())?;
+                    Ok((proof.value.clone(), proof))
+                })
+            })?
+            .await?
+    }
+
+    /// Returns the root hash of this `State`.
+    ///
+    /// If the `State` is empty, the all-zeros hash will be returned as a placeholder value.
+    ///
+    /// This method may only be used on a clean [`State`] fork, and will error
+    /// if [`is_dirty`] returns `true`.
+    pub async fn root_hash(&self) -> Result<crate::RootHash> {
+        let span = Span::current();
+        let snapshot = self.clone();
+
+        tokio::task::Builder::new()
+            .name("State::root_hash")
+            .spawn_blocking(move || {
+                span.in_scope(|| {
+                    let tree = jmt::JellyfishMerkleTree::new(&*snapshot.0);
+                    let root = tree
+                        .get_root_hash_option(snapshot.version())?
+                        .unwrap_or(crate::RootHash([0; 32]));
+                    Ok(root)
+                })
+            })?
+            .await?
+    }
+
     /// Internal helper function used by `get_raw` and `prefix_raw`.
     ///
     /// Reads from the JMT will fail if the root is missing; this method
     /// special-cases the empty tree case so that reads on an empty tree just
     /// return None.
     fn get_jmt(&self, key: jmt::KeyHash) -> Result<Option<Vec<u8>>> {
-        let tree = jmt::JellyfishMerkleTree::new(self);
+        let tree = jmt::JellyfishMerkleTree::new(&*self.0);
         match tree.get(key, self.0.version) {
             Ok(Some(value)) => {
                 tracing::trace!(version = ?self.0.version, ?key, value = ?hex::encode(&value), "read from tree");
@@ -86,49 +130,63 @@ impl Snapshot {
 
 #[async_trait]
 impl StateRead for Snapshot {
+    type GetRawFut = crate::future::SnapshotFuture;
+    type PrefixRawStream =
+        tokio_stream::wrappers::ReceiverStream<anyhow::Result<(String, Vec<u8>)>>;
+    type PrefixKeysStream = tokio_stream::wrappers::ReceiverStream<anyhow::Result<String>>;
+    type NonconsensusPrefixRawStream =
+        tokio_stream::wrappers::ReceiverStream<anyhow::Result<(Vec<u8>, Vec<u8>)>>;
+
     /// Fetch a key from the JMT column family.
-    fn get_raw(
-        &self,
-        key: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>>> + Send + 'static>> {
+    fn get_raw(&self, key: &str) -> Self::GetRawFut {
         let span = Span::current();
         let key_hash = jmt::KeyHash::from(key);
         let self2 = self.clone();
-        async move {
+        crate::future::SnapshotFuture(
             tokio::task::Builder::new()
                 .name("Snapshot::get_raw")
-                .spawn_blocking(move || span.in_scope(|| self2.get_jmt(key_hash)))?
-                .await?
-        }
-        .boxed()
+                .spawn_blocking(move || {
+                    span.in_scope(|| {
+                        let start = std::time::Instant::now();
+                        let rsp = self2.get_jmt(key_hash);
+                        metrics::histogram!(metrics::STORAGE_GET_RAW_DURATION, start.elapsed());
+                        rsp
+                    })
+                })
+                .expect("spawning threads is possible"),
+        )
     }
 
-    /// Fetch a key from the nonconsensus column family.
-    async fn nonconsensus_get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn nonconsensus_get_raw(&self, key: &[u8]) -> Self::GetRawFut {
         let span = Span::current();
         let inner = self.0.clone();
         let key: Vec<u8> = key.to_vec();
-        tokio::task::Builder::new()
-            .name("Snapshot::nonconsensus_get_raw")
-            .spawn_blocking(move || {
-                span.in_scope(|| {
-                    let nonconsensus_cf = inner
-                        .db
-                        .cf_handle("nonconsensus")
-                        .expect("nonconsensus column family not found");
-                    inner
-                        .snapshot
-                        .get_cf(nonconsensus_cf, key)
-                        .map_err(Into::into)
+        crate::future::SnapshotFuture(
+            tokio::task::Builder::new()
+                .name("Snapshot::nonconsensus_get_raw")
+                .spawn_blocking(move || {
+                    span.in_scope(|| {
+                        let start = std::time::Instant::now();
+                        let nonconsensus_cf = inner
+                            .db
+                            .cf_handle("nonconsensus")
+                            .expect("nonconsensus column family not found");
+                        let rsp = inner
+                            .snapshot
+                            .get_cf(nonconsensus_cf, key)
+                            .map_err(Into::into);
+                        metrics::histogram!(
+                            metrics::STORAGE_NONCONSENSUS_GET_RAW_DURATION,
+                            start.elapsed()
+                        );
+                        rsp
+                    })
                 })
-            })?
-            .await?
+                .expect("spawning threads is possible"),
+        )
     }
 
-    fn prefix_raw<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> Pin<Box<dyn Stream<Item = Result<(String, Vec<u8>)>> + Sync + Send + 'a>> {
+    fn prefix_raw(&self, prefix: &str) -> Self::PrefixRawStream {
         let span = Span::current();
         let self2 = self.clone();
 
@@ -167,16 +225,13 @@ impl StateRead for Snapshot {
             })
             .expect("should be able to spawn_blocking");
 
-        Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+        tokio_stream::wrappers::ReceiverStream::new(rx)
     }
 
     // NOTE: this implementation is almost the same as the above, but without
     // fetching the values. not totally clear if this could be combined, or if that would
     // be better overall.
-    fn prefix_keys<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> Pin<Box<dyn Stream<Item = Result<String>> + Sync + Send + 'a>> {
+    fn prefix_keys(&self, prefix: &str) -> Self::PrefixKeysStream {
         let span = Span::current();
         let self2 = self.clone();
 
@@ -208,13 +263,10 @@ impl StateRead for Snapshot {
             })
             .expect("should be able to spawn_blocking");
 
-        Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+        tokio_stream::wrappers::ReceiverStream::new(rx)
     }
 
-    fn nonconsensus_prefix_raw<'a>(
-        &'a self,
-        prefix: &'a [u8],
-    ) -> Pin<Box<dyn Stream<Item = Result<(Vec<u8>, Vec<u8>)>> + Sync + Send + 'a>> {
+    fn nonconsensus_prefix_raw(&self, prefix: &[u8]) -> Self::NonconsensusPrefixRawStream {
         let span = Span::current();
         let self2 = self.clone();
 
@@ -245,10 +297,10 @@ impl StateRead for Snapshot {
             })
             .expect("should be able to spawn_blocking");
 
-        Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+        tokio_stream::wrappers::ReceiverStream::new(rx)
     }
 
-    fn object_get<T: Any + Send + Sync>(&self, _key: &str) -> Option<&T> {
+    fn object_get<T: Any + Send + Sync + Clone>(&self, _key: &str) -> Option<T> {
         // No-op -- this will never be called internally, and `Snapshot` is not exposed in public API
         None
     }
@@ -256,19 +308,17 @@ impl StateRead for Snapshot {
 
 /// A reader interface for rocksdb. NOTE: it is up to the caller to ensure consistency between the
 /// rocksdb::DB handle and any write batches that may be applied through the writer interface.
-impl TreeReader for Snapshot {
+impl TreeReader for Inner {
     /// Gets node given a node key. Returns `None` if the node does not exist.
     fn get_node_option(&self, node_key: &NodeKey) -> Result<Option<Node>> {
         let node_key = node_key;
         tracing::trace!(?node_key);
 
         let jmt_cf = self
-            .0
             .db
             .cf_handle("jmt")
             .expect("jmt column family not found");
         let value = self
-            .0
             .snapshot
             .get_cf(jmt_cf, &node_key.encode()?)?
             .map(|db_slice| Node::decode(&db_slice))
@@ -280,11 +330,10 @@ impl TreeReader for Snapshot {
 
     fn get_rightmost_leaf(&self) -> Result<Option<(NodeKey, LeafNode)>> {
         let jmt_cf = self
-            .0
             .db
             .cf_handle("jmt")
             .expect("jmt column family not found");
-        let mut iter = self.0.snapshot.raw_iterator_cf(jmt_cf);
+        let mut iter = self.snapshot.raw_iterator_cf(jmt_cf);
         iter.seek_to_last();
 
         if iter.valid() {

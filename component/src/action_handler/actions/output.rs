@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use penumbra_chain::sync::StatePayload;
-use penumbra_storage::{State, StateRead, StateTransaction};
+use penumbra_storage::{StateRead, StateWrite};
 use penumbra_transaction::{action::Output, Transaction};
 use tracing::instrument;
 
@@ -24,13 +24,13 @@ impl ActionHandler for Output {
     }
 
     #[instrument(name = "output", skip(self, _state))]
-    async fn check_stateful(&self, _state: Arc<State>) -> Result<()> {
+    async fn check_stateful<S: StateRead>(&self, _state: Arc<S>) -> Result<()> {
         Ok(())
     }
 
     #[instrument(name = "output", skip(self, state))]
-    async fn execute(&self, state: &mut StateTransaction) -> Result<()> {
-        let source = state.object_get("source").cloned().unwrap_or_default();
+    async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+        let source = state.object_get("source").unwrap_or_default();
 
         state
             .add_state_payload(StatePayload::Note {

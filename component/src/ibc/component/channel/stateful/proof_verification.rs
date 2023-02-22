@@ -12,11 +12,13 @@ use ibc::core::ics23_commitment::merkle::apply_prefix;
 use ibc::core::ics23_commitment::merkle::MerkleProof;
 use ibc::core::ics23_commitment::specs::ProofSpecs;
 use ibc::core::ics24_host::identifier::ClientId;
-use ibc::core::ics24_host::path::AcksPath;
-use ibc::core::ics24_host::path::CommitmentsPath;
-use ibc::core::ics24_host::path::ReceiptsPath;
-use ibc::core::ics24_host::path::SeqRecvsPath;
+use ibc::core::ics24_host::path::AckPath;
+use ibc::core::ics24_host::path::ChannelEndPath;
+use ibc::core::ics24_host::path::CommitmentPath;
+use ibc::core::ics24_host::path::ReceiptPath;
+use ibc::core::ics24_host::path::SeqRecvPath;
 use ibc::core::ics24_host::Path;
+use ibc::Height;
 
 use anyhow::Context;
 use ibc_proto::ibc::core::commitment::v1::MerkleProof as RawMerkleProof;
@@ -31,16 +33,16 @@ use sha2::{Digest, Sha256};
 // + sha256(data)
 pub fn commit_packet(packet: &Packet) -> Vec<u8> {
     let mut commit = vec![];
-    commit.extend_from_slice(&packet.timeout_timestamp.nanoseconds().to_be_bytes());
+    commit.extend_from_slice(&packet.timeout_timestamp_on_b.nanoseconds().to_be_bytes());
     commit.extend_from_slice(
         &packet
-            .timeout_height
+            .timeout_height_on_b
             .commitment_revision_number()
             .to_be_bytes(),
     );
     commit.extend_from_slice(
         &packet
-            .timeout_height
+            .timeout_height_on_b
             .commitment_revision_height()
             .to_be_bytes(),
     );
@@ -89,7 +91,8 @@ pub trait ChannelProofVerifier: StateReadExt {
     async fn verify_channel_proof(
         &self,
         connection: &ConnectionEnd,
-        proofs: &ibc::proofs::Proofs,
+        proof: &CommitmentProofBytes,
+        proof_height: &Height,
         channel_id: &ChannelId,
         port_id: &PortId,
         expected_channel: &ChannelEnd,
@@ -105,7 +108,7 @@ pub trait ChannelProofVerifier: StateReadExt {
 
         // get the stored consensus state for the counterparty
         let trusted_consensus_state = self
-            .get_verified_consensus_state(proofs.height(), connection.client_id().clone())
+            .get_verified_consensus_state(proof_height.clone(), connection.client_id().clone())
             .await?;
 
         let client_def = trusted_client_state;
@@ -113,12 +116,11 @@ pub trait ChannelProofVerifier: StateReadExt {
         // PROOF VERIFICATION. verify that our counterparty committed expected_channel to its
         // state.
         client_def.verify_channel_state(
-            proofs.height(),
+            proof_height.clone(),
             connection.counterparty().prefix(),
-            proofs.object_proof(),
+            proof,
             trusted_consensus_state.root(),
-            port_id,
-            channel_id,
+            &ChannelEndPath::new(&port_id, &channel_id),
             expected_channel,
         )?;
 
@@ -138,14 +140,14 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
         let (trusted_client_state, trusted_consensus_state) = self
             .get_trusted_client_and_consensus_state(
                 connection.client_id(),
-                &msg.proofs.height(),
+                &msg.proof_height_on_a,
                 connection,
             )
             .await?;
 
-        let commitment_path = CommitmentsPath {
-            port_id: msg.packet.destination_port.clone(),
-            channel_id: msg.packet.destination_channel.clone(),
+        let commitment_path = CommitmentPath {
+            port_id: msg.packet.port_on_b.clone(),
+            channel_id: msg.packet.chan_on_b.clone(),
             sequence: msg.packet.sequence,
         };
 
@@ -154,7 +156,7 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
         verify_merkle_proof(
             &trusted_client_state.proof_specs,
             connection.counterparty().prefix(),
-            msg.proofs.object_proof(),
+            &msg.proof_commitment_on_a,
             trusted_consensus_state.root(),
             commitment_path,
             commitment_bytes,
@@ -171,21 +173,21 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
         let (trusted_client_state, trusted_consensus_state) = self
             .get_trusted_client_and_consensus_state(
                 connection.client_id(),
-                &msg.proofs.height(),
+                &msg.proof_height_on_b,
                 connection,
             )
             .await?;
 
-        let ack_path = AcksPath {
-            port_id: msg.packet.destination_port.clone(),
-            channel_id: msg.packet.destination_channel.clone(),
+        let ack_path = AckPath {
+            port_id: msg.packet.port_on_b.clone(),
+            channel_id: msg.packet.chan_on_b.clone(),
             sequence: msg.packet.sequence,
         };
 
         verify_merkle_proof(
             &trusted_client_state.proof_specs,
             connection.counterparty().prefix(),
-            msg.proofs.object_proof(),
+            &msg.proof_acked_on_b,
             trusted_consensus_state.root(),
             ack_path,
             msg.acknowledgement.clone().into(),
@@ -202,25 +204,22 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
         let (trusted_client_state, trusted_consensus_state) = self
             .get_trusted_client_and_consensus_state(
                 connection.client_id(),
-                &msg.proofs.height(),
+                &msg.proof_height_on_b,
                 connection,
             )
             .await?;
 
         let mut seq_bytes = Vec::new();
-        u64::from(msg.next_sequence_recv)
+        u64::from(msg.next_seq_recv_on_b)
             .encode(&mut seq_bytes)
             .expect("buffer size too small");
 
-        let seq_path = SeqRecvsPath(
-            msg.packet.destination_port.clone(),
-            msg.packet.destination_channel.clone(),
-        );
+        let seq_path = SeqRecvPath(msg.packet.port_on_b.clone(), msg.packet.chan_on_b.clone());
 
         verify_merkle_proof(
             &trusted_client_state.proof_specs,
             connection.counterparty().prefix(),
-            msg.proofs.object_proof(),
+            &msg.proof_unreceived_on_b,
             trusted_consensus_state.root(),
             seq_path,
             seq_bytes,
@@ -237,21 +236,21 @@ pub trait PacketProofVerifier: StateReadExt + inner::Inner {
         let (trusted_client_state, trusted_consensus_state) = self
             .get_trusted_client_and_consensus_state(
                 connection.client_id(),
-                &msg.proofs.height(),
+                &msg.proof_height_on_b,
                 connection,
             )
             .await?;
 
-        let receipt_path = ReceiptsPath {
-            port_id: msg.packet.destination_port.clone(),
-            channel_id: msg.packet.destination_channel.clone(),
+        let receipt_path = ReceiptPath {
+            port_id: msg.packet.port_on_b.clone(),
+            channel_id: msg.packet.chan_on_b.clone(),
             sequence: msg.packet.sequence,
         };
 
         verify_merkle_absence_proof(
             &trusted_client_state.proof_specs,
             connection.counterparty().prefix(),
-            msg.proofs.object_proof(),
+            &msg.proof_unreceived_on_b,
             trusted_consensus_state.root(),
             receipt_path,
         )?;
@@ -299,7 +298,8 @@ mod inner {
             let max_time_per_block = std::time::Duration::from_secs(20);
 
             let delay_period_time = connection.delay_period();
-            let delay_period_blocks = calculate_block_delay(delay_period_time, max_time_per_block);
+            let delay_period_blocks =
+                calculate_block_delay(&delay_period_time, &max_time_per_block);
 
             TendermintClientState::verify_delay_passed(
                 current_timestamp.into(),

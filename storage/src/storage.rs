@@ -10,9 +10,8 @@ use rocksdb::{Options, DB};
 use tokio::sync::watch;
 use tracing::Span;
 
-use crate::snapshot::Snapshot;
-use crate::snapshot_cache::SnapshotCache;
-use crate::State;
+use crate::{cache::Cache, snapshot::Snapshot};
+use crate::{snapshot_cache::SnapshotCache, StateDelta};
 
 mod temp;
 pub use temp::TempStorage;
@@ -34,18 +33,7 @@ impl std::fmt::Debug for Storage {
 struct Inner {
     snapshots: RwLock<SnapshotCache>,
     db: Arc<DB>,
-    state_tx: watch::Sender<StateNotification>,
-}
-
-/// A notification of a new state version.
-pub struct StateNotification(Snapshot);
-
-impl StateNotification {
-    /// Obtain a snapshot of the new [`State`].
-    pub fn into_state(&self) -> State {
-        // We need this wrapper because the `State` itself isn't `Clone` (by design).
-        State::new(self.0.clone())
-    }
+    state_tx: watch::Sender<Snapshot>,
 }
 
 impl Storage {
@@ -73,8 +61,7 @@ impl Storage {
                     let latest_snapshot = Snapshot::new(db.clone(), jmt_version);
 
                     // We discard the receiver here, because we'll construct new ones in subscribe()
-                    let (snapshot_tx, _) =
-                        watch::channel(StateNotification(latest_snapshot.clone()));
+                    let (snapshot_tx, _) = watch::channel(latest_snapshot.clone());
 
                     let snapshots = RwLock::new(SnapshotCache::new(latest_snapshot, 10));
 
@@ -93,11 +80,11 @@ impl Storage {
     ///
     /// If the tree is empty and has not been initialized, returns `u64::MAX`.
     pub fn latest_version(&self) -> jmt::Version {
-        self.latest_state().version()
+        self.latest_snapshot().version()
     }
 
     /// Returns a [`watch::Receiver`] that can be used to subscribe to new state versions.
-    pub fn subscribe(&self) -> watch::Receiver<StateNotification> {
+    pub fn subscribe(&self) -> watch::Receiver<Snapshot> {
         // Calling subscribe() here to create a new receiver ensures
         // that all previous values are marked as seen, and the user
         // of the receiver will only be notified of *subsequent* values.
@@ -105,28 +92,21 @@ impl Storage {
     }
 
     /// Returns a new [`State`] on top of the latest version of the tree.
-    pub fn latest_state(&self) -> State {
-        State::new(self.0.snapshots.read().latest())
+    pub fn latest_snapshot(&self) -> Snapshot {
+        self.0.snapshots.read().latest()
     }
 
     /// Fetches the [`State`] snapshot corresponding to the supplied `jmt::Version`
     /// from [`SnapshotCache`], or returns `None` if no match was found (cache-miss).
-    pub fn state(&self, version: jmt::Version) -> Option<State> {
-        self.0.snapshots.read().get(version).map(State::new)
+    pub fn snapshot(&self, version: jmt::Version) -> Option<Snapshot> {
+        self.0.snapshots.read().get(version)
     }
 
-    /// Commits the provided [`State`] to persistent storage as the latest
-    /// version of the chain state.
-    pub async fn commit(&self, state: State) -> Result<crate::RootHash> {
-        // We use wrapping_add here so that we can write `new_version = 0` by
-        // overflowing `PRE_GENESIS_VERSION`.
-        let old_version = self.latest_version();
-        let new_version = old_version.wrapping_add(1);
-        tracing::trace!(old_version, new_version);
-        if old_version != state.version() {
-            return Err(anyhow::anyhow!("version mismatch in commit: expected state forked from version {} but found state forked from version {}", old_version, state.version()));
-        }
-
+    async fn commit_inner(
+        &self,
+        cache: Cache,
+        new_version: jmt::Version,
+    ) -> Result<crate::RootHash> {
         let span = Span::current();
         let inner = self.0.clone();
 
@@ -135,9 +115,9 @@ impl Storage {
             .spawn_blocking(move || {
                 span.in_scope(|| {
                     let snap = inner.snapshots.read().latest();
-                    let jmt = JellyfishMerkleTree::new(&snap);
+                    let jmt = JellyfishMerkleTree::new(&*snap.0);
 
-                    let unwritten_changes: Vec<_> = state
+                    let unwritten_changes: Vec<_> = cache
                         .unwritten_changes
                         .into_iter()
                         // Pre-calculate all KeyHashes for later storage in `jmt_keys`
@@ -171,7 +151,7 @@ impl Storage {
                     tracing::trace!(?root_hash, "wrote node batch to backing store");
 
                     // Write the unwritten changes from the nonconsensus to RocksDB.
-                    for (k, v) in state.nonconsensus_changes.into_iter() {
+                    for (k, v) in cache.nonconsensus_changes.into_iter() {
                         let nonconsensus_cf = inner
                             .db
                             .cf_handle("nonconsensus")
@@ -196,12 +176,30 @@ impl Storage {
 
                     // Send fails if the channel is closed (i.e., if there are no receivers);
                     // in this case, we should ignore the error, we have no one to notify.
-                    let _ = inner.state_tx.send(StateNotification(latest_snapshot));
+                    let _ = inner.state_tx.send(latest_snapshot);
 
                     Ok(root_hash)
                 })
             })?
             .await?
+    }
+
+    /// Commits the provided [`StateDelta`] to persistent storage as the latest
+    /// version of the chain state.
+    pub async fn commit(&self, delta: StateDelta<Snapshot>) -> Result<crate::RootHash> {
+        // Extract the snapshot and the changes from the state delta
+        let (snapshot, changes) = delta.flatten();
+
+        // We use wrapping_add here so that we can write `new_version = 0` by
+        // overflowing `PRE_GENESIS_VERSION`.
+        let old_version = self.latest_version();
+        let new_version = old_version.wrapping_add(1);
+        tracing::trace!(old_version, new_version);
+        if old_version != snapshot.version() {
+            return Err(anyhow::anyhow!("version mismatch in commit: expected state forked from version {} but found state forked from version {}", old_version, snapshot.version()));
+        }
+
+        self.commit_inner(changes, new_version).await
     }
 
     /// Returns the internal handle to RocksDB, this is useful to test adjacent storage crates.

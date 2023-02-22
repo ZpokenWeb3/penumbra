@@ -72,6 +72,8 @@ pub mod update_client {
             // Now we build the trusted and untrusted states to feed to the Tendermint light client.
 
             let trusted_state = TrustedBlockState {
+                // TODO(erwan): do we need an additional check on `chain_id`
+                chain_id: &trusted_client_state.chain_id.clone().into(),
                 header_time: last_trusted_consensus_state.timestamp,
                 height: trusted_height,
                 next_validators: trusted_validator_set,

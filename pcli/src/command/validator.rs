@@ -9,11 +9,12 @@ use penumbra_component::stake::{
     validator::{Validator, ValidatorToml},
     FundingStream, FundingStreams,
 };
-use penumbra_crypto::{stake::IdentityKey, transaction::Fee, GovernanceKey};
+use penumbra_crypto::{keys::AddressIndex, stake::IdentityKey, transaction::Fee, GovernanceKey};
 use penumbra_proto::{core::stake::v1alpha1::Validator as ProtoValidator, DomainType, Message};
 use penumbra_transaction::action::{ValidatorVote, ValidatorVoteBody, Vote};
 use penumbra_wallet::plan;
 use rand_core::OsRng;
+use serde_json::Value;
 
 use crate::App;
 
@@ -38,8 +39,8 @@ pub enum ValidatorCmd {
         /// The vote to cast.
         vote: Vote,
         /// Optional. Only spend funds originally received by the given address index.
-        #[clap(long)]
-        source: Option<u64>,
+        #[clap(long, default_value = "0")]
+        source: u32,
     },
 }
 
@@ -47,24 +48,31 @@ pub enum ValidatorCmd {
 pub enum DefinitionCmd {
     /// Create a ValidatorDefinition transaction to create or update a validator.
     Upload {
-        /// The JSON file containing the ValidatorDefinition to upload.
+        /// The TOML file containing the ValidatorDefinition to upload.
         #[clap(long)]
         file: String,
         /// The transaction fee (paid in upenumbra).
         #[clap(long, default_value = "0")]
         fee: u64,
         /// Optional. Only spend funds originally received by the given address index.
-        #[clap(long)]
-        source: Option<u64>,
+        #[clap(long, default_value = "0")]
+        source: u32,
     },
     /// Generates a template validator definition for editing.
     ///
     /// The validator identity field will be prepopulated with the validator
     /// identity key derived from this wallet's seed phrase.
     Template {
-        /// The JSON file to write the template to [default: stdout].
+        /// The TOML file to write the template to [default: stdout].
         #[clap(long)]
         file: Option<String>,
+
+        /// The Tendermint JSON file 'priv_validator_key.json', containing
+        /// the consensus key for the validator identity. If provided,
+        /// the key will be used in the generated validator template.
+        /// If not provided, a random key will be inserted.
+        #[clap(short = 'k', long)]
+        tendermint_validator_keyfile: Option<camino::Utf8PathBuf>,
     },
     /// Fetches the definition for your validator.
     Fetch {
@@ -134,7 +142,7 @@ impl ValidatorCmd {
                     OsRng,
                     vd,
                     fee,
-                    *source,
+                    AddressIndex::new(*source),
                 )
                 .await?;
                 app.build_and_submit_transaction(plan).await?;
@@ -173,42 +181,53 @@ impl ValidatorCmd {
 
                 // Construct a new transaction and include the validator definition.
                 let fee = Fee::from_staking_token_amount((*fee).into());
+
                 let plan = plan::validator_vote(
                     &app.fvk,
                     app.view.as_mut().unwrap(),
                     OsRng,
                     vote,
                     fee,
-                    *source,
+                    AddressIndex::new(*source),
                 )
                 .await?;
                 app.build_and_submit_transaction(plan).await?;
 
                 println!("Cast validator vote");
             }
-            ValidatorCmd::Definition(DefinitionCmd::Template { file }) => {
-                let (address, _dtk) = fvk.incoming().payment_address(0u64.into());
+            ValidatorCmd::Definition(DefinitionCmd::Template {
+                file,
+                tendermint_validator_keyfile,
+            }) => {
+                let (address, _dtk) = fvk.incoming().payment_address(0u32.into());
                 let identity_key = IdentityKey(fvk.spend_verification_key().clone());
                 // By default, the template sets the governance key to the same verification key as
                 // the identity key, but a validator can change this if they want to use different
                 // key material.
                 let governance_key = GovernanceKey(identity_key.0);
-                // Generate a random consensus key.
-                // TODO: not great because the private key is discarded here and this isn't obvious to the user
-                let consensus_key = ed25519_consensus::SigningKey::new(OsRng);
 
-                /* MAKESHIFT RAFT ZONE */
-                let signing_key_bytes = consensus_key.as_bytes().as_slice();
-                let verification_key_bytes = consensus_key.verification_key();
-                let verification_key_bytes = verification_key_bytes.as_bytes().as_slice();
-                // TODO(erwan): surely there's a better way to do this?
-                let keypair = [signing_key_bytes, verification_key_bytes].concat();
-                let keypair = keypair.as_slice();
-
-                let consensus_key = ed25519_dalek::Keypair::from_bytes(keypair).unwrap();
-                /* END */
-
-                let consensus_key = tendermint::PrivateKey::Ed25519(consensus_key).public_key();
+                // Honor the filepath to `priv_validator_key.json`, if set. Otherwise, generate
+                // a random pubkey and emit a warning about it.
+                let consensus_key: tendermint::PublicKey = match tendermint_validator_keyfile {
+                    Some(f) => {
+                        tracing::debug!(?f, "Reading tendermint validator pubkey from file");
+                        let tm_key_config: Value = serde_json::from_str(&std::fs::read_to_string(
+                            &f,
+                        )?)
+                        .context(format!(
+                            "Could not parse file as Tendermint validator config: {}",
+                            f
+                        ))?;
+                        serde_json::value::from_value::<tendermint::PublicKey>(
+                            tm_key_config["pub_key"].clone(),
+                        )
+                        .context(format!("Tendermint JSON file malformed: {}", f))?
+                    }
+                    None => {
+                        tracing::warn!("Generating a random consensus pubkey for Tendermint; consider using the '--tendermint-validator-keyfile' flag");
+                        generate_new_tendermint_keypair()?.public_key()
+                    }
+                };
 
                 let template: ValidatorToml = Validator {
                     identity_key,
@@ -273,4 +292,12 @@ impl ValidatorCmd {
 
         Ok(())
     }
+}
+
+/// Generate a new ED25519 keypair for use with Tendermint.
+fn generate_new_tendermint_keypair() -> anyhow::Result<tendermint::PrivateKey> {
+    let signing_key = ed25519_consensus::SigningKey::new(OsRng);
+    let slice_signing_key = signing_key.as_bytes().as_slice();
+    let priv_consensus_key = tendermint::PrivateKey::Ed25519(slice_signing_key.try_into()?);
+    Ok(priv_consensus_key)
 }

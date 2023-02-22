@@ -44,18 +44,19 @@ impl IncomingViewingKey {
         )
     }
 
-    /// Derive a random ephemeral address.
+    /// Derive an ephemeral address for the provided account.
     pub fn ephemeral_address<R: RngCore + CryptoRng>(
         &self,
         mut rng: R,
+        mut address_index: AddressIndex,
     ) -> (Address, fmd::DetectionKey) {
-        let mut random_index = [0u8; 16];
-        // ensure that the index is outside the range of u64 with rejection sampling
-        while u128::from_le_bytes(random_index) <= 2u128.pow(64) {
-            rng.fill_bytes(&mut random_index);
-        }
-        let index = AddressIndex::Random(random_index);
-        self.payment_address(index)
+        let mut random_index = [0u8; 12];
+
+        rng.fill_bytes(&mut random_index);
+
+        address_index.randomizer = random_index;
+
+        self.payment_address(address_index)
     }
 
     /// Perform key agreement with a given public key.
@@ -137,7 +138,7 @@ mod test {
         let rng = rand::rngs::OsRng;
         let spend_key = SpendKey::from_seed_phrase(SeedPhrase::generate(rng), 0);
         let ivk = spend_key.full_viewing_key().incoming();
-        let own_address = ivk.payment_address(AddressIndex::from(0u64)).0;
+        let own_address = ivk.payment_address(AddressIndex::from(0u32)).0;
         assert!(ivk.views_address(&own_address));
     }
 
@@ -150,7 +151,7 @@ mod test {
         let other_address = SpendKey::from_seed_phrase(SeedPhrase::generate(rng), 0)
             .full_viewing_key()
             .incoming()
-            .payment_address(AddressIndex::from(0u64))
+            .payment_address(AddressIndex::from(0u32))
             .0;
 
         assert!(!ivk.views_address(&other_address));

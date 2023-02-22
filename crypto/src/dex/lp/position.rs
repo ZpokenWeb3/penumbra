@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{trading_function::TradingFunction, Reserves};
 
+/// Reserve amounts for positions must be at most 112 bits wide.
+pub const MAX_RESERVE_AMOUNT: u128 = (1 << 112) - 1;
+
 /// Data identifying a position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "pb::Position", into = "pb::Position")]
@@ -36,6 +39,16 @@ impl Position {
         let mut bytes = [0; 32];
         bytes[0..32].copy_from_slice(&hash.as_bytes()[0..32]);
         Id(bytes)
+    }
+
+    pub fn check_bounds(&self) -> anyhow::Result<()> {
+        if self.phi.component.p.value() as u128 > MAX_RESERVE_AMOUNT
+            || self.phi.component.q.value() as u128 > MAX_RESERVE_AMOUNT
+        {
+            Err(anyhow::anyhow!(format!("Position's trading function coefficients are out-of-bounds (limit: {MAX_RESERVE_AMOUNT})")))
+        } else {
+            Ok(())
+        }
     }
 }
 

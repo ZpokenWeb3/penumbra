@@ -18,6 +18,7 @@ subtle-encoding = "0.5"
 bech32 = "0.8"
 prost-types = "0.11"
 penumbra-storage = { path = "../storage", optional = true }
+pin-project = "1"
 async-trait = "0.1.52"
 async-stream = "0.2.0"
 tracing = "0.1"
@@ -25,10 +26,10 @@ futures = "0.3"
 pbjson = "0.5"
 pbjson-types = "0.5"
 
-ibc-proto = { version = "0.22.0", default-features = false, features = ["std"] }
-ibc = "0.23.0"
-ics23 = "0.8.1"
-tendermint = "0.26.0"
+ibc-proto = { git = "https://github.com/erwanor/ibc-proto-rs", branch = "tendermint-29", default-features = false, features = ["std"] }
+ibc = { git = "https://github.com/erwanor/ibc-rs", branch = "tendermint-29" }
+ics23 = "0.9.0"
+tendermint = "0.29.0"
 
 # TODO(erwan): remove
 num-rational = "0.4"

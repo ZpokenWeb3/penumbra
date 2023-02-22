@@ -23,7 +23,7 @@ use ibc::{
 };
 use penumbra_chain::{genesis, StateReadExt as _};
 use penumbra_proto::{StateReadProto, StateWriteProto};
-use penumbra_storage::{StateRead, StateTransaction, StateWrite};
+use penumbra_storage::{StateRead, StateWrite};
 use tendermint::{abci, validator};
 use tendermint_light_client_verifier::{
     types::{TrustedBlockState, UntrustedBlockState},
@@ -55,19 +55,20 @@ pub struct Ics2Client {}
 #[async_trait]
 impl Component for Ics2Client {
     #[instrument(name = "ics2_client", skip(state, _app_state))]
-    async fn init_chain(state: &mut StateTransaction, _app_state: &genesis::AppState) {
+    async fn init_chain<S: StateWrite>(mut state: S, _app_state: &genesis::AppState) {
         // set the initial client count
         state.put_client_counter(ClientCounter(0));
     }
 
     #[instrument(name = "ics2_client", skip(state, begin_block))]
-    async fn begin_block(state: &mut StateTransaction, begin_block: &abci::request::BeginBlock) {
+    async fn begin_block<S: StateWrite>(mut state: S, begin_block: &abci::request::BeginBlock) {
         // In BeginBlock, we want to save a copy of our consensus state to our
         // own state tree, so that when we get a message from our
         // counterparties, we can verify that they are committing the correct
         // consensus states for us to their state tree.
+        let commitment_root: Vec<u8> = begin_block.header.app_hash.clone().into();
         let cs = TendermintConsensusState::new(
-            begin_block.header.app_hash.value().into(),
+            commitment_root.into(),
             begin_block.header.time,
             begin_block.header.next_validators_hash,
         );
@@ -82,7 +83,7 @@ impl Component for Ics2Client {
     }
 
     #[instrument(name = "ics2_client", skip(_state, _end_block))]
-    async fn end_block(_state: &mut StateTransaction, _end_block: &abci::request::EndBlock) {}
+    async fn end_block<S: StateWrite>(_state: S, _end_block: &abci::request::EndBlock) {}
 }
 
 #[async_trait]
@@ -193,8 +194,7 @@ pub(crate) trait Ics2ClientExt: StateWrite {
                     trusted_client_state
                         .with_header(verified_header.clone())
                         .unwrap()
-                        .with_frozen_height(verified_header.height())
-                        .unwrap(),
+                        .with_frozen_height(verified_header.height()),
                     verified_consensus_state,
                 );
             }
@@ -221,8 +221,7 @@ pub(crate) trait Ics2ClientExt: StateWrite {
                     trusted_client_state
                         .with_header(verified_header.clone())
                         .unwrap()
-                        .with_frozen_height(verified_header.height())
-                        .unwrap(),
+                        .with_frozen_height(verified_header.height()),
                     verified_consensus_state,
                 );
             }
@@ -235,8 +234,7 @@ pub(crate) trait Ics2ClientExt: StateWrite {
                     trusted_client_state
                         .with_header(verified_header.clone())
                         .unwrap()
-                        .with_frozen_height(verified_header.height())
-                        .unwrap(),
+                        .with_frozen_height(verified_header.height()),
                     verified_consensus_state,
                 );
             }
@@ -506,7 +504,7 @@ mod tests {
     use ibc_proto::protobuf::Protobuf;
     use penumbra_chain::StateWriteExt;
     use penumbra_proto::core::ibc::v1alpha1::IbcAction;
-    use penumbra_storage::{ArcStateExt, TempStorage};
+    use penumbra_storage::{ArcStateDeltaExt, StateDelta, TempStorage};
     use penumbra_transaction::Transaction;
     use std::str::FromStr;
     use tendermint::Time;
@@ -517,7 +515,7 @@ mod tests {
         // create a storage backend for testing
         let storage = TempStorage::new().await?.apply_default_genesis().await?;
 
-        let mut state = Arc::new(storage.latest_state());
+        let mut state = Arc::new(StateDelta::new(storage.latest_snapshot()));
 
         // Light client verification is time-dependent.  In practice, the latest
         // (consensus) time will be delivered in each BeginBlock and written

@@ -2,7 +2,7 @@ use blake2b_simd::{Hash, Params};
 use decaf377::FieldExt;
 use decaf377_fmd::Clue;
 use penumbra_crypto::{
-    dex::TradingPair, transaction::Fee, EncryptedNote, FullViewingKey, PayloadKey,
+    dex::TradingPair, transaction::Fee, FullViewingKey, NotePayload, PayloadKey,
 };
 use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, DomainType, Message};
 
@@ -272,7 +272,7 @@ impl EffectingData for output::Body {
         // in the hash one after the other.
         state.update(&self.note_payload.note_commitment.0.to_bytes());
         state.update(&self.note_payload.ephemeral_key.0);
-        state.update(&self.note_payload.encrypted_note);
+        state.update(&self.note_payload.encrypted_note.0);
         state.update(&self.balance_commitment.to_bytes());
         state.update(&self.wrapped_memo_key.0);
         state.update(&self.ovk_wrapped_key.0);
@@ -635,7 +635,7 @@ impl EffectingData for Clue {
     }
 }
 
-impl EffectingData for EncryptedNote {
+impl EffectingData for NotePayload {
     fn effect_hash(&self) -> EffectHash {
         EffectHash(
             blake2b_simd::Params::default()
@@ -643,7 +643,7 @@ impl EffectingData for EncryptedNote {
                 .to_state()
                 .update(&self.note_commitment.0.to_bytes())
                 .update(&self.ephemeral_key.0)
-                .update(&self.encrypted_note)
+                .update(&self.encrypted_note.0)
                 .finalize()
                 .as_array()
                 .clone(),
@@ -707,7 +707,7 @@ mod tests {
         let seed_phrase = SeedPhrase::generate(rng);
         let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
         let fvk = sk.full_viewing_key();
-        let (addr, _dtk) = fvk.incoming().payment_address(0u64.into());
+        let (addr, _dtk) = fvk.incoming().payment_address(0u32.into());
 
         let mut sct = tct::Tree::new();
 

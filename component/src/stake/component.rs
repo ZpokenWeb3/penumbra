@@ -9,21 +9,25 @@ use crate::Component;
 use ::metrics::{decrement_gauge, gauge, increment_gauge};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use futures::{FutureExt, TryFutureExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use penumbra_chain::{genesis, Epoch, NoteSource, StateReadExt as _};
 use penumbra_crypto::stake::Penalty;
 use penumbra_crypto::{
     stake::{DelegationToken, IdentityKey},
     Value, STAKING_TOKEN_ASSET_ID,
 };
-use penumbra_proto::{StateReadProto, StateWriteProto};
-use penumbra_storage::{StateRead, StateTransaction, StateWrite};
+use penumbra_proto::{
+    state::future::{DomainFuture, ProtoFuture},
+    StateReadProto, StateWriteProto,
+};
+use penumbra_storage::{StateRead, StateWrite};
 use penumbra_transaction::action::{Delegate, Undelegate};
 use sha2::{Digest, Sha256};
+use tendermint::validator::Update;
 use tendermint::{
     abci::{
         self,
-        types::{Evidence, LastCommitInfo, ValidatorUpdate},
+        types::{Evidence, LastCommitInfo},
     },
     block, PublicKey,
 };
@@ -66,9 +70,8 @@ pub trait ValidatorUpdates: StateRead {
     /// Returns a list of validator updates to send to Tendermint.
     ///
     /// Set during `end_block`.
-    fn tendermint_validator_updates(&self) -> Option<Vec<ValidatorUpdate>> {
+    fn tendermint_validator_updates(&self) -> Option<Vec<Update>> {
         self.object_get(state_key::internal::stub_tendermint_validator_updates())
-            .cloned()
             .unwrap_or(None)
     }
 }
@@ -76,7 +79,7 @@ pub trait ValidatorUpdates: StateRead {
 impl<T: StateRead + ?Sized> ValidatorUpdates for T {}
 
 trait PutValidatorUpdates: StateWrite {
-    fn put_tendermint_validator_updates(&mut self, updates: Vec<ValidatorUpdate>) {
+    fn put_tendermint_validator_updates(&mut self, updates: Vec<Update>) {
         tracing::debug!(?updates);
         self.object_put(
             state_key::internal::stub_tendermint_validator_updates(),
@@ -594,7 +597,7 @@ pub(crate) trait StakingImpl: StateWriteExt {
         // Save the validator updates to send to Tendermint.
         let tendermint_validator_updates = voting_power_by_consensus_key
             .iter()
-            .map(|(ck, power)| ValidatorUpdate {
+            .map(|(ck, power)| Update {
                 pub_key: *ck,
                 power: (*power).try_into().unwrap(),
             })
@@ -849,7 +852,7 @@ impl<T: StateWrite + StateWriteExt + ?Sized> StakingImpl for T {}
 #[async_trait]
 impl Component for Staking {
     #[instrument(name = "staking", skip(state, app_state))]
-    async fn init_chain(state: &mut StateTransaction, app_state: &genesis::AppState) {
+    async fn init_chain<S: StateWrite>(mut state: S, app_state: &genesis::AppState) {
         let starting_height = state.get_block_height().await.unwrap();
         let starting_epoch =
             Epoch::from_height(starting_height, state.get_epoch_duration().await.unwrap());
@@ -908,7 +911,7 @@ impl Component for Staking {
     }
 
     #[instrument(name = "staking", skip(state, begin_block))]
-    async fn begin_block(state: &mut StateTransaction, begin_block: &abci::request::BeginBlock) {
+    async fn begin_block<S: StateWrite>(mut state: S, begin_block: &abci::request::BeginBlock) {
         // For each validator identified as byzantine by tendermint, update its
         // state to be slashed
         for evidence in begin_block.byzantine_validators.iter() {
@@ -922,7 +925,7 @@ impl Component for Staking {
     }
 
     #[instrument(name = "staking", skip(state, end_block))]
-    async fn end_block(state: &mut StateTransaction, end_block: &abci::request::EndBlock) {
+    async fn end_block<S: StateWrite>(mut state: S, end_block: &abci::request::EndBlock) {
         // Write the delegation changes for this block.
         state
             .set_delegation_changes(
@@ -951,7 +954,6 @@ pub trait StateReadExt: StateRead {
     /// epoch.
     fn stub_delegation_changes(&self) -> DelegationChanges {
         self.object_get(state_key::internal::stub_delegation_changes())
-            .cloned()
             .unwrap_or_default()
     }
 
@@ -1010,10 +1012,7 @@ pub trait StateReadExt: StateRead {
             .await
     }
 
-    fn validator_power(
-        &self,
-        identity_key: &IdentityKey,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<u64>>> + Send + 'static>> {
+    fn validator_power(&self, identity_key: &IdentityKey) -> ProtoFuture<u64, Self::GetRawFut> {
         self.get_proto(&state_key::power_by_validator(identity_key))
     }
 
@@ -1084,7 +1083,7 @@ pub trait StateReadExt: StateRead {
     fn validator_state(
         &self,
         identity_key: &IdentityKey,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<validator::State>>> + Send + 'static>> {
+    ) -> DomainFuture<validator::State, Self::GetRawFut> {
         self.get(&state_key::state_by_validator(identity_key))
     }
 
@@ -1117,14 +1116,19 @@ pub trait StateReadExt: StateRead {
     }
 
     async fn validator_identity_list(&self) -> Result<Vec<IdentityKey>> {
-        self.prefix_keys(state_key::validators::list())
-            .map_ok(|key| {
-                key.as_str()[state_key::validators::list().len()..]
-                    .parse::<IdentityKey>()
-                    .expect("state keys should only have valid identity keys")
-            })
-            .try_collect()
-            .await
+        let mut iks = Vec::new();
+        // TODO: boxing here is to avoid an Unpin problem.. should
+        // we bound the StateRead stream GATs as Unpin?
+        // TODO: why did the previous implementation of this method
+        // fail to compile with a Self does not live longe enough error?
+        let mut stream = self.prefix_keys(state_key::validators::list()).boxed();
+        while let Some(key) = stream.next().await {
+            let ik = key?.as_str()[state_key::validators::list().len()..]
+                .parse::<IdentityKey>()
+                .expect("state keys should only have valid identity keys");
+            iks.push(ik);
+        }
+        Ok(iks)
     }
 
     async fn validator_list(&self) -> Result<Vec<Validator>> {
@@ -1145,7 +1149,7 @@ pub trait StateReadExt: StateRead {
     fn validator_uptime(
         &self,
         identity_key: &IdentityKey,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Uptime>>> + Send + 'static>> {
+    ) -> DomainFuture<Uptime, Self::GetRawFut> {
         self.get(&state_key::uptime_by_validator(identity_key))
     }
 

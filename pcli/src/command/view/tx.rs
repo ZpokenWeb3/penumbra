@@ -1,10 +1,8 @@
 use anyhow::Result;
 use comfy_table::{presets, Table};
 use penumbra_crypto::{
-    asset::Cache,
-    dex::swap::SwapPlaintext,
-    keys::{AddressIndex, IncomingViewingKey},
-    Address, FullViewingKey, Note, Value,
+    asset::Cache, dex::swap::SwapPlaintext, keys::IncomingViewingKey, Address, FullViewingKey,
+    Note, Value,
 };
 use penumbra_transaction::{
     action::{Swap, SwapClaim},
@@ -172,10 +170,7 @@ fn format_address(ivk: &IncomingViewingKey, address: &Address) -> String {
     if ivk.views_address(address) {
         let index = ivk.index_for_diversifier(address.diversifier());
 
-        match index {
-            AddressIndex::Numeric(index) => format!("[self: {}]", index),
-            AddressIndex::Random(_) => "[self: ephemeral]".to_string(),
-        }
+        format!("[self: {:?}]", index)
     } else {
         address.display_short_form()
     }
