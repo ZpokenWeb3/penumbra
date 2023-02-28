@@ -8,10 +8,10 @@ use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, DomainType, Message};
 
 use crate::{
     action::{
-        output, proposal, spend, swap, swap_claim, Delegate, Ics20Withdrawal, PositionClose,
-        PositionOpen, PositionRewardClaim, PositionWithdraw, Proposal, ProposalDepositClaim,
-        ProposalSubmit, ProposalWithdraw, Undelegate, UndelegateClaimBody, ValidatorVote,
-        ValidatorVoteBody, Vote,
+        output, proposal, spend, swap, swap_claim, Delegate, DelegatorVote, DelegatorVoteBody,
+        Ics20Withdrawal, PositionClose, PositionOpen, PositionRewardClaim, PositionWithdraw,
+        Proposal, ProposalDepositClaim, ProposalSubmit, ProposalWithdraw, Undelegate,
+        UndelegateClaimBody, ValidatorVote, ValidatorVoteBody, Vote,
     },
     plan::TransactionPlan,
     Action, Transaction, TransactionBody,
@@ -21,6 +21,12 @@ pub trait EffectingData {
     fn effect_hash(&self) -> EffectHash;
 }
 
+/// A hash of a transaction's _effecting data_, describing its effects on the
+/// chain state.
+///
+/// This includes, e.g., the commitments to new output notes created by the
+/// transaction, or nullifiers spent by the transaction, but does not include
+/// _authorizing data_ such as signatures or zk proofs.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct EffectHash([u8; 64]);
 
@@ -187,8 +193,13 @@ impl TransactionPlan {
         for validator_vote in self.validator_votes() {
             state.update(validator_vote.effect_hash().as_bytes());
         }
-        for _delegator_vote in self.delegator_vote_plans() {
-            // TODO: get the effecthash of the delegator vote body for each plan
+        for delegator_vote in self.delegator_vote_plans() {
+            state.update(
+                delegator_vote
+                    .delegator_vote_body(fvk)
+                    .effect_hash()
+                    .as_bytes(),
+            );
         }
         for proposal_deposit_claim in self.proposal_deposit_claims() {
             state.update(proposal_deposit_claim.effect_hash().as_bytes());
@@ -234,6 +245,7 @@ impl EffectingData for Action {
             Action::ProposalSubmit(submit) => submit.effect_hash(),
             Action::ProposalWithdraw(withdraw) => withdraw.effect_hash(),
             Action::ProposalDepositClaim(claim) => claim.effect_hash(),
+            Action::DelegatorVote(vote) => vote.effect_hash(),
             Action::ValidatorVote(vote) => vote.effect_hash(),
             Action::SwapClaim(swap_claim) => swap_claim.body.effect_hash(),
             Action::Swap(swap) => swap.body.effect_hash(),
@@ -428,6 +440,12 @@ impl EffectingData for ValidatorVote {
     }
 }
 
+impl EffectingData for DelegatorVote {
+    fn effect_hash(&self) -> EffectHash {
+        self.body.effect_hash()
+    }
+}
+
 impl EffectingData for Vote {
     fn effect_hash(&self) -> EffectHash {
         let mut state = blake2b_simd::Params::default()
@@ -439,7 +457,6 @@ impl EffectingData for Vote {
             Vote::Yes => b"Y",
             Vote::No => b"N",
             Vote::Abstain => b"A",
-            Vote::NoWithVeto => b"V",
         });
 
         EffectHash(state.finalize().as_array().clone())
@@ -457,6 +474,38 @@ impl EffectingData for ValidatorVoteBody {
         state.update(&self.proposal.to_le_bytes());
         state.update(self.vote.effect_hash().as_bytes());
         state.update(&self.identity_key.0.to_bytes());
+        state.update(&self.governance_key.0.to_bytes());
+
+        EffectHash(state.finalize().as_array().clone())
+    }
+}
+
+impl EffectingData for DelegatorVoteBody {
+    fn effect_hash(&self) -> EffectHash {
+        let DelegatorVoteBody {
+            proposal,
+            start_position,
+            vote,
+            value,
+            unbonded_amount,
+            nullifier,
+            rk,
+        } = self;
+
+        let mut state = blake2b_simd::Params::default()
+            .personal(b"PAH:del_vote")
+            .to_state();
+
+        // All of these fields are fixed-length, so we can just throw them in the hash one after the
+        // other.
+        state.update(&proposal.to_le_bytes());
+        state.update(&u64::from(*start_position).to_le_bytes());
+        state.update(vote.effect_hash().as_bytes());
+        state.update(&value.asset_id.0.to_bytes());
+        state.update(&value.amount.to_le_bytes());
+        state.update(&unbonded_amount.to_le_bytes());
+        state.update(&nullifier.0.to_bytes());
+        state.update(&rk.to_bytes());
 
         EffectHash(state.finalize().as_array().clone())
     }

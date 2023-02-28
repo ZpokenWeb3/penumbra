@@ -1,4 +1,8 @@
-use std::{fs::File, io::Write};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::{Read, Write},
+};
 
 use anyhow::{anyhow, Context, Result};
 use ark_ff::UniformRand;
@@ -12,9 +16,11 @@ use penumbra_crypto::{
     transaction::Fee,
     Amount, Value, STAKING_TOKEN_ASSET_ID,
 };
-use penumbra_proto::client::v1alpha1::ValidatorPenaltyRequest;
+use penumbra_proto::client::v1alpha1::{
+    ProposalInfoRequest, ProposalInfoResponse, ProposalRateDataRequest, ValidatorPenaltyRequest,
+};
 use penumbra_transaction::{
-    action::Proposal,
+    action::{Proposal, Vote},
     plan::{SwapClaimPlan, UndelegateClaimPlan},
 };
 use penumbra_view::ViewClient;
@@ -32,15 +38,15 @@ pub enum TxCmd {
     #[clap(display_order = 100)]
     Send {
         /// The destination address to send funds to.
-        #[clap(long)]
+        #[clap(long, display_order = 100)]
         to: String,
         /// The amounts to send, written as typed values 1.87penumbra, 12cubes, etc.
         values: Vec<String>,
         /// The transaction fee (paid in upenumbra).
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 200)]
         fee: u64,
         /// Only spend funds originally received by the given address index.
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 300)]
         source: u32,
         /// Optional. Set the transaction's memo field to the provided text.
         #[clap(long)]
@@ -50,15 +56,15 @@ pub enum TxCmd {
     #[clap(display_order = 200)]
     Delegate {
         /// The identity key of the validator to delegate to.
-        #[clap(long)]
+        #[clap(long, display_order = 100)]
         to: String,
         /// The amount of stake to delegate.
         amount: String,
         /// The transaction fee (paid in upenumbra).
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 200)]
         fee: u64,
         /// Only spend funds originally received by the given address index.
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 300)]
         source: u32,
     },
     /// Withdraw stake from a validator's delegation pool.
@@ -67,10 +73,10 @@ pub enum TxCmd {
         /// The amount of delegation tokens to undelegate.
         amount: String,
         /// The transaction fee (paid in upenumbra).
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 200)]
         fee: u64,
         /// Only spend funds originally received by the given address index.
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 300)]
         source: u32,
     },
     /// Claim any undelegations that have finished unbonding.
@@ -84,18 +90,18 @@ pub enum TxCmd {
     #[clap(display_order = 200)]
     Redelegate {
         /// The identity key of the validator to withdraw delegation from.
-        #[clap(long)]
+        #[clap(long, display_order = 100)]
         from: String,
         /// The identity key of the validator to delegate to.
-        #[clap(long)]
+        #[clap(long, display_order = 200)]
         to: String,
         /// The amount of stake to delegate.
         amount: String,
         /// The transaction fee (paid in upenumbra).
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 300)]
         fee: u64,
         /// Only spend funds originally received by the given address index.
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 400)]
         source: u32,
     },
     /// Swap tokens of one denomination for another using the DEX.
@@ -111,19 +117,32 @@ pub enum TxCmd {
         /// The input amount to swap, written as a typed value 1.87penumbra, 12cubes, etc.
         input: String,
         /// The denomination to swap the input into.
-        #[clap(long)]
+        #[clap(long, display_order = 100)]
         into: String,
         /// The transaction fee (paid in upenumbra).
         ///
         /// A swap generates two transactions; the fee will be split equally over both.
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 200)]
         fee: u64,
         /// Only spend funds originally received by the given address index.
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", display_order = 300)]
         source: u32,
     },
+    /// Vote on a governance proposal in your role as a delegator (see also: `pcli validator vote`).
+    #[clap(display_order = 400)]
+    Vote {
+        /// The transaction fee (paid in upenumbra).
+        #[clap(long, default_value = "0", global = true, display_order = 200)]
+        fee: u64,
+        /// Only spend funds and vote with staked delegation tokens originally received by the given
+        /// address index.
+        #[clap(long, default_value = "0", global = true, display_order = 300)]
+        source: u32,
+        #[clap(subcommand)]
+        vote: VoteCmd,
+    },
     /// Submit or withdraw a governance proposal.
-    #[clap(display_order = 400, subcommand)]
+    #[clap(display_order = 500, subcommand)]
     Proposal(ProposalCmd),
     /// Consolidate many small notes into a few larger notes.
     ///
@@ -137,6 +156,42 @@ pub enum TxCmd {
     Sweep,
 }
 
+/// Vote on a governance proposal.
+#[derive(Debug, Clone, Copy, clap::Subcommand)]
+pub enum VoteCmd {
+    /// Vote in favor of a proposal.
+    #[clap(display_order = 100)]
+    Yes {
+        /// The proposal ID to vote on.
+        #[clap(long = "on")]
+        proposal_id: u64,
+    },
+    /// Vote against a proposal.
+    #[clap(display_order = 200)]
+    No {
+        /// The proposal ID to vote on.
+        #[clap(long = "on")]
+        proposal_id: u64,
+    },
+    /// Abstain from voting on a proposal.
+    #[clap(display_order = 300)]
+    Abstain {
+        /// The proposal ID to vote on.
+        #[clap(long = "on")]
+        proposal_id: u64,
+    },
+}
+
+impl From<VoteCmd> for (u64, Vote) {
+    fn from(cmd: VoteCmd) -> (u64, Vote) {
+        match cmd {
+            VoteCmd::Yes { proposal_id } => (proposal_id, Vote::Yes),
+            VoteCmd::No { proposal_id } => (proposal_id, Vote::No),
+            VoteCmd::Abstain { proposal_id } => (proposal_id, Vote::Abstain),
+        }
+    }
+}
+
 impl TxCmd {
     /// Determine if this command requires a network sync before it executes.
     pub fn offline(&self) -> bool {
@@ -148,6 +203,7 @@ impl TxCmd {
             TxCmd::Undelegate { .. } => false,
             TxCmd::UndelegateClaim { .. } => false,
             TxCmd::Redelegate { .. } => false,
+            TxCmd::Vote { .. } => false,
             TxCmd::Proposal(proposal_cmd) => proposal_cmd.offline(),
         }
     }
@@ -192,7 +248,7 @@ impl TxCmd {
                 let num_plans = plans.len();
 
                 for (i, plan) in plans.into_iter().enumerate() {
-                    println!("building sweep {} of {}", i, num_plans);
+                    println!("building sweep {i} of {num_plans}");
                     let tx = app.build_transaction(plan).await?;
                     app.submit_transaction_unconfirmed(&tx).await?;
                 }
@@ -476,7 +532,13 @@ impl TxCmd {
                 println!("Sorry, this command is not yet implemented");
             }
             TxCmd::Proposal(ProposalCmd::Submit { file, fee, source }) => {
-                let proposal: Proposal = serde_json::from_reader(File::open(file)?)?;
+                let mut proposal_file = File::open(file).context("can't open proposal file")?;
+                let mut proposal_string = String::new();
+                proposal_file
+                    .read_to_string(&mut proposal_string)
+                    .context("can't read proposal file")?;
+                let proposal: Proposal =
+                    toml::from_str(&proposal_string).context("can't parse proposal file")?;
                 let fee = Fee::from_staking_token_amount((*fee).into());
                 let plan = plan::proposal_submit(
                     &app.fvk,
@@ -520,13 +582,22 @@ impl TxCmd {
 
                 let template = kind.template_proposal(chain_id, next_proposal_id);
 
+                // Explicitly parse to a TOML table and ensure that the ID is set, because if it's
+                // zero, then the default proto serialization will omit it, and we want to make sure
+                // that the user sees it so they know it usually has to be included.
+                let mut toml_table =
+                    toml::Table::try_from(&template).context("could not parse template as TOML")?;
+                toml_table
+                    .entry("id")
+                    .or_insert(toml::Value::Integer(next_proposal_id as i64));
+
                 if let Some(file) = file {
                     File::create(file)
-                        .with_context(|| format!("cannot create file {:?}", file))?
-                        .write_all(&serde_json::to_vec_pretty(&template)?)
+                        .with_context(|| format!("cannot create file {file:?}"))?
+                        .write_all(toml::to_string_pretty(&toml_table)?.as_bytes())
                         .context("could not write file")?;
                 } else {
-                    println!("{}", serde_json::to_string_pretty(&template)?);
+                    println!("{}", toml::to_string_pretty(&toml_table)?);
                 }
             }
             TxCmd::Proposal(ProposalCmd::DepositClaim {
@@ -572,25 +643,70 @@ impl TxCmd {
 
                 app.build_and_submit_transaction(plan).await?;
             }
-            TxCmd::Proposal(ProposalCmd::Vote {
-                proposal_id: _,
-                vote: _,
-                fee: _,
-                source: _,
-            }) => {
-                println!("Sorry, delegator voting is not yet implemented");
-                // TODO: fill this in for delegator votes
-                // let plan = plan::delegator_vote(
-                //     &app.fvk,
-                //     &mut app.view,
-                //     OsRng,
-                //     *proposal_id,
-                //     *vote,
-                //     *fee,
-                //     *source,
-                // )
-                // .await?;
-                // app.build_and_submit_transaction(plan).await?;
+            TxCmd::Vote { vote, fee, source } => {
+                let (proposal_id, vote): (u64, Vote) = (*vote).into();
+
+                // Before we vote on the proposal, we have to gather some information about it so
+                // that we can prepare our vote:
+                // - the start height, so we can select the votable staked notes to vote with
+                // - the start position, so we can submit the appropriate public `start_position`
+                //   input for stateless proof verification
+                // - the rate data for every validator at the start of the proposal, so we can
+                //   convert staked notes into voting power and mint the correct amount of voting
+                //   receipt tokens to ourselves
+
+                let mut client = app.specific_client().await?;
+                let ProposalInfoResponse {
+                    start_block_height,
+                    start_position,
+                } = client
+                    .proposal_info(ProposalInfoRequest {
+                        chain_id: app.view().chain_params().await?.chain_id,
+                        proposal_id,
+                    })
+                    .await?
+                    .into_inner();
+                let start_position = start_position.into();
+
+                let mut rate_data_stream = client
+                    .proposal_rate_data(ProposalRateDataRequest {
+                        chain_id: app.view().chain_params().await?.chain_id,
+                        proposal_id,
+                    })
+                    .await?
+                    .into_inner();
+
+                let mut start_rate_data = BTreeMap::new();
+                while let Some(response) = rate_data_stream.message().await? {
+                    let rate_data: RateData = response
+                        .rate_data
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("proposal rate data stream response missing rate data")
+                        })?
+                        .try_into()
+                        .context("invalid rate data")?;
+                    start_rate_data.insert(rate_data.identity_key.clone(), rate_data);
+                }
+
+                let fee = Fee::from_staking_token_amount((*fee).into());
+
+                let plan = Planner::new(OsRng)
+                    .delegator_vote(
+                        proposal_id,
+                        start_block_height,
+                        start_position,
+                        start_rate_data,
+                        vote,
+                    )
+                    .fee(fee)
+                    .plan(
+                        app.view.as_mut().unwrap(),
+                        &app.fvk,
+                        AddressIndex::new(*source),
+                    )
+                    .await?;
+
+                app.build_and_submit_transaction(plan).await?;
             }
         }
         Ok(())

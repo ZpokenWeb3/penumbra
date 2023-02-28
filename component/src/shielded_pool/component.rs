@@ -1,7 +1,9 @@
 use crate::Component;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use penumbra_chain::{genesis, sync::CompactBlock, Epoch, NoteSource, StateReadExt as _};
+use penumbra_chain::{
+    genesis, sync::CompactBlock, Epoch, NoteSource, SpendInfo, StateReadExt as _,
+};
 use penumbra_crypto::{asset, note, Nullifier, Value};
 use penumbra_proto::{StateReadProto, StateWriteProto};
 use penumbra_storage::{StateRead, StateWrite};
@@ -124,17 +126,22 @@ pub trait StateReadExt: StateRead {
 
     // #[instrument(skip(self))]
     async fn check_nullifier_unspent(&self, nullifier: Nullifier) -> Result<()> {
-        if let Some(source) = self
-            .get::<NoteSource>(&state_key::spent_nullifier_lookup(&nullifier))
+        if let Some(info) = self
+            .get::<SpendInfo>(&state_key::spent_nullifier_lookup(&nullifier))
             .await?
         {
             return Err(anyhow!(
                 "nullifier {} was already spent in {:?}",
                 nullifier,
-                source,
+                info.note_source,
             ));
         }
         Ok(())
+    }
+
+    async fn spend_info(&self, nullifier: Nullifier) -> Result<Option<SpendInfo>> {
+        self.get(&state_key::spent_nullifier_lookup(&nullifier))
+            .await
     }
 
     /// Returns the SCT anchor for the given height.

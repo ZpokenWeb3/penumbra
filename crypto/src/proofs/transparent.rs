@@ -2,10 +2,10 @@
 
 use anyhow::{anyhow, ensure, Error, Ok, Result};
 use ark_ff::Zero;
+use decaf377_rdsa::{SpendAuth, VerificationKey};
 use std::convert::{TryFrom, TryInto};
 
 use decaf377::FieldExt;
-use decaf377_rdsa::{SpendAuth, VerificationKey};
 use penumbra_proto::{
     core::transparent_proofs::v1alpha1 as transparent_proofs, DomainType, Message,
 };
@@ -95,40 +95,50 @@ impl SpendProof {
     }
 }
 
-/// Transparent proof for new note creation.
+/// Transparent proof for delegator voting.
 ///
-/// This structure keeps track of the auxiliary (private) inputs.
+/// Internally, this is the same data as a transparent spend proof, but with additional verification
+/// conditions.
 #[derive(Clone, Debug)]
-pub struct OutputProof {
-    // The note being created.
-    pub note: Note,
-    // The blinding factor used for generating the balance commitment.
-    pub v_blinding: Fr,
+pub struct DelegatorVoteProof {
+    pub spend_proof: SpendProof,
 }
 
-impl OutputProof {
-    /// Called to verify the proof using the provided public inputs.
-    ///
-    /// The public inputs are:
-    /// * balance commitment of the new note,
-    /// * note commitment of the new note,
+impl DelegatorVoteProof {
     pub fn verify(
         &self,
-        balance_commitment: balance::Commitment,
-        note_commitment: note::Commitment,
+        anchor: tct::Root,
+        start_position: tct::Position,
+        value: Value,
+        nullifier: Nullifier,
+        rk: VerificationKey<SpendAuth>,
     ) -> anyhow::Result<()> {
-        gadgets::note_commitment_integrity(self.note.clone(), note_commitment)?;
+        // Additionally, check that the start position has a zero commitment index, since this is
+        // the only sensible start time for a vote.
+        if start_position.commitment() != 0 {
+            return Err(anyhow!(
+                "vote proof start position has non-zero commitment index"
+            ));
+        }
 
-        // We negate the balance before the integrity check because we anticipate
-        // `balance_commitment` to be a commitment of a negative value, since this
-        // is an `OutputProof`.
-        let note_balance = -Balance::from(self.note.value());
+        // Additionally, check that the position of the spend proof is before the start
+        // start_height, which ensures that the note being voted with was created before voting
+        // started.
+        let vote_proof_position = self.spend_proof.state_commitment_proof.position();
+        if vote_proof_position >= start_position {
+            return Err(anyhow!(
+                "vote proof from epoch {}, block {} is not before start position of voting at epoch {}, block {}",
+                vote_proof_position.epoch(),
+                vote_proof_position.block(),
+                start_position.epoch(),
+                start_position.block(),
+            ));
+        }
 
-        gadgets::balance_commitment_integrity(balance_commitment, self.v_blinding, note_balance)?;
-
-        gadgets::diversified_basepoint_not_identity(
-            self.note.address().diversified_generator().clone(),
-        )?;
+        // Check that the spend proof is valid, for the public value committed with the zero
+        // blinding factor, since it's not blinded.
+        self.spend_proof
+            .verify(anchor, value.commit(Fr::zero()), nullifier, rk)?;
 
         Ok(())
     }
@@ -137,6 +147,10 @@ impl OutputProof {
 // Conversions
 
 impl DomainType for SpendProof {
+    type Proto = transparent_proofs::SpendProof;
+}
+
+impl DomainType for DelegatorVoteProof {
     type Proto = transparent_proofs::SpendProof;
 }
 
@@ -152,6 +166,22 @@ impl From<SpendProof> for transparent_proofs::SpendProof {
             ak: ak_bytes.into(),
             nk: nk_bytes.into(),
         }
+    }
+}
+
+impl From<DelegatorVoteProof> for transparent_proofs::SpendProof {
+    fn from(msg: DelegatorVoteProof) -> Self {
+        msg.spend_proof.into()
+    }
+}
+
+impl TryFrom<transparent_proofs::SpendProof> for DelegatorVoteProof {
+    type Error = Error;
+
+    fn try_from(proto: transparent_proofs::SpendProof) -> anyhow::Result<Self, Self::Error> {
+        Ok(DelegatorVoteProof {
+            spend_proof: proto.try_into()?,
+        })
     }
 }
 
@@ -201,38 +231,6 @@ impl TryFrom<transparent_proofs::SpendProof> for SpendProof {
     }
 }
 
-impl DomainType for OutputProof {
-    type Proto = transparent_proofs::OutputProof;
-}
-
-impl From<OutputProof> for transparent_proofs::OutputProof {
-    fn from(msg: OutputProof) -> Self {
-        transparent_proofs::OutputProof {
-            note: Some(msg.note.into()),
-            v_blinding: msg.v_blinding.to_bytes().to_vec(),
-        }
-    }
-}
-
-impl TryFrom<transparent_proofs::OutputProof> for OutputProof {
-    type Error = Error;
-
-    fn try_from(proto: transparent_proofs::OutputProof) -> anyhow::Result<Self, Self::Error> {
-        let v_blinding_bytes: [u8; 32] = proto.v_blinding[..]
-            .try_into()
-            .map_err(|_| anyhow!("proto malformed"))?;
-
-        Ok(OutputProof {
-            note: proto
-                .note
-                .ok_or_else(|| anyhow!("proto malformed"))?
-                .try_into()
-                .map_err(|_| anyhow!("proto malformed"))?,
-            v_blinding: Fr::from_bytes(v_blinding_bytes).map_err(|_| anyhow!("proto malformed"))?,
-        })
-    }
-}
-
 impl From<SpendProof> for Vec<u8> {
     fn from(spend_proof: SpendProof) -> Vec<u8> {
         let protobuf_serialized_proof: transparent_proofs::SpendProof = spend_proof.into();
@@ -252,18 +250,18 @@ impl TryFrom<&[u8]> for SpendProof {
     }
 }
 
-impl From<OutputProof> for Vec<u8> {
-    fn from(output_proof: OutputProof) -> Vec<u8> {
-        let protobuf_serialized_proof: transparent_proofs::OutputProof = output_proof.into();
+impl From<DelegatorVoteProof> for Vec<u8> {
+    fn from(delegator_vote_proof: DelegatorVoteProof) -> Vec<u8> {
+        let protobuf_serialized_proof: transparent_proofs::SpendProof = delegator_vote_proof.into();
         protobuf_serialized_proof.encode_to_vec()
     }
 }
 
-impl TryFrom<&[u8]> for OutputProof {
+impl TryFrom<&[u8]> for DelegatorVoteProof {
     type Error = Error;
 
-    fn try_from(bytes: &[u8]) -> Result<OutputProof, Self::Error> {
-        let protobuf_serialized_proof = transparent_proofs::OutputProof::decode(bytes)
+    fn try_from(bytes: &[u8]) -> Result<DelegatorVoteProof, Self::Error> {
+        let protobuf_serialized_proof = transparent_proofs::SpendProof::decode(bytes)
             .map_err(|_| anyhow!("proto malformed"))?;
         protobuf_serialized_proof
             .try_into()
@@ -632,115 +630,8 @@ mod tests {
     use super::*;
     use crate::{
         keys::{SeedPhrase, SpendKey},
-        note, Balance, Note, Value,
+        Balance, Note, Value,
     };
-
-    #[test]
-    /// Check that the `OutputProof` verification suceeds.
-    fn test_output_proof_verification_success() {
-        let mut rng = OsRng;
-
-        let seed_phrase = SeedPhrase::generate(rng);
-        let sk_recipient = SpendKey::from_seed_phrase(seed_phrase, 0);
-        let fvk_recipient = sk_recipient.full_viewing_key();
-        let ivk_recipient = fvk_recipient.incoming();
-        let (dest, _dtk_d) = ivk_recipient.payment_address(0u32.into());
-
-        let value_to_send = Value {
-            amount: 10u64.into(),
-            asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
-        };
-
-        let balance = -Balance::from(value_to_send);
-
-        let v_blinding = Fr::rand(&mut rng);
-        let note = Note::generate(&mut rng, &dest, value_to_send);
-
-        let proof = OutputProof {
-            note: note.clone(),
-            v_blinding,
-        };
-
-        assert!(proof
-            .verify(balance.commit(v_blinding), note.commit())
-            .is_ok());
-    }
-
-    #[test]
-    /// Check that the `OutputProof` verification fails when using an incorrect
-    /// note commitment.
-    fn test_output_proof_verification_note_commitment_integrity_failure() {
-        let mut rng = OsRng;
-
-        let seed_phrase = SeedPhrase::generate(rng);
-        let sk_recipient = SpendKey::from_seed_phrase(seed_phrase, 0);
-        let fvk_recipient = sk_recipient.full_viewing_key();
-        let ivk_recipient = fvk_recipient.incoming();
-        let (dest, _dtk_d) = ivk_recipient.payment_address(0u32.into());
-
-        let value_to_send = Value {
-            amount: 10u64.into(),
-            asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
-        };
-
-        let balance_to_send = -Balance::from(value_to_send);
-
-        let v_blinding = Fr::rand(&mut rng);
-        let note = Note::generate(&mut rng, &dest, value_to_send);
-
-        let proof = OutputProof {
-            note: note.clone(),
-            v_blinding,
-        };
-
-        let incorrect_note_commitment = note::commitment(
-            Fq::rand(&mut rng),
-            value_to_send,
-            note.diversified_generator(),
-            note.transmission_key_s(),
-            note.clue_key(),
-        );
-
-        assert!(proof
-            .verify(
-                balance_to_send.commit(v_blinding),
-                incorrect_note_commitment,
-            )
-            .is_err());
-    }
-
-    #[test]
-    /// Check that the `OutputProof` verification fails when using an incorrect
-    /// balance commitment.
-    fn test_output_proof_verification_balance_commitment_integrity_failure() {
-        let mut rng = OsRng;
-
-        let seed_phrase = SeedPhrase::generate(rng);
-        let sk_recipient = SpendKey::from_seed_phrase(seed_phrase, 0);
-        let fvk_recipient = sk_recipient.full_viewing_key();
-        let ivk_recipient = fvk_recipient.incoming();
-        let (dest, _dtk_d) = ivk_recipient.payment_address(0u32.into());
-
-        let value_to_send = Value {
-            amount: 10u64.into(),
-            asset_id: asset::REGISTRY.parse_denom("upenumbra").unwrap().id(),
-        };
-        let v_blinding = Fr::rand(&mut rng);
-
-        let bad_balance = Balance::from(value_to_send);
-        let incorrect_balance_commitment = bad_balance.commit(Fr::rand(&mut rng));
-
-        let note = Note::generate(&mut rng, &dest, value_to_send);
-
-        let proof = OutputProof {
-            note: note.clone(),
-            v_blinding,
-        };
-
-        assert!(proof
-            .verify(incorrect_balance_commitment, note.commit())
-            .is_err());
-    }
 
     #[test]
     /// Check that the `SpendProof` verification succeeds.

@@ -5,14 +5,12 @@ use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::uint8::UInt8;
 use ark_relations::r1cs::SynthesisError;
 use decaf377::r1cs::ElementVar;
-use decaf377::r1cs::FqVar;
 use decaf377::Fq;
 use decaf377::Fr;
 use once_cell::sync::Lazy;
 use penumbra_proto::core::crypto::v1alpha1 as pb;
 use penumbra_proto::DomainType;
 
-use crate::asset::VALUE_GENERATOR_DOMAIN_SEP;
 use crate::value::ValueVar;
 use crate::Value;
 
@@ -35,12 +33,10 @@ impl ValueVar {
         value_blinding: Vec<UInt8<Fq>>,
     ) -> Result<BalanceCommitmentVar, SynthesisError> {
         let cs = self.amount().cs();
-        let value_generator = FqVar::new_constant(cs.clone(), *VALUE_GENERATOR_DOMAIN_SEP)?;
         let value_blinding_generator =
             ElementVar::new_constant(cs.clone(), *VALUE_BLINDING_GENERATOR)?;
 
-        let hashed_asset_id = poseidon377::r1cs::hash_1(cs, &value_generator, self.asset_id())?;
-        let asset_generator = ElementVar::encode_to_curve(&hashed_asset_id)?;
+        let asset_generator = self.asset_id.value_generator()?;
         let value_amount = self.amount();
         let commitment = asset_generator.scalar_mul_le(value_amount.to_bits_le()?.iter())?
             + value_blinding_generator.scalar_mul_le(value_blinding.to_bits_le()?.iter())?;
@@ -79,7 +75,8 @@ impl AllocVar<Commitment, Fq> for BalanceCommitmentVar {
         match mode {
             AllocationMode::Constant => unimplemented!(),
             AllocationMode::Input => {
-                let element_var: ElementVar = AllocVar::new_input(cs, || Ok(inner.0))?;
+                let compressed = inner.0.vartime_compress_to_field();
+                let element_var: ElementVar = AllocVar::new_input(cs, || Ok(compressed))?;
                 Ok(Self { inner: element_var })
             }
             AllocationMode::Witness => unimplemented!(),

@@ -22,7 +22,10 @@ use penumbra_tct as tct;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    action::{Delegate, Output, ProposalSubmit, ProposalWithdraw, Swap, Undelegate, ValidatorVote},
+    action::{
+        Delegate, DelegatorVote, Output, ProposalSubmit, ProposalWithdraw, Swap, Undelegate,
+        ValidatorVote,
+    },
     view::action_view::OutputView,
     Action, ActionView, IsAction, TransactionPerspective, TransactionView,
 };
@@ -56,6 +59,17 @@ impl Default for Transaction {
 }
 
 impl Transaction {
+    pub fn num_proofs(&self) -> usize {
+        self.transaction_body
+            .actions
+            .iter()
+            .map(|action| match action {
+                Action::Spend(_) => 1,
+                Action::Output(_) => 1,
+                _ => 0,
+            })
+            .sum()
+    }
     pub fn payload_keys(
         &self,
         fvk: &FullViewingKey,
@@ -66,7 +80,7 @@ impl Transaction {
             match action {
                 Action::Swap(swap) => {
                     let commitment = swap.body.payload.commitment;
-                    let payload_key = PayloadKey::derive_swap(&fvk.outgoing(), commitment);
+                    let payload_key = PayloadKey::derive_swap(fvk.outgoing(), commitment);
 
                     result.insert(commitment, payload_key);
                 }
@@ -109,6 +123,7 @@ impl Transaction {
                 | Action::ProposalSubmit(_)
                 | Action::ProposalWithdraw(_)
                 | Action::ValidatorVote(_)
+                | Action::DelegatorVote(_)
                 | Action::ProposalDepositClaim(_)
                 | Action::PositionOpen(_)
                 | Action::PositionClose(_)
@@ -212,15 +227,15 @@ impl Transaction {
         })
     }
 
-    // pub fn delegator_votes(&self) -> impl Iterator<Item = &DelegatorVote> {
-    //     self.actions().filter_map(|action| {
-    //         if let Action::DelegatorVote(v) = action {
-    //             Some(v)
-    //         } else {
-    //             None
-    //         }
-    //     })
-    // }
+    pub fn delegator_votes(&self) -> impl Iterator<Item = &DelegatorVote> {
+        self.actions().filter_map(|action| {
+            if let Action::DelegatorVote(v) = action {
+                Some(v)
+            } else {
+                None
+            }
+        })
+    }
 
     pub fn ibc_actions(&self) -> impl Iterator<Item = &pb_ibc::IbcAction> {
         self.actions().filter_map(|action| {

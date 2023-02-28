@@ -1,5 +1,4 @@
 syntax = "proto3";
-option go_package = "github.com/penumbra-zone/penumbra/proto/go-proto";
 
 package penumbra.core.transaction.v1alpha1;
 
@@ -56,7 +55,7 @@ message Action {
     governance.v1alpha1.ProposalSubmit proposal_submit = 18;
     governance.v1alpha1.ProposalWithdraw proposal_withdraw = 19;
     governance.v1alpha1.ValidatorVote validator_vote = 20;
-    // DelegatorVote delegator_vote = 21;
+    governance.v1alpha1.DelegatorVote delegator_vote = 21;
     governance.v1alpha1.ProposalDepositClaim proposal_deposit_claim = 22;
 
     dex.v1alpha1.PositionOpen position_open = 30;
@@ -126,8 +125,8 @@ message ActionView {
     governance.v1alpha1.ProposalSubmit proposal_submit = 18;
     governance.v1alpha1.ProposalWithdraw proposal_withdraw = 19;
     governance.v1alpha1.ValidatorVote validator_vote = 20;
+    DelegatorVoteView delegator_vote = 21;
     governance.v1alpha1.ProposalDepositClaim proposal_deposit_claim = 22;
-    // DelegatorVote delegator_vote = 21;
     dex.v1alpha1.PositionOpen position_open = 30;
     dex.v1alpha1.PositionClose position_close = 31;
     dex.v1alpha1.PositionWithdraw position_withdraw = 32;
@@ -152,6 +151,20 @@ message SpendView {
     Spend spend = 1;
   }
   oneof spend_view {
+    Visible visible = 1;
+    Opaque opaque = 2;
+  }
+}
+
+message DelegatorVoteView {
+  message Visible {
+    governance.v1alpha1.DelegatorVote delegator_vote = 1;
+    crypto.v1alpha1.Note note = 2;
+  }
+  message Opaque {
+    governance.v1alpha1.DelegatorVote delegator_vote = 1;
+  }
+  oneof delegator_vote {
     Visible visible = 1;
     Opaque opaque = 2;
   }
@@ -196,7 +209,7 @@ message Spend {
   // The authorizing signature for the spend.
   crypto.v1alpha1.SpendAuthSignature auth_sig = 2;
   // The proof that the spend is well-formed is authorizing data.
-  bytes proof = 3;
+  crypto.v1alpha1.ZKSpendProof proof = 3;
 }
 
 // The body of a spend description, containing only the effecting data
@@ -216,7 +229,7 @@ message Output {
   // The effecting data for the output.
   OutputBody body = 1;
   // The output proof is authorizing data.
-  bytes proof = 2;
+  crypto.v1alpha1.ZKOutputProof proof = 2;
 }
 
 // The body of an output description, containing only the effecting data
@@ -241,6 +254,9 @@ message AuthorizationData {
     // The required spend authorizations, returned in the same order as the
     // Spend actions in the original request.
     repeated crypto.v1alpha1.SpendAuthSignature spend_auths = 2;
+    // The required delegator vote authorizations, returned in the same order as the
+    // DelegatorVote actions in the original request.
+    repeated crypto.v1alpha1.SpendAuthSignature delegator_vote_auths = 3;
 }
 
 // The data required for proving when building a transaction from a plan.

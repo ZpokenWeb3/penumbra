@@ -137,45 +137,45 @@ impl serde::Serialize for DelegatorVoteBody {
         if self.proposal != 0 {
             len += 1;
         }
+        if self.start_position != 0 {
+            len += 1;
+        }
+        if self.vote.is_some() {
+            len += 1;
+        }
+        if self.value.is_some() {
+            len += 1;
+        }
+        if self.unbonded_amount.is_some() {
+            len += 1;
+        }
         if !self.nullifier.is_empty() {
             len += 1;
         }
         if !self.rk.is_empty() {
-            len += 1;
-        }
-        if self.yes_balance_commitment.is_some() {
-            len += 1;
-        }
-        if self.no_balance_commitment.is_some() {
-            len += 1;
-        }
-        if self.abstain_balance_commitment.is_some() {
-            len += 1;
-        }
-        if self.no_with_veto_balance_commitment.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.governance.v1alpha1.DelegatorVoteBody", len)?;
         if self.proposal != 0 {
             struct_ser.serialize_field("proposal", ToString::to_string(&self.proposal).as_str())?;
         }
+        if self.start_position != 0 {
+            struct_ser.serialize_field("startPosition", ToString::to_string(&self.start_position).as_str())?;
+        }
+        if let Some(v) = self.vote.as_ref() {
+            struct_ser.serialize_field("vote", v)?;
+        }
+        if let Some(v) = self.value.as_ref() {
+            struct_ser.serialize_field("value", v)?;
+        }
+        if let Some(v) = self.unbonded_amount.as_ref() {
+            struct_ser.serialize_field("unbondedAmount", v)?;
+        }
         if !self.nullifier.is_empty() {
             struct_ser.serialize_field("nullifier", pbjson::private::base64::encode(&self.nullifier).as_str())?;
         }
         if !self.rk.is_empty() {
             struct_ser.serialize_field("rk", pbjson::private::base64::encode(&self.rk).as_str())?;
-        }
-        if let Some(v) = self.yes_balance_commitment.as_ref() {
-            struct_ser.serialize_field("yesBalanceCommitment", v)?;
-        }
-        if let Some(v) = self.no_balance_commitment.as_ref() {
-            struct_ser.serialize_field("noBalanceCommitment", v)?;
-        }
-        if let Some(v) = self.abstain_balance_commitment.as_ref() {
-            struct_ser.serialize_field("abstainBalanceCommitment", v)?;
-        }
-        if let Some(v) = self.no_with_veto_balance_commitment.as_ref() {
-            struct_ser.serialize_field("noWithVetoBalanceCommitment", v)?;
         }
         struct_ser.end()
     }
@@ -188,27 +188,25 @@ impl<'de> serde::Deserialize<'de> for DelegatorVoteBody {
     {
         const FIELDS: &[&str] = &[
             "proposal",
+            "start_position",
+            "startPosition",
+            "vote",
+            "value",
+            "unbonded_amount",
+            "unbondedAmount",
             "nullifier",
             "rk",
-            "yes_balance_commitment",
-            "yesBalanceCommitment",
-            "no_balance_commitment",
-            "noBalanceCommitment",
-            "abstain_balance_commitment",
-            "abstainBalanceCommitment",
-            "no_with_veto_balance_commitment",
-            "noWithVetoBalanceCommitment",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Proposal,
+            StartPosition,
+            Vote,
+            Value,
+            UnbondedAmount,
             Nullifier,
             Rk,
-            YesBalanceCommitment,
-            NoBalanceCommitment,
-            AbstainBalanceCommitment,
-            NoWithVetoBalanceCommitment,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -231,12 +229,12 @@ impl<'de> serde::Deserialize<'de> for DelegatorVoteBody {
                     {
                         match value {
                             "proposal" => Ok(GeneratedField::Proposal),
+                            "startPosition" | "start_position" => Ok(GeneratedField::StartPosition),
+                            "vote" => Ok(GeneratedField::Vote),
+                            "value" => Ok(GeneratedField::Value),
+                            "unbondedAmount" | "unbonded_amount" => Ok(GeneratedField::UnbondedAmount),
                             "nullifier" => Ok(GeneratedField::Nullifier),
                             "rk" => Ok(GeneratedField::Rk),
-                            "yesBalanceCommitment" | "yes_balance_commitment" => Ok(GeneratedField::YesBalanceCommitment),
-                            "noBalanceCommitment" | "no_balance_commitment" => Ok(GeneratedField::NoBalanceCommitment),
-                            "abstainBalanceCommitment" | "abstain_balance_commitment" => Ok(GeneratedField::AbstainBalanceCommitment),
-                            "noWithVetoBalanceCommitment" | "no_with_veto_balance_commitment" => Ok(GeneratedField::NoWithVetoBalanceCommitment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -257,12 +255,12 @@ impl<'de> serde::Deserialize<'de> for DelegatorVoteBody {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut proposal__ = None;
+                let mut start_position__ = None;
+                let mut vote__ = None;
+                let mut value__ = None;
+                let mut unbonded_amount__ = None;
                 let mut nullifier__ = None;
                 let mut rk__ = None;
-                let mut yes_balance_commitment__ = None;
-                let mut no_balance_commitment__ = None;
-                let mut abstain_balance_commitment__ = None;
-                let mut no_with_veto_balance_commitment__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Proposal => {
@@ -272,6 +270,32 @@ impl<'de> serde::Deserialize<'de> for DelegatorVoteBody {
                             proposal__ = 
                                 Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
+                        }
+                        GeneratedField::StartPosition => {
+                            if start_position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startPosition"));
+                            }
+                            start_position__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Vote => {
+                            if vote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("vote"));
+                            }
+                            vote__ = map.next_value()?;
+                        }
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = map.next_value()?;
+                        }
+                        GeneratedField::UnbondedAmount => {
+                            if unbonded_amount__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("unbondedAmount"));
+                            }
+                            unbonded_amount__ = map.next_value()?;
                         }
                         GeneratedField::Nullifier => {
                             if nullifier__.is_some() {
@@ -289,40 +313,16 @@ impl<'de> serde::Deserialize<'de> for DelegatorVoteBody {
                                 Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
-                        GeneratedField::YesBalanceCommitment => {
-                            if yes_balance_commitment__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("yesBalanceCommitment"));
-                            }
-                            yes_balance_commitment__ = map.next_value()?;
-                        }
-                        GeneratedField::NoBalanceCommitment => {
-                            if no_balance_commitment__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("noBalanceCommitment"));
-                            }
-                            no_balance_commitment__ = map.next_value()?;
-                        }
-                        GeneratedField::AbstainBalanceCommitment => {
-                            if abstain_balance_commitment__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("abstainBalanceCommitment"));
-                            }
-                            abstain_balance_commitment__ = map.next_value()?;
-                        }
-                        GeneratedField::NoWithVetoBalanceCommitment => {
-                            if no_with_veto_balance_commitment__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("noWithVetoBalanceCommitment"));
-                            }
-                            no_with_veto_balance_commitment__ = map.next_value()?;
-                        }
                     }
                 }
                 Ok(DelegatorVoteBody {
                     proposal: proposal__.unwrap_or_default(),
+                    start_position: start_position__.unwrap_or_default(),
+                    vote: vote__,
+                    value: value__,
+                    unbonded_amount: unbonded_amount__,
                     nullifier: nullifier__.unwrap_or_default(),
                     rk: rk__.unwrap_or_default(),
-                    yes_balance_commitment: yes_balance_commitment__,
-                    no_balance_commitment: no_balance_commitment__,
-                    abstain_balance_commitment: abstain_balance_commitment__,
-                    no_with_veto_balance_commitment: no_with_veto_balance_commitment__,
                 })
             }
         }
@@ -340,13 +340,19 @@ impl serde::Serialize for DelegatorVotePlan {
         if self.proposal != 0 {
             len += 1;
         }
+        if self.start_position != 0 {
+            len += 1;
+        }
         if self.vote.is_some() {
             len += 1;
         }
         if self.staked_note.is_some() {
             len += 1;
         }
-        if self.position != 0 {
+        if self.staked_note_position != 0 {
+            len += 1;
+        }
+        if self.unbonded_amount.is_some() {
             len += 1;
         }
         if !self.randomizer.is_empty() {
@@ -356,14 +362,20 @@ impl serde::Serialize for DelegatorVotePlan {
         if self.proposal != 0 {
             struct_ser.serialize_field("proposal", ToString::to_string(&self.proposal).as_str())?;
         }
+        if self.start_position != 0 {
+            struct_ser.serialize_field("startPosition", ToString::to_string(&self.start_position).as_str())?;
+        }
         if let Some(v) = self.vote.as_ref() {
             struct_ser.serialize_field("vote", v)?;
         }
         if let Some(v) = self.staked_note.as_ref() {
             struct_ser.serialize_field("stakedNote", v)?;
         }
-        if self.position != 0 {
-            struct_ser.serialize_field("position", ToString::to_string(&self.position).as_str())?;
+        if self.staked_note_position != 0 {
+            struct_ser.serialize_field("stakedNotePosition", ToString::to_string(&self.staked_note_position).as_str())?;
+        }
+        if let Some(v) = self.unbonded_amount.as_ref() {
+            struct_ser.serialize_field("unbondedAmount", v)?;
         }
         if !self.randomizer.is_empty() {
             struct_ser.serialize_field("randomizer", pbjson::private::base64::encode(&self.randomizer).as_str())?;
@@ -379,19 +391,26 @@ impl<'de> serde::Deserialize<'de> for DelegatorVotePlan {
     {
         const FIELDS: &[&str] = &[
             "proposal",
+            "start_position",
+            "startPosition",
             "vote",
             "staked_note",
             "stakedNote",
-            "position",
+            "staked_note_position",
+            "stakedNotePosition",
+            "unbonded_amount",
+            "unbondedAmount",
             "randomizer",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Proposal,
+            StartPosition,
             Vote,
             StakedNote,
-            Position,
+            StakedNotePosition,
+            UnbondedAmount,
             Randomizer,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -415,9 +434,11 @@ impl<'de> serde::Deserialize<'de> for DelegatorVotePlan {
                     {
                         match value {
                             "proposal" => Ok(GeneratedField::Proposal),
+                            "startPosition" | "start_position" => Ok(GeneratedField::StartPosition),
                             "vote" => Ok(GeneratedField::Vote),
                             "stakedNote" | "staked_note" => Ok(GeneratedField::StakedNote),
-                            "position" => Ok(GeneratedField::Position),
+                            "stakedNotePosition" | "staked_note_position" => Ok(GeneratedField::StakedNotePosition),
+                            "unbondedAmount" | "unbonded_amount" => Ok(GeneratedField::UnbondedAmount),
                             "randomizer" => Ok(GeneratedField::Randomizer),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -439,9 +460,11 @@ impl<'de> serde::Deserialize<'de> for DelegatorVotePlan {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut proposal__ = None;
+                let mut start_position__ = None;
                 let mut vote__ = None;
                 let mut staked_note__ = None;
-                let mut position__ = None;
+                let mut staked_note_position__ = None;
+                let mut unbonded_amount__ = None;
                 let mut randomizer__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
@@ -450,6 +473,14 @@ impl<'de> serde::Deserialize<'de> for DelegatorVotePlan {
                                 return Err(serde::de::Error::duplicate_field("proposal"));
                             }
                             proposal__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StartPosition => {
+                            if start_position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startPosition"));
+                            }
+                            start_position__ = 
                                 Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -465,13 +496,19 @@ impl<'de> serde::Deserialize<'de> for DelegatorVotePlan {
                             }
                             staked_note__ = map.next_value()?;
                         }
-                        GeneratedField::Position => {
-                            if position__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("position"));
+                        GeneratedField::StakedNotePosition => {
+                            if staked_note_position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stakedNotePosition"));
                             }
-                            position__ = 
+                            staked_note_position__ = 
                                 Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
+                        }
+                        GeneratedField::UnbondedAmount => {
+                            if unbonded_amount__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("unbondedAmount"));
+                            }
+                            unbonded_amount__ = map.next_value()?;
                         }
                         GeneratedField::Randomizer => {
                             if randomizer__.is_some() {
@@ -485,9 +522,11 @@ impl<'de> serde::Deserialize<'de> for DelegatorVotePlan {
                 }
                 Ok(DelegatorVotePlan {
                     proposal: proposal__.unwrap_or_default(),
+                    start_position: start_position__.unwrap_or_default(),
                     vote: vote__,
                     staked_note: staked_note__,
-                    position: position__.unwrap_or_default(),
+                    staked_note_position: staked_note_position__.unwrap_or_default(),
+                    unbonded_amount: unbonded_amount__,
                     randomizer: randomizer__.unwrap_or_default(),
                 })
             }
@@ -3192,7 +3231,6 @@ impl serde::Serialize for vote::Vote {
             Self::Abstain => "VOTE_ABSTAIN",
             Self::Yes => "VOTE_YES",
             Self::No => "VOTE_NO",
-            Self::NoWithVeto => "VOTE_NO_WITH_VETO",
         };
         serializer.serialize_str(variant)
     }
@@ -3208,7 +3246,6 @@ impl<'de> serde::Deserialize<'de> for vote::Vote {
             "VOTE_ABSTAIN",
             "VOTE_YES",
             "VOTE_NO",
-            "VOTE_NO_WITH_VETO",
         ];
 
         struct GeneratedVisitor;
@@ -3255,7 +3292,6 @@ impl<'de> serde::Deserialize<'de> for vote::Vote {
                     "VOTE_ABSTAIN" => Ok(vote::Vote::Abstain),
                     "VOTE_YES" => Ok(vote::Vote::Yes),
                     "VOTE_NO" => Ok(vote::Vote::No),
-                    "VOTE_NO_WITH_VETO" => Ok(vote::Vote::NoWithVeto),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

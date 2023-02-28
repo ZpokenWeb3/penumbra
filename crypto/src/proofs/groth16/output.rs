@@ -1,20 +1,23 @@
 use std::str::FromStr;
 
 use ark_r1cs_std::uint8::UInt8;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use decaf377::FieldExt;
 use decaf377::{Bls12_377, Fq, Fr};
 use decaf377_fmd as fmd;
 use decaf377_ka as ka;
 
 use ark_ff::ToConstraintField;
-use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
+use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey};
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
 use ark_snark::SNARK;
+use penumbra_proto::{core::crypto::v1alpha1 as pb, DomainType};
 use rand::{CryptoRng, Rng};
 use rand_core::OsRng;
 
-use crate::proofs::groth16::{gadgets, ParameterSetup};
+use crate::balance::BalanceVar;
+use crate::proofs::groth16::{gadgets, ParameterSetup, GROTH16_PROOF_LENGTH_BYTES};
 use crate::{
     balance, balance::commitment::BalanceCommitmentVar, keys::Diversifier, note, Address, Note,
     Rseed, Value,
@@ -64,7 +67,8 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
             note_var.diversified_generator(),
         )?;
         // Check integrity of balance commitment.
-        let balance_commitment = note_var.value().commit(v_blinding_vars)?;
+        let balance_commitment =
+            BalanceVar::from_negative_value_var(note_var.value()).commit(v_blinding_vars)?;
         balance_commitment.enforce_equal(&claimed_balance_commitment)?;
 
         // Note commitment integrity
@@ -76,7 +80,7 @@ impl ConstraintSynthesizer<Fq> for OutputCircuit {
 }
 
 impl ParameterSetup for OutputCircuit {
-    fn generate_test_parameters() -> (ProvingKey<Bls12_377>, VerifyingKey<Bls12_377>) {
+    fn generate_test_parameters() -> (ProvingKey<Bls12_377>, PreparedVerifyingKey<Bls12_377>) {
         let diversifier_bytes = [1u8; 16];
         let pk_d_bytes = decaf377::basepoint().vartime_compress().0;
         let clue_key_bytes = [1; 32];
@@ -102,10 +106,11 @@ impl ParameterSetup for OutputCircuit {
         };
         let (pk, vk) = Groth16::circuit_specific_setup(circuit, &mut OsRng)
             .expect("can perform circuit specific setup");
-        (pk, vk)
+        (pk, vk.into())
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct OutputProof(Proof<Bls12_377>);
 
 impl OutputProof {
@@ -133,22 +138,52 @@ impl OutputProof {
     /// The public inputs are:
     /// * balance commitment of the new note,
     /// * note commitment of the new note,
+    // Commented out, but this may be useful when debugging proof verification failures,
+    // to check that the proof data and verification keys are consistent.
+    //#[tracing::instrument(skip(self, vk), fields(self = ?base64::encode(&self.clone().encode_to_vec()), vk = ?vk.debug_id()))]
+    #[tracing::instrument(skip(self, vk))]
     pub fn verify(
         &self,
-        vk: &VerifyingKey<Bls12_377>,
+        vk: &PreparedVerifyingKey<Bls12_377>,
         balance_commitment: balance::Commitment,
         note_commitment: note::Commitment,
     ) -> anyhow::Result<()> {
-        let processed_pvk = Groth16::process_vk(vk).map_err(|err| anyhow::anyhow!(err))?;
         let mut public_inputs = Vec::new();
         public_inputs.extend(note_commitment.0.to_field_elements().unwrap());
         public_inputs.extend(balance_commitment.0.to_field_elements().unwrap());
 
+        tracing::trace!(?public_inputs);
+        let start = std::time::Instant::now();
         let proof_result =
-            Groth16::verify_with_processed_vk(&processed_pvk, public_inputs.as_slice(), &self.0)
+            Groth16::verify_with_processed_vk(&vk, public_inputs.as_slice(), &self.0)
                 .map_err(|err| anyhow::anyhow!(err))?;
+        tracing::debug!(?proof_result, elapsed = ?start.elapsed());
         proof_result
             .then_some(())
             .ok_or_else(|| anyhow::anyhow!("proof did not verify"))
+    }
+}
+
+impl DomainType for OutputProof {
+    type Proto = pb::ZkOutputProof;
+}
+
+impl From<OutputProof> for pb::ZkOutputProof {
+    fn from(proof: OutputProof) -> Self {
+        let mut proof_bytes = [0u8; GROTH16_PROOF_LENGTH_BYTES];
+        Proof::serialize(&proof.0, &mut proof_bytes[..]).expect("can serialize Proof");
+        pb::ZkOutputProof {
+            inner: proof_bytes.to_vec(),
+        }
+    }
+}
+
+impl TryFrom<pb::ZkOutputProof> for OutputProof {
+    type Error = anyhow::Error;
+
+    fn try_from(proto: pb::ZkOutputProof) -> Result<Self, Self::Error> {
+        Ok(OutputProof(
+            Proof::deserialize(&proto.inner[..]).map_err(|e| anyhow::anyhow!(e))?,
+        ))
     }
 }

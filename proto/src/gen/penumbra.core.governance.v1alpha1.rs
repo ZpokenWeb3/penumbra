@@ -71,40 +71,24 @@ pub struct DelegatorVoteBody {
     /// The proposal being voted on.
     #[prost(uint64, tag = "1")]
     pub proposal: u64,
+    /// The start position of the proposal in the TCT.
+    #[prost(uint64, tag = "2")]
+    pub start_position: u64,
+    /// The vote.
+    #[prost(message, optional, tag = "3")]
+    pub vote: ::core::option::Option<Vote>,
+    /// The value of the delegation note.
+    #[prost(message, optional, tag = "4")]
+    pub value: ::core::option::Option<super::super::crypto::v1alpha1::Value>,
+    /// The amount of the delegation note, in unbonded penumbra.
+    #[prost(message, optional, tag = "5")]
+    pub unbonded_amount: ::core::option::Option<super::super::crypto::v1alpha1::Amount>,
     /// The nullifier of the input note.
-    #[prost(bytes = "vec", tag = "3")]
+    #[prost(bytes = "vec", tag = "6")]
     pub nullifier: ::prost::alloc::vec::Vec<u8>,
     /// The randomized validating key for the spend authorization signature.
-    #[prost(bytes = "vec", tag = "4")]
+    #[prost(bytes = "vec", tag = "7")]
     pub rk: ::prost::alloc::vec::Vec<u8>,
-    /// A commitment to the value voted for "yes".
-    ///
-    /// A rational voter will place all their voting weight on one vote.
-    #[prost(message, optional, tag = "5")]
-    pub yes_balance_commitment: ::core::option::Option<
-        super::super::crypto::v1alpha1::BalanceCommitment,
-    >,
-    /// A commitment to the value voted for "no".
-    ///
-    /// A rational voter will place all their voting weight on one vote.
-    #[prost(message, optional, tag = "6")]
-    pub no_balance_commitment: ::core::option::Option<
-        super::super::crypto::v1alpha1::BalanceCommitment,
-    >,
-    /// A commitment to the value voted for "abstain".
-    ///
-    /// A rational voter will place all their voting weight on one vote.
-    #[prost(message, optional, tag = "7")]
-    pub abstain_balance_commitment: ::core::option::Option<
-        super::super::crypto::v1alpha1::BalanceCommitment,
-    >,
-    /// A commitment to the value voted for "no with veto".
-    ///
-    /// A rational voter will place all their voting weight on one vote.
-    #[prost(message, optional, tag = "8")]
-    pub no_with_veto_balance_commitment: ::core::option::Option<
-        super::super::crypto::v1alpha1::BalanceCommitment,
-    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -125,17 +109,23 @@ pub struct DelegatorVotePlan {
     /// The proposal to vote on.
     #[prost(uint64, tag = "1")]
     pub proposal: u64,
+    /// The start position of the proposal in the TCT.
+    #[prost(uint64, tag = "2")]
+    pub start_position: u64,
     /// The vote to cast.
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag = "3")]
     pub vote: ::core::option::Option<Vote>,
     /// The delegation note to prove that we can vote.
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag = "4")]
     pub staked_note: ::core::option::Option<super::super::crypto::v1alpha1::Note>,
     /// The position of that delegation note.
-    #[prost(uint64, tag = "4")]
-    pub position: u64,
+    #[prost(uint64, tag = "5")]
+    pub staked_note_position: u64,
+    /// The unbonded amount equivalent to the delegation note.
+    #[prost(message, optional, tag = "6")]
+    pub unbonded_amount: ::core::option::Option<super::super::crypto::v1alpha1::Amount>,
     /// The randomizer to use for the proof of spend capability.
-    #[prost(bytes = "vec", tag = "5")]
+    #[prost(bytes = "vec", tag = "7")]
     pub randomizer: ::prost::alloc::vec::Vec<u8>,
 }
 /// A vote on a proposal.
@@ -166,7 +156,6 @@ pub mod vote {
         Abstain = 1,
         Yes = 2,
         No = 3,
-        NoWithVeto = 4,
     }
     impl Vote {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -179,7 +168,6 @@ pub mod vote {
                 Vote::Abstain => "VOTE_ABSTAIN",
                 Vote::Yes => "VOTE_YES",
                 Vote::No => "VOTE_NO",
-                Vote::NoWithVeto => "VOTE_NO_WITH_VETO",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -189,7 +177,6 @@ pub mod vote {
                 "VOTE_ABSTAIN" => Some(Self::Abstain),
                 "VOTE_YES" => Some(Self::Yes),
                 "VOTE_NO" => Some(Self::No),
-                "VOTE_NO_WITH_VETO" => Some(Self::NoWithVeto),
                 _ => None,
             }
         }

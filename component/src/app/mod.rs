@@ -8,7 +8,7 @@ use penumbra_storage::{ArcStateDeltaExt, Snapshot, StateDelta, Storage};
 use penumbra_transaction::Transaction;
 use tendermint::abci;
 use tendermint::validator::Update;
-use tracing::instrument;
+use tracing::Instrument;
 
 use crate::action_handler::ActionHandler;
 use crate::dex::Dex;
@@ -39,7 +39,6 @@ impl App {
         }
     }
 
-    #[instrument(skip(self, app_state))]
     pub async fn init_chain(&mut self, app_state: &genesis::AppState) {
         let mut state_tx = self
             .state
@@ -69,7 +68,6 @@ impl App {
         state_tx.apply();
     }
 
-    #[instrument(skip(self, begin_block))]
     pub async fn begin_block(
         &mut self,
         begin_block: &abci::request::BeginBlock,
@@ -103,13 +101,26 @@ impl App {
         self.deliver_tx(tx).await
     }
 
-    #[instrument(skip(self, tx))]
     pub async fn deliver_tx(&mut self, tx: Arc<Transaction>) -> Result<Vec<abci::Event>> {
         // Both stateful and stateless checks take the transaction as
         // verification context.  The separate clone of the Arc<Transaction>
         // means it can be passed through the whole tree of checks.
-        tx.check_stateless(tx.clone()).await?;
-        tx.check_stateful(self.state.clone()).await?;
+        //
+        // We spawn tasks for each set of checks, to do CPU-bound stateless checks
+        // and I/O-bound stateful checks at the same time.
+        let tx2 = tx.clone();
+        let stateless = tokio::spawn(
+            async move { tx2.check_stateless(tx2.clone()).await }
+                .instrument(tracing::Span::current()),
+        );
+        let tx2 = tx.clone();
+        let state = self.state.clone();
+        let stateful = tokio::spawn(
+            async move { tx2.check_stateful(state).await }.instrument(tracing::Span::current()),
+        );
+
+        stateless.await??;
+        stateful.await??;
 
         // At this point, the stateful checks should have completed,
         // leaving us with exclusive access to the Arc<State>.
@@ -125,7 +136,6 @@ impl App {
         Ok(state_tx.apply().1)
     }
 
-    #[instrument(skip(self, end_block))]
     pub async fn end_block(&mut self, end_block: &abci::request::EndBlock) -> Vec<abci::Event> {
         let mut state_tx = self
             .state
@@ -150,7 +160,6 @@ impl App {
     ///
     /// This method also resets `self` as if it were constructed
     /// as an empty state over top of the newly written storage.
-    #[instrument(skip(self, storage))]
     pub async fn commit(&mut self, storage: Storage) -> AppHash {
         // We need to extract the State we've built up to commit it.  Fill in a dummy state.
         let dummy_state = StateDelta::new(storage.latest_snapshot());

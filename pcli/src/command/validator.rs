@@ -25,22 +25,17 @@ pub enum ValidatorCmd {
     /// Manage your validator's definition.
     #[clap(subcommand)]
     Definition(DefinitionCmd),
-    /// Cast a vote on a proposal in your capacity as a validator.
-    ///
-    /// This is distinct from casting a vote as a delegator, which can be done using `pcli tx
-    /// proposal vote`.
+    /// Cast a vote on a proposal in your capacity as a validator (see also: `pcli tx vote`).
     Vote {
         /// The transaction fee (paid in upenumbra).
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", global = true, display_order = 200)]
         fee: u64,
-        /// The proposal id to vote on.
-        #[clap(long = "on")]
-        proposal_id: u64,
-        /// The vote to cast.
-        vote: Vote,
         /// Optional. Only spend funds originally received by the given address index.
-        #[clap(long, default_value = "0")]
+        #[clap(long, default_value = "0", global = true, display_order = 300)]
         source: u32,
+        /// The vote to cast.
+        #[clap(subcommand)]
+        vote: super::tx::VoteCmd,
     },
 }
 
@@ -102,7 +97,7 @@ impl ValidatorCmd {
             ValidatorCmd::Identity => {
                 let ik = IdentityKey(fvk.spend_verification_key().clone());
 
-                println!("{}", ik);
+                println!("{ik}");
             }
             ValidatorCmd::Definition(DefinitionCmd::Upload { file, fee, source }) => {
                 // The definitions are stored in a JSON document,
@@ -115,11 +110,11 @@ impl ValidatorCmd {
                 // We could also support defining multiple validators in a single
                 // file.
                 let mut definition_file =
-                    File::open(file).with_context(|| format!("cannot open file {:?}", file))?;
+                    File::open(file).with_context(|| format!("cannot open file {file:?}"))?;
                 let mut definition: String = String::new();
                 definition_file
                     .read_to_string(&mut definition)
-                    .with_context(|| format!("failed to read file {:?}", file))?;
+                    .with_context(|| format!("failed to read file {file:?}"))?;
                 let new_validator: ValidatorToml =
                     toml::from_str(&definition).context("Unable to parse validator definition")?;
                 let new_validator: Validator = new_validator
@@ -151,21 +146,18 @@ impl ValidatorCmd {
                 // never appear on-chain.
                 println!("Uploaded validator definition");
             }
-            ValidatorCmd::Vote {
-                fee,
-                proposal_id,
-                source,
-                vote,
-            } => {
+            ValidatorCmd::Vote { fee, source, vote } => {
                 // TODO: support submitting a separate governance key.
                 let identity_key = IdentityKey(*sk.full_viewing_key().spend_verification_key());
                 // Currently this is always just copied from the identity key
                 let governance_key = GovernanceKey(identity_key.0);
 
+                let (proposal, vote): (u64, Vote) = (*vote).into();
+
                 // Construct the vote body
                 let body = ValidatorVoteBody {
-                    proposal: *proposal_id,
-                    vote: *vote,
+                    proposal,
+                    vote,
                     identity_key,
                     governance_key,
                 };
@@ -211,22 +203,29 @@ impl ValidatorCmd {
                 let consensus_key: tendermint::PublicKey = match tendermint_validator_keyfile {
                     Some(f) => {
                         tracing::debug!(?f, "Reading tendermint validator pubkey from file");
-                        let tm_key_config: Value = serde_json::from_str(&std::fs::read_to_string(
-                            &f,
-                        )?)
-                        .context(format!(
-                            "Could not parse file as Tendermint validator config: {}",
-                            f
-                        ))?;
+                        let tm_key_config: Value =
+                            serde_json::from_str(&std::fs::read_to_string(f)?).context(format!(
+                                "Could not parse file as Tendermint validator config: {f}"
+                            ))?;
                         serde_json::value::from_value::<tendermint::PublicKey>(
                             tm_key_config["pub_key"].clone(),
                         )
-                        .context(format!("Tendermint JSON file malformed: {}", f))?
+                        .context(format!("Tendermint JSON file malformed: {f}"))?
                     }
                     None => {
                         tracing::warn!("Generating a random consensus pubkey for Tendermint; consider using the '--tendermint-validator-keyfile' flag");
                         generate_new_tendermint_keypair()?.public_key()
                     }
+                };
+
+                // Customize the human-readable comment text in the definition.
+                let generated_key_notice: String = match tendermint_validator_keyfile {
+                    Some(_s) => String::from(""),
+                    None => format!(
+                        "\n# The consensus_key field is random, and needs to be replaced with your
+# tendermint instance's public key, which can be found in `priv_validator_key.json`.
+#"
+                    ),
                 };
 
                 let template: ValidatorToml = Validator {
@@ -252,11 +251,7 @@ impl ValidatorCmd {
 #
 # The identity_key and governance_key fields are auto-filled with values derived
 # from this wallet's account.
-#
-# The consensus_key field is random, and needs to be replaced with your
-# tendermint instance's public key, which can be found in
-# `priv_validator_key.json`.
-#
+# {}
 # You should fill in the name, website, and description fields.
 #
 # By default, validators are disabled, and cannot be delegated to. To change
@@ -267,12 +262,13 @@ impl ValidatorCmd {
 
 {}
 ",
+                    generated_key_notice,
                     toml::to_string_pretty(&template)?
                 );
 
                 if let Some(file) = file {
                     File::create(file)
-                        .with_context(|| format!("cannot create file {:?}", file))?
+                        .with_context(|| format!("cannot create file {file:?}"))?
                         .write_all(template_str.as_bytes())
                         .context("could not write file")?;
                 } else {

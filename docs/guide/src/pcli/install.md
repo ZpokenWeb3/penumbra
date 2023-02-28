@@ -56,7 +56,7 @@ latest tag for the current
 [testnet](https://github.com/penumbra-zone/penumbra/releases):
 
 ```bash
-cd penumbra && git fetch && git checkout 045-metis
+cd penumbra && git fetch && git checkout 046-lysithea
 ```
 
 ### Building the `pcli` client software
@@ -68,12 +68,6 @@ cargo build --release --bin pcli
 ```
 
 Because you are building a work-in-progress version of the client, you may see compilation warnings,
-which you can safely ignore. Finally, create a symlink so that `pcli` is available system-wide:
-
-```bash
-sudo ln -s "\$PWD/target/release/pcli" /usr/local/bin/pcli
-```
-
-Doing so will enable you to use `pcli` as a command, even outside the Penumbra git repository.
+which you can safely ignore.
 
 [protoc-install]: https://grpc.io/docs/protoc-installation/

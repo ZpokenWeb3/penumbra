@@ -1,6 +1,6 @@
 use anyhow::Result;
 use colored_json::prelude::*;
-use penumbra_chain::{CompactBlock, NoteSource};
+use penumbra_chain::{CompactBlock, NoteSource, SpendInfo};
 use penumbra_crypto::Nullifier;
 use penumbra_proto::DomainType;
 use penumbra_tct::Commitment;
@@ -74,7 +74,7 @@ impl ShieldedPool {
                 serde_json::to_string_pretty(&note_source)?
             }
             ShieldedPool::Nullifier { .. } => {
-                let note_source = NoteSource::decode(bytes)?;
+                let note_source = SpendInfo::decode(bytes)?;
                 serde_json::to_string_pretty(&note_source)?
             }
         };

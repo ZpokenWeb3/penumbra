@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use penumbra_crypto::{
     memo::MemoCiphertext, rdsa, symmetric::PayloadKey, Fr, FullViewingKey, Zero,
 };
-use penumbra_proto::DomainType;
 use rand_core::{CryptoRng, RngCore};
 
 use super::TransactionPlan;
-use crate::{action::Action, AuthorizationData, Transaction, TransactionBody, WitnessData};
+use crate::{
+    action::Action, AuthorizationData, AuthorizingData, Transaction, TransactionBody, WitnessData,
+};
 
 impl TransactionPlan {
     /// Build the transaction this plan describes.
@@ -58,7 +59,7 @@ impl TransactionPlan {
             let auth_path = witness_data
                 .state_commitment_proofs
                 .get(&note_commitment)
-                .context(format!("could not get proof for {:?}", note_commitment))?;
+                .context(format!("could not get proof for {note_commitment:?}"))?;
 
             synthetic_blinding_factor += spend_plan.value_blinding;
             actions.push(Action::Spend(spend_plan.spend(
@@ -93,7 +94,7 @@ impl TransactionPlan {
             let auth_path = witness_data
                 .state_commitment_proofs
                 .get(&note_commitment)
-                .context(format!("could not get proof for {:?}", note_commitment))?;
+                .context(format!("could not get proof for {note_commitment:?}"))?;
 
             actions.push(Action::SwapClaim(
                 swap_claim_plan.swap_claim(fvk, auth_path),
@@ -104,10 +105,6 @@ impl TransactionPlan {
         for clue_plan in self.clue_plans() {
             fmd_clues.push(clue_plan.clue());
         }
-
-        // We don't have anything more to build, but iterate through the rest of
-        // the action plans by type so that the transaction will have them in a
-        // defined order.
 
         // All of these actions have "transparent" value balance with no
         // blinding factor, so they don't contribute to the
@@ -133,7 +130,22 @@ impl TransactionPlan {
         for validator_vote in self.validator_votes().cloned() {
             actions.push(Action::ValidatorVote(validator_vote))
         }
-        // TODO: delegator vote
+        for (delegator_vote_plan, auth_sig) in self
+            .delegator_vote_plans()
+            .zip(auth_data.delegator_vote_auths.into_iter())
+        {
+            let note_commitment = delegator_vote_plan.staked_note.commit();
+            let auth_path = witness_data
+                .state_commitment_proofs
+                .get(&note_commitment)
+                .context(format!("could not get proof for {note_commitment:?}"))?;
+
+            actions.push(Action::DelegatorVote(delegator_vote_plan.delegator_vote(
+                fvk,
+                auth_sig,
+                auth_path.clone(),
+            )));
+        }
         for proposal_deposit_claim in self.proposal_deposit_claims().cloned() {
             actions.push(Action::ProposalDepositClaim(proposal_deposit_claim))
         }
@@ -155,8 +167,9 @@ impl TransactionPlan {
 
         // Finally, compute the binding signature and assemble the transaction.
         let binding_signing_key = rdsa::SigningKey::from(synthetic_blinding_factor);
-        let binding_sig = binding_signing_key.sign(rng, &transaction_body.encode_to_vec()[..]);
-        tracing::debug!(bvk = ?rdsa::VerificationKey::from(&binding_signing_key), tx_body = ?transaction_body.encode_to_vec());
+        let auth_hash = transaction_body.auth_hash();
+        let binding_sig = binding_signing_key.sign(rng, auth_hash.as_bytes());
+        tracing::debug!(bvk = ?rdsa::VerificationKey::from(&binding_signing_key), ?auth_hash);
 
         // TODO: add consistency checks?
 
@@ -215,7 +228,7 @@ impl TransactionPlan {
             let auth_path = witness_data
                 .state_commitment_proofs
                 .get(&note_commitment)
-                .context(format!("could not get proof for {:?}", note_commitment))?
+                .context(format!("could not get proof for {note_commitment:?}"))?
                 .clone();
 
             synthetic_blinding_factor += spend_plan.value_blinding;
@@ -255,12 +268,32 @@ impl TransactionPlan {
             let auth_path = witness_data
                 .state_commitment_proofs
                 .get(&note_commitment)
-                .context(format!("could not get proof for {:?}", note_commitment))?
+                .context(format!("could not get proof for {note_commitment:?}"))?
                 .clone();
             let fvk_ = fvk.clone();
 
             in_progress_swap_claim_actions.push(tokio::spawn(async move {
                 swap_claim_plan.swap_claim(&fvk_, &auth_path)
+            }));
+        }
+
+        // Start building the transaction's delegator votes.
+        let mut in_progress_delegator_vote_actions = Vec::new();
+        for (delegator_vote_plan, auth_sig) in self
+            .delegator_vote_plans()
+            .zip(auth_data.delegator_vote_auths.into_iter())
+            .map(|(dvp, auth_sig)| (dvp.clone(), auth_sig))
+        {
+            let note_commitment = delegator_vote_plan.staked_note.commit();
+            let auth_path = witness_data
+                .state_commitment_proofs
+                .get(&note_commitment)
+                .context(format!("could not get proof for {note_commitment:?}"))?
+                .clone();
+            let fvk_ = fvk.clone();
+
+            in_progress_delegator_vote_actions.push(tokio::spawn(async move {
+                delegator_vote_plan.delegator_vote(&fvk_, auth_sig, auth_path.clone())
             }));
         }
 
@@ -316,7 +349,13 @@ impl TransactionPlan {
         for validator_vote in self.validator_votes().cloned() {
             actions.push(Action::ValidatorVote(validator_vote))
         }
-        // TODO: delegator vote
+        for delegator_vote in in_progress_delegator_vote_actions {
+            actions.push(Action::DelegatorVote(
+                delegator_vote
+                    .await
+                    .expect("can form delegator vote action"),
+            ));
+        }
         for proposal_deposit_claim in self.proposal_deposit_claims().cloned() {
             actions.push(Action::ProposalDepositClaim(proposal_deposit_claim))
         }
@@ -338,8 +377,9 @@ impl TransactionPlan {
 
         // Finally, compute the binding signature and assemble the transaction.
         let binding_signing_key = rdsa::SigningKey::from(synthetic_blinding_factor);
-        let binding_sig = binding_signing_key.sign(rng, &transaction_body.encode_to_vec()[..]);
-        tracing::debug!(bvk = ?rdsa::VerificationKey::from(&binding_signing_key), tx_body = ?transaction_body.encode_to_vec());
+        let auth_hash = transaction_body.auth_hash();
+        let binding_sig = binding_signing_key.sign(rng, auth_hash.as_bytes());
+        tracing::debug!(bvk = ?rdsa::VerificationKey::from(&binding_signing_key), ?auth_hash);
 
         Ok(Transaction {
             transaction_body,

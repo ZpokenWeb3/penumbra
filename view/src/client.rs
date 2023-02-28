@@ -6,7 +6,7 @@ use penumbra_chain::params::{ChainParameters, FmdParameters};
 use penumbra_crypto::asset::Id;
 use penumbra_crypto::keys::AccountID;
 use penumbra_crypto::{asset, keys::AddressIndex, note, Asset, Nullifier};
-use penumbra_crypto::{Address, Amount};
+use penumbra_crypto::{stake::IdentityKey, Address, Amount};
 use penumbra_proto::view::v1alpha1::{
     self as pb, view_protocol_service_client::ViewProtocolServiceClient, WitnessRequest,
 };
@@ -14,7 +14,7 @@ use penumbra_proto::view::v1alpha1::{
 use penumbra_transaction::{
     plan::TransactionPlan, Transaction, TransactionPerspective, WitnessData,
 };
-use tendermint;
+
 use tonic::async_trait;
 use tonic::codegen::Bytes;
 use tracing::instrument;
@@ -52,6 +52,12 @@ pub trait ViewClient {
 
     /// Queries for notes.
     async fn notes(&mut self, request: pb::NotesRequest) -> Result<Vec<SpendableNoteRecord>>;
+
+    /// Queries for notes for voting.
+    async fn notes_for_voting(
+        &mut self,
+        request: pb::NotesForVotingRequest,
+    ) -> Result<Vec<(SpendableNoteRecord, IdentityKey)>>;
 
     /// Queries for account balance by address
     async fn balance_by_address(&mut self, address: Address) -> Result<Vec<(Id, Amount)>>;
@@ -289,6 +295,36 @@ where
         Ok(notes?)
     }
 
+    async fn notes_for_voting(
+        &mut self,
+        request: pb::NotesForVotingRequest,
+    ) -> Result<Vec<(SpendableNoteRecord, IdentityKey)>> {
+        let pb_notes: Vec<_> = self
+            .notes_for_voting(tonic::Request::new(request))
+            .await?
+            .into_inner()
+            .try_collect()
+            .await?;
+
+        let notes: Result<Vec<(SpendableNoteRecord, IdentityKey)>> = pb_notes
+            .into_iter()
+            .map(|note_rsp| {
+                let note_record = note_rsp
+                    .note_record
+                    .ok_or_else(|| anyhow::anyhow!("empty NotesForVotingResponse message"))?
+                    .try_into()?;
+
+                let identity_key = note_rsp
+                    .identity_key
+                    .ok_or_else(|| anyhow::anyhow!("empty NotesForVotingResponse message"))?
+                    .try_into()?;
+
+                Ok((note_record, identity_key))
+            })
+            .collect();
+        Ok(notes?)
+    }
+
     async fn note_by_commitment(
         &mut self,
         account_id: AccountID,
@@ -444,6 +480,10 @@ where
                 plan.swap_claim_plans()
                     .map(|swap_claim| swap_claim.swap_plaintext.swap_commitment().into()),
             )
+            .chain(
+                plan.delegator_vote_plans()
+                    .map(|vote_plan| vote_plan.staked_note.commit().into()),
+            )
             .collect();
 
         let request = WitnessRequest {
@@ -467,12 +507,16 @@ where
     async fn assets(&mut self) -> Result<asset::Cache> {
         // We have to manually invoke the method on the type, because it has the
         // same name as the one we're implementing.
-        let pb_assets: Vec<_> =
-            ViewProtocolServiceClient::assets(self, tonic::Request::new(pb::AssetsRequest {}))
-                .await?
-                .into_inner()
-                .try_collect()
-                .await?;
+        let pb_assets: Vec<_> = ViewProtocolServiceClient::assets(
+            self,
+            tonic::Request::new(pb::AssetsRequest {
+                ..Default::default()
+            }),
+        )
+        .await?
+        .into_inner()
+        .try_collect()
+        .await?;
 
         let assets = pb_assets
             .into_iter()

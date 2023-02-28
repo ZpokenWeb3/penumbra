@@ -1,5 +1,4 @@
 syntax = "proto3";
-option go_package = "github.com/penumbra-zone/penumbra/proto/go-proto";
 
 package penumbra.core.crypto.v1alpha1;
 
@@ -146,5 +145,15 @@ message Clue {
 
 // An authorization hash for a Penumbra transaction.
 message EffectHash {
+  bytes inner = 1;
+}
+
+// A Penumbra ZK output proof.
+message ZKOutputProof {
+  bytes inner = 1;
+}
+
+// A Penumbra ZK spend proof.
+message ZKSpendProof {
   bytes inner = 1;
 }

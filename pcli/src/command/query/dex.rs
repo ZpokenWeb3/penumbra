@@ -33,6 +33,7 @@ impl DexCmd {
         let reserves_data: Reserves = client
             .stub_cpmm_reserves(StubCpmmReservesRequest {
                 trading_pair: Some((*trading_pair).into()),
+                chain_id: app.view().chain_params().await?.chain_id,
             })
             .await?
             .into_inner()
@@ -47,7 +48,7 @@ impl DexCmd {
             .map(|base_denom| {
                 let display_denom = base_denom.best_unit_for(reserves_data.r1);
                 (
-                    format!("{}", display_denom),
+                    format!("{display_denom}"),
                     display_denom.format_value(reserves_data.r1),
                 )
             })
@@ -62,7 +63,7 @@ impl DexCmd {
             .map(|base_denom| {
                 let display_denom = base_denom.best_unit_for(reserves_data.r2);
                 (
-                    format!("{}", display_denom),
+                    format!("{display_denom}"),
                     display_denom.format_value(reserves_data.r2),
                 )
             })
@@ -78,7 +79,7 @@ impl DexCmd {
             .add_row(vec![asset_1.0, asset_1.1])
             .add_row(vec![asset_2.0, asset_2.1]);
 
-        println!("{}", table);
+        println!("{table}");
 
         Ok(())
     }
@@ -94,6 +95,7 @@ impl DexCmd {
             .batch_swap_output_data(BatchSwapOutputDataRequest {
                 height: *height,
                 trading_pair: Some((*trading_pair).into()),
+                chain_id: app.view().chain_params().await?.chain_id,
             })
             .await?
             .into_inner()
@@ -129,7 +131,7 @@ impl DexCmd {
                         let display_denom = base_denom
                             .best_unit_for(std::cmp::max(outputs.delta_1, outputs.lambda_1).into());
                         (
-                            format!("{}", display_denom),
+                            format!("{display_denom}"),
                             display_denom.format_value(outputs.delta_1.into()),
                             display_denom.format_value(outputs.lambda_1.into()),
                         )
@@ -147,7 +149,7 @@ impl DexCmd {
                         let display_denom = base_denom
                             .best_unit_for(std::cmp::max(outputs.delta_2, outputs.lambda_2).into());
                         (
-                            format!("{}", display_denom),
+                            format!("{display_denom}"),
                             display_denom.format_value(outputs.delta_2.into()),
                             display_denom.format_value(outputs.lambda_2.into()),
                         )
@@ -168,7 +170,7 @@ impl DexCmd {
                     .add_row(vec![asset_1.0, asset_1.1, asset_1.2])
                     .add_row(vec![asset_2.0, asset_2.1, asset_2.2]);
 
-                println!("{}", table);
+                println!("{table}");
             }
         };
 

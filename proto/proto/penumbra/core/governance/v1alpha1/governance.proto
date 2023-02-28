@@ -1,5 +1,4 @@
 syntax = "proto3";
-option go_package = "github.com/penumbra-zone/penumbra/proto/go-proto";
 
 package penumbra.core.governance.v1alpha1;
 
@@ -50,26 +49,18 @@ message DelegatorVote {
 message DelegatorVoteBody {
   // The proposal being voted on.
   uint64 proposal = 1;
+  // The start position of the proposal in the TCT.
+  uint64 start_position = 2;
+  // The vote.
+  governance.v1alpha1.Vote vote = 3;
+  // The value of the delegation note.
+  crypto.v1alpha1.Value value = 4;
+  // The amount of the delegation note, in unbonded penumbra.
+  crypto.v1alpha1.Amount unbonded_amount = 5;
   // The nullifier of the input note.
-  bytes nullifier = 3;
+  bytes nullifier = 6;
   // The randomized validating key for the spend authorization signature.
-  bytes rk = 4;
-  // A commitment to the value voted for "yes".
-  //
-  // A rational voter will place all their voting weight on one vote.
-  crypto.v1alpha1.BalanceCommitment yes_balance_commitment = 5;
-  // A commitment to the value voted for "no".
-  //
-  // A rational voter will place all their voting weight on one vote.
-  crypto.v1alpha1.BalanceCommitment no_balance_commitment = 6;
-  // A commitment to the value voted for "abstain".
-  //
-  // A rational voter will place all their voting weight on one vote.
-  crypto.v1alpha1.BalanceCommitment abstain_balance_commitment = 7;
-  // A commitment to the value voted for "no with veto".
-  //
-  // A rational voter will place all their voting weight on one vote.
-  crypto.v1alpha1.BalanceCommitment no_with_veto_balance_commitment = 8;
+  bytes rk = 7;
 }
 
 message ProposalDepositClaim {
@@ -82,16 +73,20 @@ message ProposalDepositClaim {
 }
 
 message DelegatorVotePlan {
-    // The proposal to vote on.
-    uint64 proposal = 1;
-    // The vote to cast.
-    governance.v1alpha1.Vote vote = 2;
-    // The delegation note to prove that we can vote.
-    crypto.v1alpha1.Note staked_note = 3;
-    // The position of that delegation note.
-    uint64 position = 4;
-    // The randomizer to use for the proof of spend capability.
-    bytes randomizer = 5;
+  // The proposal to vote on.
+  uint64 proposal = 1;
+  // The start position of the proposal in the TCT.
+  uint64 start_position = 2;
+  // The vote to cast.
+  governance.v1alpha1.Vote vote = 3;
+  // The delegation note to prove that we can vote.
+  crypto.v1alpha1.Note staked_note = 4;
+  // The position of that delegation note.
+  uint64 staked_note_position = 5;
+  // The unbonded amount equivalent to the delegation note.
+  crypto.v1alpha1.Amount unbonded_amount = 6;
+  // The randomizer to use for the proof of spend capability.
+  bytes randomizer = 7;
 }
 
 // A vote on a proposal.
@@ -102,7 +97,6 @@ message Vote {
     VOTE_ABSTAIN = 1;
     VOTE_YES = 2;
     VOTE_NO = 3;
-    VOTE_NO_WITH_VETO = 4;
   }
 
   // The vote.

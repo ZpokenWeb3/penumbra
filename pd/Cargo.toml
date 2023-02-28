@@ -26,7 +26,7 @@ penumbra-wallet = { path = "../wallet" }
 
 # Penumbra dependencies
 decaf377 = { git = "https://github.com/penumbra-zone/decaf377" }
-tower-abci = { git = "https://github.com/penumbra-zone/tower-abci", branch = "tendermint-29" }
+tower-abci = "0.5.0"
 jmt = "0.3"
 
 
@@ -35,8 +35,8 @@ tendermint-config = "0.29.0"
 tendermint-proto = "0.29.0"
 tendermint = "0.29.0"
 tendermint-light-client-verifier = "0.29.0"
-ibc = { git = "https://github.com/erwanor/ibc-rs", branch = "tendermint-29" }
-ibc-proto = { git = "https://github.com/erwanor/ibc-proto-rs", branch = "tendermint-29" }
+ibc = "0.29"
+ibc-proto = "0.26"
 prost = "0.11"
 toml = "0.5"
 # We don't need this crate at all, but its upstream published a breaking change as
@@ -84,16 +84,12 @@ metrics-exporter-prometheus = { version = "0.10.0", features = [
 http = "0.2"
 ed25519-consensus = "2"
 
-# TODO(erwan): this is a temporary addition to satisfy compatibility
-# with tendermint-rs.
-ed25519-dalek = "1.0.1"
-
 async-trait = "0.1.52"
 tendermint-rpc = { version = "0.29.0", features = ["http-client"] }
 once_cell = "1.7.2"
 rocksdb = "0.19.0"
 tempfile = "3.3.0"
-base64 = "0.13.0"
+base64 = "0.20"
 console-subscriber = "0.1.8"
 metrics-tracing-context = "0.11.0"
 metrics-util = "0.13"

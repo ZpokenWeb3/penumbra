@@ -5,21 +5,33 @@ mod traits;
 
 pub use output::{OutputCircuit, OutputProof};
 pub use spend::{SpendCircuit, SpendProof};
-pub use traits::ParameterSetup;
+pub use traits::{ParameterSetup, VerifyingKeyExt};
+
+/// The length of our Groth16 proofs in bytes.
+pub const GROTH16_PROOF_LENGTH_BYTES: usize = 192;
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use crate::{
         asset,
         keys::{SeedPhrase, SpendKey},
+        Address, Balance, Rseed,
     };
-    use decaf377::{Fq, Fr};
+    use ark_groth16::{Groth16, PreparedVerifyingKey, ProvingKey};
+    use ark_r1cs_std::prelude::*;
+    use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
+    use ark_snark::SNARK;
+    use decaf377::{r1cs::FqVar, Bls12_377, Fq, Fr};
     use proptest::prelude::*;
 
     use decaf377_rdsa::{SpendAuth, VerificationKey};
+    use penumbra_proto::core::crypto::v1alpha1 as pb;
     use penumbra_tct as tct;
     use rand_core::OsRng;
+    use tct::Commitment;
 
     use crate::{note, Note, Value};
 
@@ -58,7 +70,7 @@ mod tests {
 
             let note = Note::generate(&mut rng, &dest, value_to_send);
             let note_commitment = note.commit();
-            let balance_commitment = value_to_send.commit(v_blinding);
+            let balance_commitment = (-Balance::from(value_to_send)).commit(v_blinding);
 
             let proof = OutputProof::prove(
                 &mut rng,
@@ -69,8 +81,10 @@ mod tests {
                 note_commitment,
             )
             .expect("can create proof");
+            let serialized_proof: pb::ZkOutputProof = proof.into();
 
-            let proof_result = proof.verify(&vk, balance_commitment, note_commitment);
+            let deserialized_proof = OutputProof::try_from(serialized_proof).expect("can deserialize proof");
+            let proof_result = deserialized_proof.verify(&vk, balance_commitment, note_commitment);
 
             assert!(proof_result.is_ok());
         }
@@ -96,7 +110,7 @@ mod tests {
 
         let note = Note::generate(&mut rng, &dest, value_to_send);
         let note_commitment = note.commit();
-        let balance_commitment = value_to_send.commit(v_blinding);
+        let balance_commitment = (-Balance::from(value_to_send)).commit(v_blinding);
 
         let proof = OutputProof::prove(
             &mut rng,
@@ -142,7 +156,7 @@ mod tests {
 
         let note = Note::generate(&mut rng, &dest, value_to_send);
         let note_commitment = note.commit();
-        let balance_commitment = value_to_send.commit(v_blinding);
+        let balance_commitment = (-Balance::from(value_to_send)).commit(v_blinding);
 
         let proof = OutputProof::prove(
             &mut rng,
@@ -154,7 +168,7 @@ mod tests {
         )
         .expect("can create proof");
 
-        let incorrect_balance_commitment = value_to_send.commit(incorrect_v_blinding);
+        let incorrect_balance_commitment = (-Balance::from(value_to_send)).commit(incorrect_v_blinding);
 
         let proof_result = proof.verify(&vk, incorrect_balance_commitment, note_commitment);
 
@@ -166,7 +180,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(2))]
     #[test]
     /// Check that the `SpendProof` verification succeeds.
-    fn spend_proof_verification_success(seed_phrase_randomness in any::<[u8; 32]>(), spend_auth_randomizer in fr_strategy(), value_amount in 2..200u64, v_blinding in fr_strategy()) {
+    fn spend_proof_verification_success(seed_phrase_randomness in any::<[u8; 32]>(), spend_auth_randomizer in fr_strategy(), value_amount in 2..2000000000u64, num_commitments in 1..2000u64, v_blinding in fr_strategy()) {
         let (pk, vk) = SpendCircuit::generate_test_parameters();
         let mut rng = OsRng;
 
@@ -187,12 +201,20 @@ mod tests {
         let nk = *sk_sender.nullifier_key();
         let ak: VerificationKey<SpendAuth> = sk_sender.spend_auth_key().into();
         let mut sct = tct::Tree::new();
+
+        // Next, we simulate the case where the SCT is not empty by adding `num_commitments`
+        // unrelated items in the SCT.
+        for _ in 0..num_commitments {
+            let random_note_commitment = Note::generate(&mut rng, &sender, value_to_send).commit();
+            sct.insert(tct::Witness::Keep, random_note_commitment).unwrap();
+        }
+
         sct.insert(tct::Witness::Keep, note_commitment).unwrap();
         let anchor = sct.root();
         let state_commitment_proof = sct.witness(note_commitment).unwrap();
         let balance_commitment = value_to_send.commit(v_blinding);
         let rk: VerificationKey<SpendAuth> = rsk.into();
-        let nf = nk.derive_nullifier(0.into(), &note_commitment);
+        let nf = nk.derive_nullifier(state_commitment_proof.position(), &note_commitment);
 
         let proof = SpendProof::prove(
             &mut rng,
@@ -551,6 +573,152 @@ mod tests {
             .expect("should be able to form proof");
 
             let proof_result = proof.verify(&vk, anchor, balance_commitment, nf, rk);
+            assert!(proof_result.is_ok());
+        }
+    }
+
+    struct MerkleProofCircuit {
+        /// Witness: Inclusion proof for the note commitment.
+        state_commitment_proof: tct::Proof,
+        /// Public input: The merkle root of the state commitment tree
+        pub anchor: tct::Root,
+    }
+
+    impl ConstraintSynthesizer<Fq> for MerkleProofCircuit {
+        fn generate_constraints(
+            self,
+            cs: ConstraintSystemRef<Fq>,
+        ) -> ark_relations::r1cs::Result<()> {
+            let merkle_path_var =
+                tct::r1cs::MerkleAuthPathVar::new(cs.clone(), self.state_commitment_proof.clone())?;
+            let anchor_var = FqVar::new_input(cs.clone(), || Ok(Fq::from(self.anchor)))?;
+            let claimed_note_commitment = note::NoteCommitmentVar::new_witness(cs.clone(), || {
+                Ok(self.state_commitment_proof.commitment())
+            })?;
+            let position_var = tct::r1cs::PositionVar::new_witness(cs.clone(), || {
+                Ok(self.state_commitment_proof.position())
+            })?;
+            merkle_path_var.verify(
+                cs.clone(),
+                &Boolean::TRUE,
+                position_var.inner,
+                anchor_var,
+                claimed_note_commitment.inner(),
+            )?;
+            Ok(())
+        }
+    }
+
+    impl ParameterSetup for MerkleProofCircuit {
+        fn generate_test_parameters() -> (ProvingKey<Bls12_377>, PreparedVerifyingKey<Bls12_377>) {
+            let seed_phrase = SeedPhrase::from_randomness([b'f'; 32]);
+            let sk_sender = SpendKey::from_seed_phrase(seed_phrase, 0);
+            let fvk_sender = sk_sender.full_viewing_key();
+            let ivk_sender = fvk_sender.incoming();
+            let (address, _dtk_d) = ivk_sender.payment_address(0u32.into());
+
+            let note = Note::from_parts(
+                address,
+                Value::from_str("1upenumbra").expect("valid value"),
+                Rseed([1u8; 32]),
+            )
+            .expect("can make a note");
+            let mut sct = tct::Tree::new();
+            let note_commitment = note.commit();
+            sct.insert(tct::Witness::Keep, note_commitment).unwrap();
+            let anchor = sct.root();
+            let state_commitment_proof = sct.witness(note_commitment).unwrap();
+            let circuit = MerkleProofCircuit {
+                state_commitment_proof,
+                anchor,
+            };
+            let (pk, vk) = Groth16::circuit_specific_setup(circuit, &mut OsRng)
+                .expect("can perform circuit specific setup");
+            (pk, vk.into())
+        }
+    }
+
+    fn make_random_note_commitment(address: Address) -> Commitment {
+        let note = Note::from_parts(
+            address,
+            Value::from_str("1upenumbra").expect("valid value"),
+            Rseed([1u8; 32]),
+        )
+        .expect("can make a note");
+        note.commit()
+    }
+
+    #[test]
+    fn merkle_proof_verification_succeeds() {
+        let (pk, vk) = MerkleProofCircuit::generate_test_parameters();
+        let mut rng = OsRng;
+
+        let seed_phrase = SeedPhrase::from_randomness([b'f'; 32]);
+        let sk_sender = SpendKey::from_seed_phrase(seed_phrase, 0);
+        let fvk_sender = sk_sender.full_viewing_key();
+        let ivk_sender = fvk_sender.incoming();
+        let (address, _dtk_d) = ivk_sender.payment_address(0u32.into());
+        // We will incrementally add notes to the state commitment tree, checking the merkle proofs verify
+        // at each step.
+        let mut sct = tct::Tree::new();
+
+        for _ in 0..5 {
+            let note_commitment = make_random_note_commitment(address);
+            sct.insert(tct::Witness::Keep, note_commitment).unwrap();
+            let anchor = sct.root();
+            let state_commitment_proof = sct.witness(note_commitment).unwrap();
+            let circuit = MerkleProofCircuit {
+                state_commitment_proof,
+                anchor,
+            };
+            let proof =
+                Groth16::prove(&pk, circuit, &mut rng).expect("should be able to form proof");
+
+            let proof_result = Groth16::verify_with_processed_vk(&vk, &[Fq::from(anchor)], &proof);
+            assert!(proof_result.is_ok());
+        }
+
+        sct.end_block().expect("can end block");
+        for _ in 0..100 {
+            let note_commitment = make_random_note_commitment(address);
+            sct.insert(tct::Witness::Forget, note_commitment).unwrap();
+        }
+
+        for _ in 0..5 {
+            let note_commitment = make_random_note_commitment(address);
+            sct.insert(tct::Witness::Keep, note_commitment).unwrap();
+            let anchor = sct.root();
+            let state_commitment_proof = sct.witness(note_commitment).unwrap();
+            let circuit = MerkleProofCircuit {
+                state_commitment_proof,
+                anchor,
+            };
+            let proof =
+                Groth16::prove(&pk, circuit, &mut rng).expect("should be able to form proof");
+
+            let proof_result = Groth16::verify_with_processed_vk(&vk, &[Fq::from(anchor)], &proof);
+            assert!(proof_result.is_ok());
+        }
+
+        sct.end_epoch().expect("can end epoch");
+        for _ in 0..100 {
+            let note_commitment = make_random_note_commitment(address);
+            sct.insert(tct::Witness::Forget, note_commitment).unwrap();
+        }
+
+        for _ in 0..5 {
+            let note_commitment = make_random_note_commitment(address);
+            sct.insert(tct::Witness::Keep, note_commitment).unwrap();
+            let anchor = sct.root();
+            let state_commitment_proof = sct.witness(note_commitment).unwrap();
+            let circuit = MerkleProofCircuit {
+                state_commitment_proof,
+                anchor,
+            };
+            let proof =
+                Groth16::prove(&pk, circuit, &mut rng).expect("should be able to form proof");
+
+            let proof_result = Groth16::verify_with_processed_vk(&vk, &[Fq::from(anchor)], &proof);
             assert!(proof_result.is_ok());
         }
     }

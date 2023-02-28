@@ -9,6 +9,7 @@ use penumbra_transaction::{Action, Transaction};
 use super::ActionHandler;
 
 mod delegate;
+mod delegator_vote;
 mod ibc_action;
 mod ics20;
 mod output;
@@ -30,6 +31,7 @@ impl ActionHandler for Action {
             Action::Undelegate(action) => action.check_stateless(context),
             Action::UndelegateClaim(action) => action.check_stateless(context),
             Action::ValidatorDefinition(action) => action.check_stateless(context),
+            Action::DelegatorVote(action) => action.check_stateless(context),
             Action::ValidatorVote(action) => action.check_stateless(context),
             Action::PositionClose(action) => action.check_stateless(context),
             Action::PositionOpen(action) => action.check_stateless(context),
@@ -48,12 +50,13 @@ impl ActionHandler for Action {
         .await
     }
 
-    async fn check_stateful<S: StateRead>(&self, state: Arc<S>) -> Result<()> {
+    async fn check_stateful<S: StateRead + 'static>(&self, state: Arc<S>) -> Result<()> {
         match self {
             Action::Delegate(action) => action.check_stateful(state).await,
             Action::Undelegate(action) => action.check_stateful(state).await,
             Action::UndelegateClaim(action) => action.check_stateful(state).await,
             Action::ValidatorDefinition(action) => action.check_stateful(state).await,
+            Action::DelegatorVote(action) => action.check_stateful(state).await,
             Action::ValidatorVote(action) => action.check_stateful(state).await,
             Action::PositionClose(action) => action.check_stateful(state).await,
             Action::PositionOpen(action) => action.check_stateful(state).await,
@@ -85,6 +88,7 @@ impl ActionHandler for Action {
             Action::Undelegate(action) => action.execute(state).await,
             Action::UndelegateClaim(action) => action.execute(state).await,
             Action::ValidatorDefinition(action) => action.execute(state).await,
+            Action::DelegatorVote(action) => action.execute(state).await,
             Action::ValidatorVote(action) => action.execute(state).await,
             Action::PositionClose(action) => action.execute(state).await,
             Action::PositionOpen(action) => action.execute(state).await,

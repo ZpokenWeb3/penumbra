@@ -32,7 +32,7 @@ pub use swap::Swap;
 pub use swap_claim::SwapClaim;
 pub use undelegate::Undelegate;
 pub use undelegate_claim::{UndelegateClaim, UndelegateClaimBody};
-pub use vote::{DelegatorVote, ValidatorVote, ValidatorVoteBody, Vote};
+pub use vote::{DelegatorVote, DelegatorVoteBody, ValidatorVote, ValidatorVoteBody, Vote};
 
 /// Common behavior between Penumbra actions.
 pub trait IsAction {
@@ -52,7 +52,7 @@ pub enum Action {
     SwapClaim(SwapClaim),
     ProposalSubmit(ProposalSubmit),
     ProposalWithdraw(ProposalWithdraw),
-    // DelegatorVote(DelegatorVote),
+    DelegatorVote(DelegatorVote),
     ValidatorVote(ValidatorVote),
     ProposalDepositClaim(ProposalDepositClaim),
 
@@ -68,6 +68,45 @@ pub enum Action {
     Ics20Withdrawal(Ics20Withdrawal),
 }
 
+impl Action {
+    /// Create a tracing span to track execution related to this action.
+    ///
+    /// The `idx` parameter is the index of this action in the transaction.
+    pub fn create_span(&self, idx: usize) -> tracing::Span {
+        match self {
+            Action::Output(_) => tracing::info_span!("Output", ?idx),
+            Action::Spend(_) => tracing::info_span!("Spend", ?idx),
+            Action::ValidatorDefinition(_) => {
+                tracing::info_span!("ValidatorDefinition", ?idx)
+            }
+            Action::IBCAction(_) => tracing::info_span!("IbcAction", ?idx),
+            Action::Swap(_) => tracing::info_span!("Swap", ?idx),
+            Action::SwapClaim(_) => tracing::info_span!("SwapClaim", ?idx),
+            Action::ProposalSubmit(_) => tracing::info_span!("ProposalSubmit", ?idx),
+            Action::ProposalWithdraw(_) => {
+                tracing::info_span!("ProposalWithdraw", ?idx)
+            }
+            Action::DelegatorVote(_) => tracing::info_span!("DelegatorVote", ?idx),
+            Action::ValidatorVote(_) => tracing::info_span!("ValidatorVote", ?idx),
+            Action::ProposalDepositClaim(_) => {
+                tracing::info_span!("ProposalDepositClaim", ?idx)
+            }
+            Action::PositionOpen(_) => tracing::info_span!("PositionOpen", ?idx),
+            Action::PositionClose(_) => tracing::info_span!("PositionClose", ?idx),
+            Action::PositionWithdraw(_) => {
+                tracing::info_span!("PositionWithdraw", ?idx)
+            }
+            Action::PositionRewardClaim(_) => {
+                tracing::info_span!("PositionRewardClaim", ?idx)
+            }
+            Action::Delegate(_) => tracing::info_span!("Delegate", ?idx),
+            Action::Undelegate(_) => tracing::info_span!("Undelegate", ?idx),
+            Action::UndelegateClaim(_) => tracing::info_span!("UndelegateClaim", ?idx),
+            Action::Ics20Withdrawal(_) => tracing::info_span!("Ics20Withdrawal", ?idx),
+        }
+    }
+}
+
 impl IsAction for Action {
     fn balance_commitment(&self) -> balance::Commitment {
         match self {
@@ -80,8 +119,8 @@ impl IsAction for Action {
             Action::SwapClaim(swap_claim) => swap_claim.balance_commitment(),
             Action::ProposalSubmit(submit) => submit.balance_commitment(),
             Action::ProposalWithdraw(withdraw) => withdraw.balance_commitment(),
-            // Action::DelegatorVote(_) => ...
-            Action::ValidatorVote(v) => v.balance_commitment(),
+            Action::DelegatorVote(delegator_vote) => delegator_vote.balance_commitment(),
+            Action::ValidatorVote(validator_vote) => validator_vote.balance_commitment(),
             Action::ProposalDepositClaim(p) => p.balance_commitment(),
             Action::PositionOpen(p) => p.balance_commitment(),
             Action::PositionClose(p) => p.balance_commitment(),
@@ -106,6 +145,7 @@ impl IsAction for Action {
             Action::UndelegateClaim(x) => x.view_from_perspective(txp),
             Action::ProposalSubmit(x) => x.view_from_perspective(txp),
             Action::ProposalWithdraw(x) => x.view_from_perspective(txp),
+            Action::DelegatorVote(x) => x.view_from_perspective(txp),
             Action::ValidatorVote(x) => x.view_from_perspective(txp),
             Action::ProposalDepositClaim(x) => x.view_from_perspective(txp),
             Action::PositionOpen(x) => x.view_from_perspective(txp),
@@ -160,9 +200,9 @@ impl From<Action> for pb::Action {
             Action::ProposalWithdraw(inner) => pb::Action {
                 action: Some(pb::action::Action::ProposalWithdraw(inner.into())),
             },
-            // Action::DelegatorVote(inner) => pb::Action {
-            //     action: Some(pb::action::Action::DelegatorVote(inner.into())),
-            // },
+            Action::DelegatorVote(inner) => pb::Action {
+                action: Some(pb::action::Action::DelegatorVote(inner.into())),
+            },
             Action::ValidatorVote(inner) => pb::Action {
                 action: Some(pb::action::Action::ValidatorVote(inner.into())),
             },
@@ -214,9 +254,9 @@ impl TryFrom<pb::Action> for Action {
             pb::action::Action::ProposalWithdraw(inner) => {
                 Ok(Action::ProposalWithdraw(inner.try_into()?))
             }
-            // pb::action::Action::DelegatorVote(inner) => {
-            //     Ok(Action::DelegatorVote(inner.try_into()?))
-            // }
+            pb::action::Action::DelegatorVote(inner) => {
+                Ok(Action::DelegatorVote(inner.try_into()?))
+            }
             pb::action::Action::ValidatorVote(inner) => {
                 Ok(Action::ValidatorVote(inner.try_into()?))
             }

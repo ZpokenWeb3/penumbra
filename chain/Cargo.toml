@@ -8,15 +8,14 @@ edition = "2021"
 penumbra-proto = { path = "../proto" }
 penumbra-storage = { path = "../storage",  optional = true }
 penumbra-crypto = { path = "../crypto" }
-penumbra-transaction = { path = "../transaction", optional = true }
+# penumbra-transaction = { path = "../transaction" }
 penumbra-tct = { path = "../tct" }
 
 # Penumbra dependencies
 decaf377 = { git = "https://github.com/penumbra-zone/decaf377" }
-#jmt = "0.3"
 
 tendermint = "0.29.0"
-#ibc = { git = "https://github.com/erwanor/ibc-rs", branch = "tendermint-29" }
+ibc = "0.29"
 ics23 = "0.9.0"
 
 # Crates.io deps

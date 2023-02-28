@@ -45,7 +45,7 @@ pub struct TransactionBody {
 pub struct Action {
     #[prost(
         oneof = "action::Action",
-        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 22, 30, 31, 32, 34, 40, 41, 42, 200"
+        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 200"
     )]
     pub action: ::core::option::Option<action::Action>,
 }
@@ -73,7 +73,8 @@ pub mod action {
         ProposalWithdraw(super::super::super::governance::v1alpha1::ProposalWithdraw),
         #[prost(message, tag = "20")]
         ValidatorVote(super::super::super::governance::v1alpha1::ValidatorVote),
-        /// DelegatorVote delegator_vote = 21;
+        #[prost(message, tag = "21")]
+        DelegatorVote(super::super::super::governance::v1alpha1::DelegatorVote),
         #[prost(message, tag = "22")]
         ProposalDepositClaim(
             super::super::super::governance::v1alpha1::ProposalDepositClaim,
@@ -159,7 +160,7 @@ pub struct TransactionView {
 pub struct ActionView {
     #[prost(
         oneof = "action_view::ActionView",
-        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 22, 30, 31, 32, 34, 41, 42, 43, 200"
+        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 41, 42, 43, 200"
     )]
     pub action_view: ::core::option::Option<action_view::ActionView>,
 }
@@ -189,11 +190,12 @@ pub mod action_view {
         ProposalWithdraw(super::super::super::governance::v1alpha1::ProposalWithdraw),
         #[prost(message, tag = "20")]
         ValidatorVote(super::super::super::governance::v1alpha1::ValidatorVote),
+        #[prost(message, tag = "21")]
+        DelegatorVote(super::DelegatorVoteView),
         #[prost(message, tag = "22")]
         ProposalDepositClaim(
             super::super::super::governance::v1alpha1::ProposalDepositClaim,
         ),
-        /// DelegatorVote delegator_vote = 21;
         #[prost(message, tag = "30")]
         PositionOpen(super::super::super::dex::v1alpha1::PositionOpen),
         #[prost(message, tag = "31")]
@@ -240,6 +242,41 @@ pub mod spend_view {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum SpendView {
+        #[prost(message, tag = "1")]
+        Visible(Visible),
+        #[prost(message, tag = "2")]
+        Opaque(Opaque),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DelegatorVoteView {
+    #[prost(oneof = "delegator_vote_view::DelegatorVote", tags = "1, 2")]
+    pub delegator_vote: ::core::option::Option<delegator_vote_view::DelegatorVote>,
+}
+/// Nested message and enum types in `DelegatorVoteView`.
+pub mod delegator_vote_view {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Visible {
+        #[prost(message, optional, tag = "1")]
+        pub delegator_vote: ::core::option::Option<
+            super::super::super::governance::v1alpha1::DelegatorVote,
+        >,
+        #[prost(message, optional, tag = "2")]
+        pub note: ::core::option::Option<super::super::super::crypto::v1alpha1::Note>,
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Opaque {
+        #[prost(message, optional, tag = "1")]
+        pub delegator_vote: ::core::option::Option<
+            super::super::super::governance::v1alpha1::DelegatorVote,
+        >,
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum DelegatorVote {
         #[prost(message, tag = "1")]
         Visible(Visible),
         #[prost(message, tag = "2")]
@@ -329,8 +366,8 @@ pub struct Spend {
         super::super::crypto::v1alpha1::SpendAuthSignature,
     >,
     /// The proof that the spend is well-formed is authorizing data.
-    #[prost(bytes = "bytes", tag = "3")]
-    pub proof: ::prost::bytes::Bytes,
+    #[prost(message, optional, tag = "3")]
+    pub proof: ::core::option::Option<super::super::crypto::v1alpha1::ZkSpendProof>,
 }
 /// The body of a spend description, containing only the effecting data
 /// describing changes to the ledger, and not the authorizing data that allows
@@ -358,8 +395,8 @@ pub struct Output {
     #[prost(message, optional, tag = "1")]
     pub body: ::core::option::Option<OutputBody>,
     /// The output proof is authorizing data.
-    #[prost(bytes = "bytes", tag = "2")]
-    pub proof: ::prost::bytes::Bytes,
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<super::super::crypto::v1alpha1::ZkOutputProof>,
 }
 /// The body of an output description, containing only the effecting data
 /// describing changes to the ledger, and not the authorizing data that allows
@@ -396,6 +433,12 @@ pub struct AuthorizationData {
     /// Spend actions in the original request.
     #[prost(message, repeated, tag = "2")]
     pub spend_auths: ::prost::alloc::vec::Vec<
+        super::super::crypto::v1alpha1::SpendAuthSignature,
+    >,
+    /// The required delegator vote authorizations, returned in the same order as the
+    /// DelegatorVote actions in the original request.
+    #[prost(message, repeated, tag = "3")]
+    pub delegator_vote_auths: ::prost::alloc::vec::Vec<
         super::super::crypto::v1alpha1::SpendAuthSignature,
     >,
 }

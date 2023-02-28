@@ -39,6 +39,9 @@ impl serde::Serialize for Action {
                 action::Action::ValidatorVote(v) => {
                     struct_ser.serialize_field("validatorVote", v)?;
                 }
+                action::Action::DelegatorVote(v) => {
+                    struct_ser.serialize_field("delegatorVote", v)?;
+                }
                 action::Action::ProposalDepositClaim(v) => {
                     struct_ser.serialize_field("proposalDepositClaim", v)?;
                 }
@@ -93,6 +96,8 @@ impl<'de> serde::Deserialize<'de> for Action {
             "proposalWithdraw",
             "validator_vote",
             "validatorVote",
+            "delegator_vote",
+            "delegatorVote",
             "proposal_deposit_claim",
             "proposalDepositClaim",
             "position_open",
@@ -122,6 +127,7 @@ impl<'de> serde::Deserialize<'de> for Action {
             ProposalSubmit,
             ProposalWithdraw,
             ValidatorVote,
+            DelegatorVote,
             ProposalDepositClaim,
             PositionOpen,
             PositionClose,
@@ -161,6 +167,7 @@ impl<'de> serde::Deserialize<'de> for Action {
                             "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
                             "proposalWithdraw" | "proposal_withdraw" => Ok(GeneratedField::ProposalWithdraw),
                             "validatorVote" | "validator_vote" => Ok(GeneratedField::ValidatorVote),
+                            "delegatorVote" | "delegator_vote" => Ok(GeneratedField::DelegatorVote),
                             "proposalDepositClaim" | "proposal_deposit_claim" => Ok(GeneratedField::ProposalDepositClaim),
                             "positionOpen" | "position_open" => Ok(GeneratedField::PositionOpen),
                             "positionClose" | "position_close" => Ok(GeneratedField::PositionClose),
@@ -253,6 +260,13 @@ impl<'de> serde::Deserialize<'de> for Action {
                                 return Err(serde::de::Error::duplicate_field("validatorVote"));
                             }
                             action__ = map.next_value::<::std::option::Option<_>>()?.map(action::Action::ValidatorVote)
+;
+                        }
+                        GeneratedField::DelegatorVote => {
+                            if action__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("delegatorVote"));
+                            }
+                            action__ = map.next_value::<::std::option::Option<_>>()?.map(action::Action::DelegatorVote)
 ;
                         }
                         GeneratedField::ProposalDepositClaim => {
@@ -699,6 +713,9 @@ impl serde::Serialize for ActionView {
                 action_view::ActionView::ValidatorVote(v) => {
                     struct_ser.serialize_field("validatorVote", v)?;
                 }
+                action_view::ActionView::DelegatorVote(v) => {
+                    struct_ser.serialize_field("delegatorVote", v)?;
+                }
                 action_view::ActionView::ProposalDepositClaim(v) => {
                     struct_ser.serialize_field("proposalDepositClaim", v)?;
                 }
@@ -753,6 +770,8 @@ impl<'de> serde::Deserialize<'de> for ActionView {
             "proposalWithdraw",
             "validator_vote",
             "validatorVote",
+            "delegator_vote",
+            "delegatorVote",
             "proposal_deposit_claim",
             "proposalDepositClaim",
             "position_open",
@@ -782,6 +801,7 @@ impl<'de> serde::Deserialize<'de> for ActionView {
             ProposalSubmit,
             ProposalWithdraw,
             ValidatorVote,
+            DelegatorVote,
             ProposalDepositClaim,
             PositionOpen,
             PositionClose,
@@ -821,6 +841,7 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                             "proposalSubmit" | "proposal_submit" => Ok(GeneratedField::ProposalSubmit),
                             "proposalWithdraw" | "proposal_withdraw" => Ok(GeneratedField::ProposalWithdraw),
                             "validatorVote" | "validator_vote" => Ok(GeneratedField::ValidatorVote),
+                            "delegatorVote" | "delegator_vote" => Ok(GeneratedField::DelegatorVote),
                             "proposalDepositClaim" | "proposal_deposit_claim" => Ok(GeneratedField::ProposalDepositClaim),
                             "positionOpen" | "position_open" => Ok(GeneratedField::PositionOpen),
                             "positionClose" | "position_close" => Ok(GeneratedField::PositionClose),
@@ -913,6 +934,13 @@ impl<'de> serde::Deserialize<'de> for ActionView {
                                 return Err(serde::de::Error::duplicate_field("validatorVote"));
                             }
                             action_view__ = map.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::ValidatorVote)
+;
+                        }
+                        GeneratedField::DelegatorVote => {
+                            if action_view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("delegatorVote"));
+                            }
+                            action_view__ = map.next_value::<::std::option::Option<_>>()?.map(action_view::ActionView::DelegatorVote)
 ;
                         }
                         GeneratedField::ProposalDepositClaim => {
@@ -1310,12 +1338,18 @@ impl serde::Serialize for AuthorizationData {
         if !self.spend_auths.is_empty() {
             len += 1;
         }
+        if !self.delegator_vote_auths.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.AuthorizationData", len)?;
         if let Some(v) = self.effect_hash.as_ref() {
             struct_ser.serialize_field("effectHash", v)?;
         }
         if !self.spend_auths.is_empty() {
             struct_ser.serialize_field("spendAuths", &self.spend_auths)?;
+        }
+        if !self.delegator_vote_auths.is_empty() {
+            struct_ser.serialize_field("delegatorVoteAuths", &self.delegator_vote_auths)?;
         }
         struct_ser.end()
     }
@@ -1331,12 +1365,15 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
             "effectHash",
             "spend_auths",
             "spendAuths",
+            "delegator_vote_auths",
+            "delegatorVoteAuths",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             EffectHash,
             SpendAuths,
+            DelegatorVoteAuths,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1360,6 +1397,7 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
                         match value {
                             "effectHash" | "effect_hash" => Ok(GeneratedField::EffectHash),
                             "spendAuths" | "spend_auths" => Ok(GeneratedField::SpendAuths),
+                            "delegatorVoteAuths" | "delegator_vote_auths" => Ok(GeneratedField::DelegatorVoteAuths),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1381,6 +1419,7 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
             {
                 let mut effect_hash__ = None;
                 let mut spend_auths__ = None;
+                let mut delegator_vote_auths__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::EffectHash => {
@@ -1395,11 +1434,18 @@ impl<'de> serde::Deserialize<'de> for AuthorizationData {
                             }
                             spend_auths__ = Some(map.next_value()?);
                         }
+                        GeneratedField::DelegatorVoteAuths => {
+                            if delegator_vote_auths__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("delegatorVoteAuths"));
+                            }
+                            delegator_vote_auths__ = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(AuthorizationData {
                     effect_hash: effect_hash__,
                     spend_auths: spend_auths__.unwrap_or_default(),
+                    delegator_vote_auths: delegator_vote_auths__.unwrap_or_default(),
                 })
             }
         }
@@ -1534,6 +1580,316 @@ impl<'de> serde::Deserialize<'de> for CluePlan {
             }
         }
         deserializer.deserialize_struct("penumbra.core.transaction.v1alpha1.CluePlan", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for DelegatorVoteView {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.delegator_vote.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.DelegatorVoteView", len)?;
+        if let Some(v) = self.delegator_vote.as_ref() {
+            match v {
+                delegator_vote_view::DelegatorVote::Visible(v) => {
+                    struct_ser.serialize_field("visible", v)?;
+                }
+                delegator_vote_view::DelegatorVote::Opaque(v) => {
+                    struct_ser.serialize_field("opaque", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for DelegatorVoteView {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "visible",
+            "opaque",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Visible,
+            Opaque,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "visible" => Ok(GeneratedField::Visible),
+                            "opaque" => Ok(GeneratedField::Opaque),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = DelegatorVoteView;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.transaction.v1alpha1.DelegatorVoteView")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<DelegatorVoteView, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut delegator_vote__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Visible => {
+                            if delegator_vote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("visible"));
+                            }
+                            delegator_vote__ = map.next_value::<::std::option::Option<_>>()?.map(delegator_vote_view::DelegatorVote::Visible)
+;
+                        }
+                        GeneratedField::Opaque => {
+                            if delegator_vote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("opaque"));
+                            }
+                            delegator_vote__ = map.next_value::<::std::option::Option<_>>()?.map(delegator_vote_view::DelegatorVote::Opaque)
+;
+                        }
+                    }
+                }
+                Ok(DelegatorVoteView {
+                    delegator_vote: delegator_vote__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.transaction.v1alpha1.DelegatorVoteView", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for delegator_vote_view::Opaque {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.delegator_vote.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.DelegatorVoteView.Opaque", len)?;
+        if let Some(v) = self.delegator_vote.as_ref() {
+            struct_ser.serialize_field("delegatorVote", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for delegator_vote_view::Opaque {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "delegator_vote",
+            "delegatorVote",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            DelegatorVote,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "delegatorVote" | "delegator_vote" => Ok(GeneratedField::DelegatorVote),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = delegator_vote_view::Opaque;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.transaction.v1alpha1.DelegatorVoteView.Opaque")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<delegator_vote_view::Opaque, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut delegator_vote__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::DelegatorVote => {
+                            if delegator_vote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("delegatorVote"));
+                            }
+                            delegator_vote__ = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(delegator_vote_view::Opaque {
+                    delegator_vote: delegator_vote__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.transaction.v1alpha1.DelegatorVoteView.Opaque", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for delegator_vote_view::Visible {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.delegator_vote.is_some() {
+            len += 1;
+        }
+        if self.note.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.DelegatorVoteView.Visible", len)?;
+        if let Some(v) = self.delegator_vote.as_ref() {
+            struct_ser.serialize_field("delegatorVote", v)?;
+        }
+        if let Some(v) = self.note.as_ref() {
+            struct_ser.serialize_field("note", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for delegator_vote_view::Visible {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "delegator_vote",
+            "delegatorVote",
+            "note",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            DelegatorVote,
+            Note,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "delegatorVote" | "delegator_vote" => Ok(GeneratedField::DelegatorVote),
+                            "note" => Ok(GeneratedField::Note),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = delegator_vote_view::Visible;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct penumbra.core.transaction.v1alpha1.DelegatorVoteView.Visible")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<delegator_vote_view::Visible, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut delegator_vote__ = None;
+                let mut note__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::DelegatorVote => {
+                            if delegator_vote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("delegatorVote"));
+                            }
+                            delegator_vote__ = map.next_value()?;
+                        }
+                        GeneratedField::Note => {
+                            if note__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("note"));
+                            }
+                            note__ = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(delegator_vote_view::Visible {
+                    delegator_vote: delegator_vote__,
+                    note: note__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("penumbra.core.transaction.v1alpha1.DelegatorVoteView.Visible", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for MemoPlan {
@@ -1767,15 +2123,15 @@ impl serde::Serialize for Output {
         if self.body.is_some() {
             len += 1;
         }
-        if !self.proof.is_empty() {
+        if self.proof.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.Output", len)?;
         if let Some(v) = self.body.as_ref() {
             struct_ser.serialize_field("body", v)?;
         }
-        if !self.proof.is_empty() {
-            struct_ser.serialize_field("proof", pbjson::private::base64::encode(&self.proof).as_str())?;
+        if let Some(v) = self.proof.as_ref() {
+            struct_ser.serialize_field("proof", v)?;
         }
         struct_ser.end()
     }
@@ -1851,15 +2207,13 @@ impl<'de> serde::Deserialize<'de> for Output {
                             if proof__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("proof"));
                             }
-                            proof__ = 
-                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
-                            ;
+                            proof__ = map.next_value()?;
                         }
                     }
                 }
                 Ok(Output {
                     body: body__,
-                    proof: proof__.unwrap_or_default(),
+                    proof: proof__,
                 })
             }
         }
@@ -2617,7 +2971,7 @@ impl serde::Serialize for Spend {
         if self.auth_sig.is_some() {
             len += 1;
         }
-        if !self.proof.is_empty() {
+        if self.proof.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.Spend", len)?;
@@ -2627,8 +2981,8 @@ impl serde::Serialize for Spend {
         if let Some(v) = self.auth_sig.as_ref() {
             struct_ser.serialize_field("authSig", v)?;
         }
-        if !self.proof.is_empty() {
-            struct_ser.serialize_field("proof", pbjson::private::base64::encode(&self.proof).as_str())?;
+        if let Some(v) = self.proof.as_ref() {
+            struct_ser.serialize_field("proof", v)?;
         }
         struct_ser.end()
     }
@@ -2715,16 +3069,14 @@ impl<'de> serde::Deserialize<'de> for Spend {
                             if proof__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("proof"));
                             }
-                            proof__ = 
-                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
-                            ;
+                            proof__ = map.next_value()?;
                         }
                     }
                 }
                 Ok(Spend {
                     body: body__,
                     auth_sig: auth_sig__,
-                    proof: proof__.unwrap_or_default(),
+                    proof: proof__,
                 })
             }
         }

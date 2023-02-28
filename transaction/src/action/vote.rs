@@ -3,27 +3,37 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::anyhow;
-use decaf377_rdsa::{Signature, SpendAuth};
-use penumbra_crypto::{stake::IdentityKey, GovernanceKey};
+use anyhow::{anyhow, Context};
+use ark_ff::Zero;
+use decaf377::Fr;
+use decaf377_rdsa::{Signature, SpendAuth, VerificationKey};
+use penumbra_crypto::{
+    proofs::transparent::DelegatorVoteProof, stake::IdentityKey, Amount, GovernanceKey, Nullifier,
+    Value, VotingReceiptToken,
+};
 use penumbra_proto::{core::governance::v1alpha1 as pb, DomainType};
+use penumbra_tct as tct;
 use serde::{Deserialize, Serialize};
 
-use crate::{ActionView, IsAction, TransactionPerspective};
+use crate::{
+    view::action_view::DelegatorVoteView, Action, ActionView, IsAction, TransactionPerspective,
+};
 
 /// A vote on a proposal.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(try_from = "pb::Vote", into = "pb::Vote")]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
+#[cfg_attr(feature = "clap", derive(clap::Subcommand))]
 pub enum Vote {
-    /// The vote is to approve the proposal.
+    /// Vote to approve the proposal.
+    #[cfg_attr(feature = "clap", clap(display_order = 100))]
     Yes,
-    /// The vote is to reject the proposal.
+    /// Vote is to reject the proposal.
+    #[cfg_attr(feature = "clap", clap(display_order = 200))]
     No,
-    /// The vote is to abstain from the proposal.
+    /// Vote to abstain from the proposal.
+    #[cfg_attr(feature = "clap", clap(display_order = 300))]
     Abstain,
-    /// The vote is to reject the proposal, and burn the deposit of the proposer.
-    NoWithVeto,
 }
 
 impl FromStr for Vote {
@@ -34,7 +44,6 @@ impl FromStr for Vote {
             "yes" | "y" => Ok(Vote::Yes),
             "no" | "n" => Ok(Vote::No),
             "abstain" | "a" => Ok(Vote::Abstain),
-            "veto" | "noveto" | "nowithveto" | "v" => Ok(Vote::NoWithVeto),
             _ => Err(anyhow::anyhow!("invalid vote: {}", s)),
         }
     }
@@ -46,7 +55,6 @@ impl Display for Vote {
             Vote::Yes => write!(f, "yes"),
             Vote::No => write!(f, "no"),
             Vote::Abstain => write!(f, "abstain"),
-            Vote::NoWithVeto => write!(f, "no_with_veto"),
         }
     }
 }
@@ -69,9 +77,6 @@ const fn pb_from_vote(vote: Vote) -> pb::Vote {
         Vote::Abstain => pb::Vote {
             vote: pb::vote::Vote::Abstain as i32,
         },
-        Vote::NoWithVeto => pb::Vote {
-            vote: pb::vote::Vote::NoWithVeto as i32,
-        },
     }
 }
 
@@ -86,7 +91,6 @@ impl TryFrom<pb::Vote> for Vote {
             pb::vote::Vote::Abstain => Ok(Vote::Abstain),
             pb::vote::Vote::Yes => Ok(Vote::Yes),
             pb::vote::Vote::No => Ok(Vote::No),
-            pb::vote::Vote::NoWithVeto => Ok(Vote::NoWithVeto),
             pb::vote::Vote::Unspecified => Err(anyhow!("unspecified vote state")),
         }
     }
@@ -211,11 +215,140 @@ impl DomainType for ValidatorVoteBody {
 
 #[derive(Debug, Clone)]
 pub struct DelegatorVote {
-    // TODO: fill this in
     pub body: DelegatorVoteBody,
+    pub auth_sig: Signature<SpendAuth>,
+    pub proof: DelegatorVoteProof,
 }
 
+impl IsAction for DelegatorVote {
+    fn balance_commitment(&self) -> penumbra_crypto::balance::Commitment {
+        Value {
+            asset_id: VotingReceiptToken::new(self.body.proposal).id(),
+            amount: self.body.unbonded_amount,
+        }
+        .commit(Fr::zero())
+    }
+
+    fn view_from_perspective(&self, txp: &TransactionPerspective) -> ActionView {
+        let delegator_vote_view = match txp.spend_nullifiers.get(&self.body.nullifier) {
+            Some(note) => DelegatorVoteView::Visible {
+                delegator_vote: self.to_owned(),
+                note: note.to_owned(),
+            },
+            None => DelegatorVoteView::Opaque {
+                delegator_vote: self.to_owned(),
+            },
+        };
+
+        ActionView::DelegatorVote(delegator_vote_view)
+    }
+}
+
+/// The body of a delegator vote.
 #[derive(Debug, Clone)]
 pub struct DelegatorVoteBody {
-    // TODO: fill this in
+    /// The proposal ID the vote is for.
+    pub proposal: u64,
+    /// The start position of the proposal in the TCT.
+    pub start_position: tct::Position,
+    /// The vote on the proposal.
+    pub vote: Vote, // With flow encryption, this will be a triple of flow ciphertexts
+    /// The value of the staked note being used to vote.
+    pub value: Value, // With flow encryption, this will be a triple of balance commitments, and a public denomination
+    /// The unbonded amount equivalent to the value above
+    pub unbonded_amount: Amount,
+    /// The nullifier of the staked note being used to vote.
+    pub nullifier: Nullifier,
+    /// The randomized validating key for the spend authorization signature.
+    pub rk: VerificationKey<SpendAuth>,
+}
+
+impl From<DelegatorVoteBody> for pb::DelegatorVoteBody {
+    fn from(value: DelegatorVoteBody) -> Self {
+        pb::DelegatorVoteBody {
+            proposal: value.proposal,
+            start_position: value.start_position.into(),
+            vote: Some(value.vote.into()),
+            value: Some(value.value.into()),
+            unbonded_amount: Some(value.unbonded_amount.into()),
+            nullifier: value.nullifier.to_bytes().into(),
+            rk: value.rk.to_bytes().into(),
+        }
+    }
+}
+
+impl TryFrom<pb::DelegatorVoteBody> for DelegatorVoteBody {
+    type Error = anyhow::Error;
+
+    fn try_from(msg: pb::DelegatorVoteBody) -> Result<Self, Self::Error> {
+        Ok(DelegatorVoteBody {
+            proposal: msg.proposal,
+            start_position: msg
+                .start_position
+                .try_into()
+                .context("invalid start position in `DelegatorVote`")?,
+            vote: msg
+                .vote
+                .ok_or_else(|| anyhow::anyhow!("missing vote in `DelegatorVote`"))?
+                .try_into()?,
+            value: msg
+                .value
+                .ok_or_else(|| anyhow::anyhow!("missing value in `DelegatorVote`"))?
+                .try_into()?,
+            unbonded_amount: msg
+                .unbonded_amount
+                .ok_or_else(|| anyhow::anyhow!("missing unbonded amount in `DelegatorVote`"))?
+                .try_into()?,
+            nullifier: msg
+                .nullifier
+                .try_into()
+                .context("invalid nullifier in `DelegatorVote`")?,
+            rk: {
+                let rk_bytes: [u8; 32] = (msg.rk[..])
+                    .try_into()
+                    .context("expected 32-byte rk in `DelegatorVote`")?;
+                rk_bytes
+                    .try_into()
+                    .context("invalid  rk in `DelegatorVote`")?
+            },
+        })
+    }
+}
+
+impl DomainType for DelegatorVoteBody {
+    type Proto = pb::DelegatorVoteBody;
+}
+
+impl From<DelegatorVote> for pb::DelegatorVote {
+    fn from(value: DelegatorVote) -> Self {
+        pb::DelegatorVote {
+            body: Some(value.body.into()),
+            auth_sig: Some(value.auth_sig.into()),
+            proof: value.proof.into(),
+        }
+    }
+}
+
+impl TryFrom<pb::DelegatorVote> for DelegatorVote {
+    type Error = anyhow::Error;
+
+    fn try_from(msg: pb::DelegatorVote) -> Result<Self, Self::Error> {
+        Ok(DelegatorVote {
+            body: msg
+                .body
+                .ok_or_else(|| anyhow::anyhow!("missing body in `DelegatorVote`"))?
+                .try_into()?,
+            auth_sig: msg
+                .auth_sig
+                .ok_or_else(|| anyhow::anyhow!("missing auth sig in `DelegatorVote`"))?
+                .try_into()?,
+            proof: msg.proof[..].try_into()?,
+        })
+    }
+}
+
+impl From<DelegatorVote> for Action {
+    fn from(value: DelegatorVote) -> Self {
+        Action::DelegatorVote(value)
+    }
 }

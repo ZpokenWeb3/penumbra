@@ -10,6 +10,7 @@ pub mod asset;
 pub mod balance;
 pub mod dex;
 pub mod eddy;
+pub mod fixpoint;
 mod flow;
 mod governance;
 pub mod keys;
@@ -33,6 +34,7 @@ pub use flow::{MockFlowCiphertext, SwapFlow};
 pub use governance::{
     key::GovernanceKey,
     proposal_nft::{self, ProposalNft},
+    voting_receipt_token::{self, VotingReceiptToken},
 };
 pub use keys::FullViewingKey;
 pub use note::{Note, NoteCiphertext};

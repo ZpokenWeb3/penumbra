@@ -185,9 +185,7 @@ pub(crate) trait StakingImpl: StateWriteExt {
                 self.set_validator_bonding_state(
                     identity_key,
                     Unbonding {
-                        unbonding_epoch: self
-                            .current_unbonding_end_epoch_for(&identity_key)
-                            .await?,
+                        unbonding_epoch: self.current_unbonding_end_epoch_for(identity_key).await?,
                     },
                 )
                 .await;
@@ -238,9 +236,7 @@ pub(crate) trait StakingImpl: StateWriteExt {
                 self.set_validator_bonding_state(
                     identity_key,
                     Unbonding {
-                        unbonding_epoch: self
-                            .current_unbonding_end_epoch_for(&identity_key)
-                            .await?,
+                        unbonding_epoch: self.current_unbonding_end_epoch_for(identity_key).await?,
                     },
                 )
                 .await;
@@ -302,13 +298,9 @@ pub(crate) trait StakingImpl: StateWriteExt {
             }
         }
         tracing::debug!(
-            total_delegations = ?delegations_by_validator
-                .iter()
-                .map(|(_, v)| v.len())
+            total_delegations = ?delegations_by_validator.values().map(|v| v.len())
                 .sum::<usize>(),
-            total_undelegations = ?undelegations_by_validator
-                .iter()
-                .map(|(_, v)| v.len())
+            total_undelegations = ?undelegations_by_validator.values().map(|v| v.len())
                 .sum::<usize>(),
         );
 
@@ -553,9 +545,9 @@ pub(crate) trait StakingImpl: StateWriteExt {
         // Using a JoinSet, run each validator's state queries concurrently.
         let mut js = JoinSet::new();
         for v in self.validator_identity_list().await?.iter() {
-            let state = self.validator_state(&v);
-            let power = self.validator_power(&v);
-            let consensus_key = self.validator_consensus_key(&v);
+            let state = self.validator_state(v);
+            let power = self.validator_power(v);
+            let consensus_key = self.validator_consensus_key(v);
             js.spawn(async move {
                 let state = state
                     .await?
@@ -1002,9 +994,12 @@ pub trait StateReadExt: StateRead {
             .map(|rate_data| rate_data.expect("rate data must be set after init_chain"))
     }
 
-    async fn current_validator_rate(&self, identity_key: &IdentityKey) -> Result<Option<RateData>> {
+    fn current_validator_rate(
+        &self,
+        identity_key: &IdentityKey,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<RateData>>> + Send + 'static>> {
         self.get(&state_key::current_rate_by_validator(identity_key))
-            .await
+            .boxed()
     }
 
     async fn next_validator_rate(&self, identity_key: &IdentityKey) -> Result<Option<RateData>> {
@@ -1115,20 +1110,25 @@ pub trait StateReadExt: StateRead {
         }
     }
 
-    async fn validator_identity_list(&self) -> Result<Vec<IdentityKey>> {
+    fn validator_identity_list(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<IdentityKey>>> + Send + 'static>> {
         let mut iks = Vec::new();
         // TODO: boxing here is to avoid an Unpin problem.. should
         // we bound the StateRead stream GATs as Unpin?
         // TODO: why did the previous implementation of this method
         // fail to compile with a Self does not live longe enough error?
         let mut stream = self.prefix_keys(state_key::validators::list()).boxed();
-        while let Some(key) = stream.next().await {
-            let ik = key?.as_str()[state_key::validators::list().len()..]
-                .parse::<IdentityKey>()
-                .expect("state keys should only have valid identity keys");
-            iks.push(ik);
+        async move {
+            while let Some(key) = stream.next().await {
+                let ik = key?.as_str()[state_key::validators::list().len()..]
+                    .parse::<IdentityKey>()
+                    .expect("state keys should only have valid identity keys");
+                iks.push(ik);
+            }
+            Ok(iks)
         }
-        Ok(iks)
+        .boxed()
     }
 
     async fn validator_list(&self) -> Result<Vec<Validator>> {

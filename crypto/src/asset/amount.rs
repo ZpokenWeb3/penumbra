@@ -4,7 +4,7 @@ use penumbra_proto::{core::crypto::v1alpha1 as pb, DomainType};
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, iter::Sum, num::NonZeroU128, ops};
 
-use crate::{Fq, Fr};
+use crate::{fixpoint::U128x128, Fq, Fr};
 use decaf377::r1cs::FqVar;
 
 #[derive(Serialize, Deserialize, PartialEq, PartialOrd, Eq, Clone, Debug, Copy)]
@@ -37,6 +37,14 @@ impl Amount {
 #[derive(Clone)]
 pub struct AmountVar {
     pub amount: FqVar,
+}
+
+impl AmountVar {
+    pub fn negate(&self) -> Result<Self, SynthesisError> {
+        Ok(Self {
+            amount: self.amount.negate()?,
+        })
+    }
 }
 
 impl AllocVar<Amount, Fq> for AmountVar {
@@ -227,7 +235,7 @@ impl From<u128> for Amount {
 
 impl From<Amount> for u128 {
     fn from(amount: Amount) -> u128 {
-        amount.inner as u128
+        amount.inner
     }
 }
 
@@ -242,6 +250,21 @@ impl From<i128> for Amount {
 impl From<Amount> for i128 {
     fn from(amount: Amount) -> i128 {
         amount.inner as i128
+    }
+}
+
+impl From<Amount> for U128x128 {
+    fn from(amount: Amount) -> U128x128 {
+        U128x128::from(amount.inner)
+    }
+}
+
+impl TryFrom<U128x128> for Amount {
+    type Error = <u128 as TryFrom<U128x128>>::Error;
+    fn try_from(value: U128x128) -> Result<Self, Self::Error> {
+        Ok(Amount {
+            inner: value.try_into()?,
+        })
     }
 }
 

@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use penumbra_chain::{sync::StatePayload, StateReadExt as _};
 use penumbra_storage::{StateRead, StateWrite};
 use penumbra_transaction::{action::SwapClaim, Transaction};
-use tracing::instrument;
 
 use crate::{
     action_handler::ActionHandler,
@@ -15,7 +14,6 @@ use crate::{
 
 #[async_trait]
 impl ActionHandler for SwapClaim {
-    #[instrument(name = "swap_claim", skip(self))]
     async fn check_stateless(&self, context: Arc<Transaction>) -> Result<()> {
         self.proof
             .verify(
@@ -32,8 +30,7 @@ impl ActionHandler for SwapClaim {
         Ok(())
     }
 
-    #[instrument(name = "swap_claim", skip(self, state))]
-    async fn check_stateful<S: StateRead>(&self, state: Arc<S>) -> Result<()> {
+    async fn check_stateful<S: StateRead + 'static>(&self, state: Arc<S>) -> Result<()> {
         let swap_claim = self;
 
         // 1. Validate the epoch duration passed in the swap claim matches
@@ -70,20 +67,15 @@ impl ActionHandler for SwapClaim {
         Ok(())
     }
 
-    #[instrument(name = "swap_claim", skip(self, state))]
     async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         // Record the output notes in the state.
         let source = state.object_get("source").unwrap_or_default();
 
         state
-            .add_state_payload(StatePayload::RolledUp(
-                self.body.output_1_commitment.clone(),
-            ))
+            .add_state_payload(StatePayload::RolledUp(self.body.output_1_commitment))
             .await;
         state
-            .add_state_payload(StatePayload::RolledUp(
-                self.body.output_2_commitment.clone(),
-            ))
+            .add_state_payload(StatePayload::RolledUp(self.body.output_2_commitment))
             .await;
 
         state.spend_nullifier(self.body.nullifier, source).await;

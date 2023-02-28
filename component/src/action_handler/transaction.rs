@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use penumbra_chain::NoteSource;
 use penumbra_storage::{StateRead, StateWrite};
 use penumbra_transaction::Transaction;
+use tokio::task::JoinSet;
+use tracing::{instrument, Instrument};
 
 use crate::shielded_pool::consensus_rules;
 
@@ -19,44 +21,72 @@ use stateless::{no_duplicate_nullifiers, valid_binding_signature};
 
 #[async_trait]
 impl ActionHandler for Transaction {
+    // We only instrument the top-level `check_stateless`, so we get one span for each transaction.
+    #[instrument(skip(self, context))]
     async fn check_stateless(&self, context: Arc<Transaction>) -> Result<()> {
         // TODO: add a check that ephemeral_key is not identity to prevent scanning dos attack ?
 
+        // TODO: unify code organization
         valid_binding_signature(self)?;
         no_duplicate_nullifiers(self)?;
-
-        // TODO: these can all be parallel tasks
-        for action in self.actions() {
-            action.check_stateless(context.clone()).await?;
-        }
-
-        // TODO: move these out of component code?
         consensus_rules::stateless::num_clues_equal_to_num_outputs(self)?;
         consensus_rules::stateless::check_memo_exists_if_outputs_absent_if_not(self)?;
 
-        Ok(())
-    }
-
-    async fn check_stateful<S: StateRead>(&self, state: Arc<S>) -> Result<()> {
-        claimed_anchor_is_valid(state.clone(), self).await?;
-        fmd_parameters_valid(state.clone(), self).await?;
-
-        // TODO: these can all be parallel tasks
-        for action in self.actions() {
-            action.check_stateful(state.clone()).await?;
+        // Currently, we need to clone the component actions so that the spawned
+        // futures can have 'static lifetimes. In the future, we could try to
+        // use the yoke crate, but cloning is almost certainly not a big deal
+        // for now.
+        let mut action_checks = JoinSet::new();
+        for (i, action) in self.actions().cloned().enumerate() {
+            let context2 = context.clone();
+            let span = action.create_span(i);
+            action_checks
+                .spawn(async move { action.check_stateless(context2).await }.instrument(span));
+        }
+        // Now check if any component action failed verification.
+        while let Some(check) = action_checks.join_next().await {
+            check??;
         }
 
         Ok(())
     }
 
+    // We only instrument the top-level `check_stateful`, so we get one span for each transaction.
+    #[instrument(skip(self, state))]
+    async fn check_stateful<S: StateRead + 'static>(&self, state: Arc<S>) -> Result<()> {
+        claimed_anchor_is_valid(state.clone(), self).await?;
+        fmd_parameters_valid(state.clone(), self).await?;
+
+        // Currently, we need to clone the component actions so that the spawned
+        // futures can have 'static lifetimes. In the future, we could try to
+        // use the yoke crate, but cloning is almost certainly not a big deal
+        // for now.
+        let mut action_checks = JoinSet::new();
+        for (i, action) in self.actions().cloned().enumerate() {
+            let state2 = state.clone();
+            let span = action.create_span(i);
+            action_checks
+                .spawn(async move { action.check_stateful(state2).await }.instrument(span));
+        }
+        // Now check if any component action failed verification.
+        while let Some(check) = action_checks.join_next().await {
+            check??;
+        }
+
+        Ok(())
+    }
+
+    // We only instrument the top-level `execute`, so we get one span for each transaction.
+    #[instrument(skip(self, state))]
     async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         // While we have access to the full Transaction, hash it to
         // obtain a NoteSource we can cache for various actions.
         let source = NoteSource::Transaction { id: self.id() };
         state.object_put("source", source);
 
-        for action in self.actions() {
-            action.execute(&mut state).await?;
+        for (i, action) in self.actions().enumerate() {
+            let span = action.create_span(i);
+            action.execute(&mut state).instrument(span).await?;
         }
 
         // Delete the note source, in case someone else tries to read it.
