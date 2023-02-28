@@ -28,24 +28,24 @@ use web_sys::console as web_console;
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
-#[wasm_bindgen]
-pub fn decrypt_note(full_viewing_key: &str, encrypted_note: &str, ephemeral_key: &str) -> JsValue {
-    utils::set_panic_hook();
-    let fvk = FullViewingKey::from_str(full_viewing_key.as_ref())
-        .context("The provided string is not a valid FullViewingKey");
-
-    let note = Note::decrypt(
-        &hex::decode(encrypted_note).unwrap()[..],
-        fvk.unwrap().incoming(),
-        &ka::Public::try_from(&hex::decode(ephemeral_key).unwrap()[..]).unwrap(),
-    );
-
-    return if note.is_ok() {
-        serde_wasm_bindgen::to_value(&note.unwrap()).unwrap()
-    } else {
-        JsValue::null()
-    };
-}
+//#[wasm_bindgen]
+//pub fn decrypt_note(full_viewing_key: &str, encrypted_note: &str, ephemeral_key: &str) -> JsValue {
+//    utils::set_panic_hook();
+//    let fvk = FullViewingKey::from_str(full_viewing_key.as_ref())
+//        .context("The provided string is not a valid FullViewingKey");
+//
+//    let note = Note::decrypt(
+//        &hex::decode(encrypted_note).unwrap()[..],
+//        fvk.unwrap().incoming(),
+//        &ka::Public::try_from(&hex::decode(ephemeral_key).unwrap()[..]).unwrap(),
+//    );
+//
+//    return if note.is_ok() {
+//        serde_wasm_bindgen::to_value(&note.unwrap()).unwrap()
+//    } else {
+//        JsValue::null()
+//    };
+//}
 
 #[wasm_bindgen]
 pub fn generate_spend_key(seed_phrase: &str) -> JsValue {
@@ -83,7 +83,7 @@ pub fn get_full_viewing_key(spend_key_str: &str) -> JsValue {
 
 
 #[wasm_bindgen]
-pub fn get_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
+pub fn get_address_by_index(full_viewing_key: &str, index: u32) -> JsValue {
     utils::set_panic_hook();
     let fvk = FullViewingKey::from_str(full_viewing_key.as_ref())
         .context("The provided string is not a valid FullViewingKey")
@@ -124,7 +124,7 @@ pub fn is_controlled_address(full_viewing_key: &str, address: &str) -> JsValue {
 }
 
 #[wasm_bindgen]
-pub fn get_short_address_by_index(full_viewing_key: &str, index: u64) -> JsValue {
+pub fn get_short_address_by_index(full_viewing_key: &str, index: u32) -> JsValue {
     utils::set_panic_hook();
     let fvk = FullViewingKey::from_str(full_viewing_key.as_ref())
         .context("The provided string is not a valid FullViewingKey")

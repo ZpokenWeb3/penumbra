@@ -5,7 +5,7 @@ use anyhow::Context;
 use penumbra_chain::params::{ChainParameters, FmdParameters};
 use penumbra_crypto::{FullViewingKey, Address};
 
-use penumbra_crypto::keys::SpendKey;
+use penumbra_crypto::keys::{SpendKey, AddressIndex};
 use penumbra_tct::{Commitment, Proof, Tree};
 use penumbra_transaction::plan::TransactionPlan;
 use penumbra_transaction::{AuthorizationData, Transaction, WitnessData};
@@ -62,7 +62,7 @@ pub fn send_plan(
             &chain_params,
             &fmd_params,
             &fvk,
-            None,
+           AddressIndex::from(0u32),
             send_tx.notes.try_into().unwrap(),
         )
         .unwrap();

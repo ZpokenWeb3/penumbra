@@ -1,6 +1,6 @@
 [package]
 name = "penumbra-web-assembly"
-version = "0.44.2"
+version = "0.45.0"
 authors = ["Valentine <valentine@zpoken.io>"]
 edition = "2018"
 

@@ -207,7 +207,7 @@ impl<R: RngCore + CryptoRng> Planner<R> {
             chain_params: &ChainParameters,
             fmd_params: &FmdParameters,
             fvk: &FullViewingKey,
-            source: Option<AddressIndex>,
+            source: AddressIndex,
             spendable_notes: Vec<SpendableNoteRecord>,
             ) -> anyhow::Result<TransactionPlan> {
 
@@ -220,10 +220,7 @@ impl<R: RngCore + CryptoRng> Planner<R> {
         }
 
         // For any remaining provided balance, make a single change note for each
-        let self_address = fvk
-            .incoming()
-            .payment_address(source.unwrap_or(AddressIndex::Numeric(0)))
-            .0;
+        let self_address = fvk.incoming().payment_address(source).0;
 
         for value in self.balance.provided().collect::<Vec<_>>() {
             self.output(value, self_address);
