@@ -6,33 +6,45 @@ use penumbra_proto::{
     DomainType,
 };
 
+mod dao_deposit;
+mod dao_output;
+mod dao_spend;
 mod delegate;
+mod delegator_vote;
 mod ibc;
 pub mod output;
 mod position;
-pub mod proposal;
+mod proposal_deposit_claim;
+mod proposal_submit;
+mod proposal_withdraw;
 pub mod spend;
 pub mod swap;
 pub mod swap_claim;
 mod undelegate;
 mod undelegate_claim;
-mod vote;
+mod validator_vote;
 
 use crate::{ActionView, TransactionPerspective};
 
 pub use self::ibc::Ics20Withdrawal;
+pub use crate::proposal::{Proposal, ProposalKind, ProposalPayload};
+pub use crate::vote::Vote;
+pub use dao_deposit::DaoDeposit;
+pub use dao_output::DaoOutput;
+pub use dao_spend::DaoSpend;
 pub use delegate::Delegate;
+pub use delegator_vote::{DelegatorVote, DelegatorVoteBody};
 pub use output::Output;
 pub use position::{PositionClose, PositionOpen, PositionRewardClaim, PositionWithdraw};
-pub use proposal::{
-    Proposal, ProposalDepositClaim, ProposalKind, ProposalPayload, ProposalSubmit, ProposalWithdraw,
-};
+pub use proposal_deposit_claim::ProposalDepositClaim;
+pub use proposal_submit::ProposalSubmit;
+pub use proposal_withdraw::ProposalWithdraw;
 pub use spend::Spend;
 pub use swap::Swap;
 pub use swap_claim::SwapClaim;
 pub use undelegate::Undelegate;
 pub use undelegate_claim::{UndelegateClaim, UndelegateClaimBody};
-pub use vote::{DelegatorVote, DelegatorVoteBody, ValidatorVote, ValidatorVoteBody, Vote};
+pub use validator_vote::{ValidatorVote, ValidatorVoteBody};
 
 /// Common behavior between Penumbra actions.
 pub trait IsAction {
@@ -66,6 +78,10 @@ pub enum Action {
     UndelegateClaim(UndelegateClaim),
 
     Ics20Withdrawal(Ics20Withdrawal),
+
+    DaoSpend(DaoSpend),
+    DaoOutput(DaoOutput),
+    DaoDeposit(DaoDeposit),
 }
 
 impl Action {
@@ -103,6 +119,9 @@ impl Action {
             Action::Undelegate(_) => tracing::info_span!("Undelegate", ?idx),
             Action::UndelegateClaim(_) => tracing::info_span!("UndelegateClaim", ?idx),
             Action::Ics20Withdrawal(_) => tracing::info_span!("Ics20Withdrawal", ?idx),
+            Action::DaoDeposit(_) => tracing::info_span!("DaoDeposit", ?idx),
+            Action::DaoSpend(_) => tracing::info_span!("DaoSpend", ?idx),
+            Action::DaoOutput(_) => tracing::info_span!("DaoOutput", ?idx),
         }
     }
 }
@@ -127,6 +146,9 @@ impl IsAction for Action {
             Action::PositionWithdraw(p) => p.balance_commitment(),
             Action::PositionRewardClaim(p) => p.balance_commitment(),
             Action::Ics20Withdrawal(withdrawal) => withdrawal.balance_commitment(),
+            Action::DaoDeposit(deposit) => deposit.balance_commitment(),
+            Action::DaoSpend(spend) => spend.balance_commitment(),
+            Action::DaoOutput(output) => output.balance_commitment(),
             // These actions just post Protobuf data to the chain, and leave the
             // value balance unchanged.
             Action::ValidatorDefinition(_) => balance::Commitment::default(),
@@ -153,6 +175,9 @@ impl IsAction for Action {
             Action::PositionWithdraw(x) => x.view_from_perspective(txp),
             Action::PositionRewardClaim(x) => x.view_from_perspective(txp),
             Action::Ics20Withdrawal(x) => x.view_from_perspective(txp),
+            Action::DaoSpend(x) => x.view_from_perspective(txp),
+            Action::DaoOutput(x) => x.view_from_perspective(txp),
+            Action::DaoDeposit(x) => x.view_from_perspective(txp),
             // TODO: figure out where to implement the actual decryption methods for these? where are their action definitions?
             Action::ValidatorDefinition(x) => ActionView::ValidatorDefinition(x.to_owned()),
             Action::IBCAction(x) => ActionView::IBCAction(x.to_owned()),
@@ -224,6 +249,15 @@ impl From<Action> for pb::Action {
             Action::Ics20Withdrawal(withdrawal) => pb::Action {
                 action: Some(pb::action::Action::Ics20Withdrawal(withdrawal.into())),
             },
+            Action::DaoSpend(inner) => pb::Action {
+                action: Some(pb::action::Action::DaoSpend(inner.into())),
+            },
+            Action::DaoOutput(inner) => pb::Action {
+                action: Some(pb::action::Action::DaoOutput(inner.into())),
+            },
+            Action::DaoDeposit(inner) => pb::Action {
+                action: Some(pb::action::Action::DaoDeposit(inner.into())),
+            },
         }
     }
 }
@@ -277,6 +311,9 @@ impl TryFrom<pb::Action> for Action {
             pb::action::Action::Ics20Withdrawal(inner) => {
                 Ok(Action::Ics20Withdrawal(inner.try_into()?))
             }
+            pb::action::Action::DaoSpend(inner) => Ok(Action::DaoSpend(inner.try_into()?)),
+            pb::action::Action::DaoOutput(inner) => Ok(Action::DaoOutput(inner.try_into()?)),
+            pb::action::Action::DaoDeposit(inner) => Ok(Action::DaoDeposit(inner.try_into()?)),
         }
     }
 }

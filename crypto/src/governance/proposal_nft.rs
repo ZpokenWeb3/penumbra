@@ -11,48 +11,48 @@ use crate::asset;
 /// which unbonding began, and the epoch at which unbonding ends.
 pub struct ProposalNft {
     proposal_id: u64,
-    proposal_state: State,
+    proposal_state: Kind,
     base_denom: asset::Denom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum State {
-    Voting,
-    Withdrawn,
-    Vetoed,
+pub enum Kind {
+    Deposit,
+    UnbondingDeposit,
+    Slashed,
     Failed,
     Passed,
 }
 
-impl State {
+impl Kind {
     pub const fn display_static(&self) -> &'static str {
         match self {
-            State::Voting => "voting",
-            State::Withdrawn => "withdrawn",
-            State::Vetoed => "vetoed",
-            State::Failed => "failed",
-            State::Passed => "passed",
+            Kind::Deposit => "deposit",
+            Kind::UnbondingDeposit => "unbonding_deposit",
+            Kind::Slashed => "slashed",
+            Kind::Failed => "failed",
+            Kind::Passed => "passed",
         }
     }
 }
 
-impl FromStr for State {
+impl FromStr for Kind {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "voting" => Ok(State::Voting),
-            "withdrawn" => Ok(State::Withdrawn),
-            "vetoed" => Ok(State::Vetoed),
-            "failed" => Ok(State::Failed),
-            "passed" => Ok(State::Passed),
+            "deposit" => Ok(Kind::Deposit),
+            "unbonding_deposit" => Ok(Kind::UnbondingDeposit),
+            "slashed" => Ok(Kind::Slashed),
+            "failed" => Ok(Kind::Failed),
+            "passed" => Ok(Kind::Passed),
             _ => Err(anyhow::anyhow!("invalid proposal token state")),
         }
     }
 }
 
 impl ProposalNft {
-    fn new(proposal_id: u64, proposal_state: State) -> Self {
+    fn new(proposal_id: u64, proposal_state: Kind) -> Self {
         // This format string needs to be in sync with the asset registry
         let base_denom = asset::REGISTRY
             .parse_denom(&format!(
@@ -68,29 +68,29 @@ impl ProposalNft {
         }
     }
 
-    /// Make a new proposal NFT in the voting state.
-    pub fn voting(proposal_id: u64) -> Self {
-        Self::new(proposal_id, State::Voting)
+    /// Make a new proposal NFT in the deposit state.
+    pub fn deposit(proposal_id: u64) -> Self {
+        Self::new(proposal_id, Kind::Deposit)
     }
 
-    /// Make a new proposal NFT in the withdrawn state.
-    pub fn withdrawn(proposal_id: u64) -> Self {
-        Self::new(proposal_id, State::Withdrawn)
+    /// Make a new proposal NFT in the unbonding deposit state.
+    pub fn unbonding_deposit(proposal_id: u64) -> Self {
+        Self::new(proposal_id, Kind::UnbondingDeposit)
     }
 
-    /// Make a new proposal NFT in the vetoed state.
-    pub fn vetoed(proposal_id: u64) -> Self {
-        Self::new(proposal_id, State::Vetoed)
+    /// Make a new proposal NFT in the slashed state.
+    pub fn slashed(proposal_id: u64) -> Self {
+        Self::new(proposal_id, Kind::Slashed)
     }
 
     /// Make a new proposal NFT in the failed state.
     pub fn failed(proposal_id: u64) -> Self {
-        Self::new(proposal_id, State::Failed)
+        Self::new(proposal_id, Kind::Failed)
     }
 
     /// Make a new proposal NFT in the passed state.
     pub fn passed(proposal_id: u64) -> Self {
-        Self::new(proposal_id, State::Passed)
+        Self::new(proposal_id, Kind::Passed)
     }
 
     /// Get the base denomination for this delegation token.
@@ -114,7 +114,7 @@ impl ProposalNft {
     }
 
     /// Get the proposal state for this proposal token.
-    pub fn proposal_state(&self) -> State {
+    pub fn proposal_state(&self) -> Kind {
         self.proposal_state
     }
 }
@@ -127,7 +127,7 @@ impl TryFrom<asset::Denom> for ProposalNft {
 
         // Note: this regex must be in sync with asset::REGISTRY
         // The data capture group is used by asset::REGISTRY
-        let captures = Regex::new("^proposal_(?P<data>(?P<proposal_id>[0-9]+)_(?P<proposal_state>voting|withdrawn|passed|failed|vetoed))$")
+        let captures = Regex::new("^proposal_(?P<data>(?P<proposal_id>[0-9]+)_(?P<proposal_state>deposit|unbonding_deposit|passed|failed|slashed))$")
             .expect("regex is valid")
             .captures(base_string.as_ref())
             .ok_or_else(|| {
@@ -200,14 +200,22 @@ mod tests {
 
     #[test]
     fn proposal_token_denomination_round_trip() {
-        let token = ProposalNft::new(1, State::Voting);
+        let tokens = [
+            ProposalNft::deposit(1),
+            ProposalNft::unbonding_deposit(1),
+            ProposalNft::passed(1),
+            ProposalNft::failed(1),
+            ProposalNft::slashed(1),
+        ];
 
-        let denom = token.to_string();
-        println!("denom: {denom}");
-        let token2 = ProposalNft::from_str(&denom).unwrap();
-        let denom2 = token2.to_string();
+        for token in tokens {
+            let denom = token.to_string();
+            println!("denom: {denom}");
+            let token2 = ProposalNft::from_str(&denom).unwrap();
+            let denom2 = token2.to_string();
 
-        assert_eq!(denom, denom2);
-        assert_eq!(token, token2);
+            assert_eq!(denom, denom2);
+            assert_eq!(token, token2);
+        }
     }
 }

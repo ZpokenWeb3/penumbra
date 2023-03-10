@@ -31,6 +31,7 @@ pub fn testnet_generate(
     testnet_dir: PathBuf,
     chain_id: &str,
     active_validator_limit: Option<u64>,
+    timeout_commit: Option<tendermint::Timeout>,
     epoch_duration: Option<u64>,
     unbonding_epochs: Option<u64>,
     starting_ip: Ipv4Addr,
@@ -101,10 +102,10 @@ pub fn testnet_generate(
         let delegation_denom = DelegationToken::from(&identity_key).denom();
         allocations.push(Allocation {
             address: dest,
-            // Add an initial allocation of 50,000 delegation tokens,
-            // starting them with 50x the individual allocations to discord users.
-            // 50,000 delegation tokens * 1e6 udelegation factor
-            amount: (50_000 * 10u64.pow(6)),
+            // Add an initial allocation of 25,000 delegation tokens,
+            // starting them with 2.5x the individual allocations to discord users.
+            // 25,000 delegation tokens * 1e6 udelegation factor
+            amount: (25_000 * 10u64.pow(6)),
             denom: delegation_denom.to_string(),
         });
 
@@ -140,7 +141,7 @@ pub fn testnet_generate(
                     v.funding_streams
                         .iter()
                         .map(|fs| {
-                            Ok(FundingStream {
+                            Ok(FundingStream::ToAddress {
                                 address: Address::from_str(&fs.address)
                                     .context("invalid funding stream address in validators.json")?,
                                 rate_bps: fs.rate_bps,
@@ -236,7 +237,10 @@ pub fn testnet_generate(
             })
             .filter_map(|(id, ip)| parse_tm_address(Some(&id), &ip).ok())
             .collect::<Vec<_>>();
-        let tm_config = generate_tm_config(&node_name, ips_minus_mine, None)?;
+        let mut tm_config = generate_tm_config(&node_name, ips_minus_mine, None)?;
+        if let Some(timeout_commit) = timeout_commit {
+            tm_config.consensus.timeout_commit = timeout_commit;
+        }
 
         write_configs(node_dir, vk, &validator_genesis, tm_config)?;
     }

@@ -1,9 +1,7 @@
 use crate::Component;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use penumbra_chain::{
-    genesis, sync::CompactBlock, Epoch, NoteSource, SpendInfo, StateReadExt as _,
-};
+use penumbra_chain::{genesis, sync::CompactBlock, NoteSource, SpendInfo, StateReadExt as _};
 use penumbra_crypto::{asset, note, Nullifier, Value};
 use penumbra_proto::{StateReadProto, StateWriteProto};
 use penumbra_storage::{StateRead, StateWrite};
@@ -21,8 +19,9 @@ pub struct ShieldedPool {}
 impl Component for ShieldedPool {
     // #[instrument(name = "shielded_pool", skip(state, app_state))]
     async fn init_chain<S: StateWrite>(mut state: S, app_state: &genesis::AppState) {
+        // Register a denom for each asset in the genesis state
         for allocation in &app_state.allocations {
-            tracing::info!(?allocation, "processing allocation");
+            tracing::debug!(?allocation, "processing allocation");
 
             assert_ne!(
                 allocation.amount, 0u64,
@@ -84,6 +83,13 @@ impl Component for ShieldedPool {
         // We need to reload the compact block here, in case it was
         // edited during the preceding method calls.
         let mut compact_block = state.stub_compact_block();
+
+        // Check to see if the chain parameters have changed, and include them in the compact block
+        // if they have (this is signaled by `penumbra_chain::StateWriteExt::put_chain_params`):
+        if state.chain_params_changed() {
+            compact_block.chain_parameters = Some(state.get_chain_params().await.unwrap());
+        }
+
         // Close the block in the SCT
         let mut state_commitment_tree = state.stub_state_commitment_tree().await;
         state
@@ -151,6 +157,15 @@ pub trait StateReadExt: StateRead {
 
     /// Checks whether a claimed SCT anchor is a previous valid state root.
     async fn check_claimed_anchor(&self, anchor: tct::Root) -> Result<()> {
+        // The root of the empty tree is valid, because the empty tree causally precedes all other
+        // trees, and contains no witnessed commitments, so it is valid for all possible futures. A
+        // transaction which does not use any witness data can safely use the empty anchor without
+        // having to look up a later block anchor (this is particularly useful for DAO
+        // transactions, but could be for others as well).
+        if anchor.is_empty() {
+            return Ok(());
+        }
+
         if let Some(anchor_height) = self
             .get_proto::<u64>(&state_key::anchor_lookup(anchor))
             .await?
@@ -187,15 +202,7 @@ pub trait StateReadExt: StateRead {
         compact_block.block_root = block_root;
 
         // If the block ends an epoch, also close the epoch in the TCT
-        if Epoch::from_height(
-            height,
-            self.get_chain_params()
-                .await
-                .expect("chain params request must succeed")
-                .epoch_duration,
-        )
-        .is_epoch_end(height)
-        {
+        if self.epoch().await.unwrap().is_epoch_end(height) {
             tracing::debug!(?height, "end of epoch");
 
             // TODO: Put updated FMD parameters in the compact block
@@ -302,8 +309,7 @@ pub(crate) trait StateWriteExt: StateWrite {
         self.set_sct_block_anchor(height, compact_block.block_root);
         // Write the current epoch anchor, if on an epoch boundary:
         if let Some(epoch_root) = compact_block.epoch_root {
-            let epoch_duration = self.get_epoch_duration().await?;
-            let index = Epoch::from_height(height, epoch_duration).index;
+            let index = self.epoch().await?.index;
             self.set_sct_epoch_anchor(index, epoch_root);
         }
 

@@ -43,6 +43,7 @@ pub struct Storage {
 
     scanned_notes_tx: tokio::sync::broadcast::Sender<SpendableNoteRecord>,
     scanned_nullifiers_tx: tokio::sync::broadcast::Sender<Nullifier>,
+    scanned_swaps_tx: tokio::sync::broadcast::Sender<SwapRecord>,
 }
 
 impl Storage {
@@ -102,6 +103,7 @@ impl Storage {
             uncommitted_height: Arc::new(Mutex::new(None)),
             scanned_notes_tx: broadcast::channel(10).0,
             scanned_nullifiers_tx: broadcast::channel(10).0,
+            scanned_swaps_tx: broadcast::channel(10).0,
         })
     }
 
@@ -131,8 +133,6 @@ impl Storage {
         let mut tx = pool.begin().await?;
 
         let chain_params_bytes = &ChainParameters::encode_to_vec(&params)[..];
-        let fvk_bytes = &FullViewingKey::encode_to_vec(&fvk)[..];
-
         sqlx::query!(
             "INSERT INTO chain_params (bytes) VALUES (?)",
             chain_params_bytes
@@ -140,6 +140,7 @@ impl Storage {
         .execute(&mut tx)
         .await?;
 
+        let fvk_bytes = &FullViewingKey::encode_to_vec(&fvk)[..];
         sqlx::query!("INSERT INTO full_viewing_key (bytes) VALUES (?)", fvk_bytes)
             .execute(&mut tx)
             .await?;
@@ -158,6 +159,7 @@ impl Storage {
             uncommitted_height: Arc::new(Mutex::new(None)),
             scanned_notes_tx: broadcast::channel(10).0,
             scanned_nullifiers_tx: broadcast::channel(10).0,
+            scanned_swaps_tx: broadcast::channel(10).0,
         })
     }
 
@@ -269,6 +271,10 @@ impl Storage {
         swap_commitment: tct::Commitment,
         await_detection: bool,
     ) -> impl Future<Output = anyhow::Result<SwapRecord>> {
+        // Start subscribing now, before querying for whether we already
+        // have the record, so that we can't miss it if we race a write.
+        let mut rx = self.scanned_swaps_tx.subscribe();
+
         // Clone the pool handle so that the returned future is 'static
         let pool = self.pool.clone();
         async move {
@@ -288,8 +294,33 @@ impl Storage {
 
             if !await_detection {
                 return Err(anyhow!("swap commitment {} not found", swap_commitment));
-            } else {
-                return Err(anyhow!("swap commitment await_detection not implemented"));
+            }
+
+            // Otherwise, wait for newly detected swaps and check whether they're
+            // the requested one.
+
+            loop {
+                match rx.recv().await {
+                    Ok(record) => {
+                        if record.swap_commitment == swap_commitment {
+                            return Ok(record);
+                        }
+                    }
+
+                    Err(e) => match e {
+                        RecvError::Closed => {
+                            return Err(anyhow!(
+                            "Receiver error during swap detection: closed (no more active senders)"
+                        ))
+                        }
+                        RecvError::Lagged(count) => {
+                            return Err(anyhow!(
+                                "Receiver error during swap detection: lagged (by {:?} messages)",
+                                count
+                            ))
+                        }
+                    },
+                };
             }
         }
     }
@@ -671,9 +702,15 @@ impl Storage {
 
         // If set, only return notes with the specified address index.
         // crypto.AddressIndex address_index = 4;
+        // This isn't what we want any more, we need to be indexing notes
+        // by *account*, not just by address index.
+        // For now, just do filtering in software.
+        /*
         let address_clause = address_index
             .map(|d| format!("x'{}'", hex::encode(d.to_bytes())))
             .unwrap_or_else(|| "address_index".to_string());
+         */
+        let address_clause = "address_index".to_string();
 
         let result = sqlx::query_as::<_, SpendableNoteRecord>(
             format!(
@@ -710,6 +747,13 @@ impl Storage {
         let mut output: Vec<SpendableNoteRecord> = Vec::new();
 
         for record in result.into_iter() {
+            // Skip notes that don't match the account, since we're
+            // not doing account filtering in SQL as a temporary hack (see above)
+            if let Some(address_index) = address_index {
+                if record.address_index.account != address_index.account {
+                    continue;
+                }
+            }
             let amount = record.note.amount();
             output.push(record);
             // If we're tracking amounts, accumulate the value of the note
@@ -988,6 +1032,17 @@ impl Storage {
             ));
         }
         let mut dbtx = self.pool.begin().await?;
+
+        // If the chain parameters have changed, update them.
+        if let Some(params) = filtered_block.chain_parameters {
+            let chain_params_bytes = &ChainParameters::encode_to_vec(&params)[..];
+            sqlx::query!(
+                "INSERT INTO chain_params (bytes) VALUES (?)",
+                chain_params_bytes
+            )
+            .execute(&mut dbtx)
+            .await?;
+        }
 
         // Insert new note records into storage
         for note_record in &filtered_block.new_notes {

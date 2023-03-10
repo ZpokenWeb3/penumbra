@@ -5,12 +5,18 @@ use serde::{Deserialize, Serialize};
 use std::{fmt::Display, iter::Sum, num::NonZeroU128, ops};
 
 use crate::{fixpoint::U128x128, Fq, Fr};
-use decaf377::r1cs::FqVar;
+use decaf377::{r1cs::FqVar, FieldExt};
 
-#[derive(Serialize, Deserialize, PartialEq, PartialOrd, Eq, Clone, Debug, Copy)]
+#[derive(Serialize, Deserialize, PartialEq, PartialOrd, Eq, Clone, Copy)]
 #[serde(try_from = "pb::Amount", into = "pb::Amount")]
 pub struct Amount {
     inner: u128,
+}
+
+impl std::fmt::Debug for Amount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
 }
 
 impl Amount {
@@ -66,6 +72,24 @@ impl AllocVar<Amount, Fq> for AmountVar {
                 })
             }
         }
+    }
+}
+
+impl R1CSVar<Fq> for AmountVar {
+    type Value = Amount;
+
+    fn cs(&self) -> ark_relations::r1cs::ConstraintSystemRef<Fq> {
+        self.amount.cs()
+    }
+
+    fn value(&self) -> Result<Self::Value, SynthesisError> {
+        let amount_fq = self.amount.value()?;
+        let amount_bytes = &amount_fq.to_bytes()[0..16];
+        Ok(Amount::from_le_bytes(
+            amount_bytes
+                .try_into()
+                .expect("should be able to fit in 16 bytes"),
+        ))
     }
 }
 
@@ -256,6 +280,12 @@ impl From<Amount> for i128 {
 impl From<Amount> for U128x128 {
     fn from(amount: Amount) -> U128x128 {
         U128x128::from(amount.inner)
+    }
+}
+
+impl From<&Amount> for U128x128 {
+    fn from(value: &Amount) -> Self {
+        (*value).into()
     }
 }
 

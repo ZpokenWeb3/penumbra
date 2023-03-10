@@ -8,6 +8,9 @@ use penumbra_transaction::{Action, Transaction};
 
 use super::ActionHandler;
 
+mod dao_deposit;
+mod dao_output;
+mod dao_spend;
 mod delegate;
 mod delegator_vote;
 mod ibc_action;
@@ -46,6 +49,9 @@ impl ActionHandler for Action {
             Action::Output(action) => action.check_stateless(context),
             Action::IBCAction(action) => action.check_stateless(context),
             Action::Ics20Withdrawal(action) => action.check_stateless(context),
+            Action::DaoSpend(action) => action.check_stateless(context),
+            Action::DaoOutput(action) => action.check_stateless(context),
+            Action::DaoDeposit(action) => action.check_stateless(context),
         }
         .await
     }
@@ -79,6 +85,9 @@ impl ActionHandler for Action {
                 action.check_stateful(state).await
             }
             Action::Ics20Withdrawal(action) => action.check_stateful(state).await,
+            Action::DaoSpend(action) => action.check_stateful(state).await,
+            Action::DaoOutput(action) => action.check_stateful(state).await,
+            Action::DaoDeposit(action) => action.check_stateful(state).await,
         }
     }
 
@@ -103,6 +112,9 @@ impl ActionHandler for Action {
             Action::Output(action) => action.execute(state).await,
             Action::IBCAction(action) => action.execute(state).await,
             Action::Ics20Withdrawal(action) => action.execute(state).await,
+            Action::DaoSpend(action) => action.execute(state).await,
+            Action::DaoOutput(action) => action.execute(state).await,
+            Action::DaoDeposit(action) => action.execute(state).await,
         }
     }
 }

@@ -12,6 +12,13 @@ pub struct Transaction {
     #[prost(message, optional, tag = "3")]
     pub anchor: ::core::option::Option<super::super::crypto::v1alpha1::MerkleRoot>,
 }
+/// A transaction ID, the Sha256 hash of a transaction.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Id {
+    #[prost(bytes = "bytes", tag = "1")]
+    pub hash: ::prost::bytes::Bytes,
+}
 /// The body of a transaction.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -45,7 +52,7 @@ pub struct TransactionBody {
 pub struct Action {
     #[prost(
         oneof = "action::Action",
-        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 200"
+        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 50, 51, 52, 200"
     )]
     pub action: ::core::option::Option<action::Action>,
 }
@@ -79,6 +86,7 @@ pub mod action {
         ProposalDepositClaim(
             super::super::super::governance::v1alpha1::ProposalDepositClaim,
         ),
+        /// Positions
         #[prost(message, tag = "30")]
         PositionOpen(super::super::super::dex::v1alpha1::PositionOpen),
         #[prost(message, tag = "31")]
@@ -94,6 +102,13 @@ pub mod action {
         Undelegate(super::super::super::stake::v1alpha1::Undelegate),
         #[prost(message, tag = "42")]
         UndelegateClaim(super::super::super::stake::v1alpha1::UndelegateClaim),
+        /// DAO
+        #[prost(message, tag = "50")]
+        DaoSpend(super::super::super::governance::v1alpha1::DaoSpend),
+        #[prost(message, tag = "51")]
+        DaoOutput(super::super::super::governance::v1alpha1::DaoOutput),
+        #[prost(message, tag = "52")]
+        DaoDeposit(super::super::super::governance::v1alpha1::DaoDeposit),
         #[prost(message, tag = "200")]
         Ics20Withdrawal(super::super::super::ibc::v1alpha1::Ics20Withdrawal),
     }
@@ -151,8 +166,8 @@ pub struct TransactionView {
     pub fmd_clues: ::prost::alloc::vec::Vec<super::super::crypto::v1alpha1::Clue>,
     /// An optional plaintext memo. It will only be populated if there are
     /// outputs in the actions of this transaction.
-    #[prost(string, optional, tag = "6")]
-    pub memo: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bytes = "bytes", optional, tag = "6")]
+    pub memo: ::core::option::Option<::prost::bytes::Bytes>,
 }
 /// A view of a specific state change action performed by a transaction.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -160,7 +175,7 @@ pub struct TransactionView {
 pub struct ActionView {
     #[prost(
         oneof = "action_view::ActionView",
-        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 41, 42, 43, 200"
+        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 41, 42, 50, 51, 52, 43, 200"
     )]
     pub action_view: ::core::option::Option<action_view::ActionView>,
 }
@@ -208,6 +223,13 @@ pub mod action_view {
         Delegate(super::super::super::stake::v1alpha1::Delegate),
         #[prost(message, tag = "42")]
         Undelegate(super::super::super::stake::v1alpha1::Undelegate),
+        /// DAO
+        #[prost(message, tag = "50")]
+        DaoSpend(super::super::super::governance::v1alpha1::DaoSpend),
+        #[prost(message, tag = "51")]
+        DaoOutput(super::super::super::governance::v1alpha1::DaoOutput),
+        #[prost(message, tag = "52")]
+        DaoDeposit(super::super::super::governance::v1alpha1::DaoDeposit),
         /// TODO: we have no way to recover the opening of the undelegate_claim's
         /// balance commitment, and can only infer the value from looking at the rest
         /// of the transaction. is that fine?
@@ -482,7 +504,7 @@ pub struct TransactionPlan {
 pub struct ActionPlan {
     #[prost(
         oneof = "action_plan::Action",
-        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42"
+        tags = "1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 30, 31, 32, 34, 40, 41, 42, 50, 51, 52"
     )]
     pub action: ::core::option::Option<action_plan::Action>,
 }
@@ -522,10 +544,11 @@ pub mod action_plan {
         PositionOpen(super::super::super::dex::v1alpha1::PositionOpen),
         #[prost(message, tag = "31")]
         PositionClose(super::super::super::dex::v1alpha1::PositionClose),
+        /// The position withdraw/reward claim actions require balance information so they have Plan types.
         #[prost(message, tag = "32")]
-        PositionWithdraw(super::super::super::dex::v1alpha1::PositionWithdraw),
+        PositionWithdraw(super::super::super::dex::v1alpha1::PositionWithdrawPlan),
         #[prost(message, tag = "34")]
-        PositionRewardClaim(super::super::super::dex::v1alpha1::PositionRewardClaim),
+        PositionRewardClaim(super::super::super::dex::v1alpha1::PositionRewardClaimPlan),
         /// We don't need any extra information (yet) to understand delegations,
         /// because we don't yet use flow encryption.
         #[prost(message, tag = "40")]
@@ -536,6 +559,13 @@ pub mod action_plan {
         Undelegate(super::super::super::stake::v1alpha1::Undelegate),
         #[prost(message, tag = "42")]
         UndelegateClaim(super::super::super::stake::v1alpha1::UndelegateClaimPlan),
+        /// DAO
+        #[prost(message, tag = "50")]
+        DaoSpend(super::super::super::governance::v1alpha1::DaoSpend),
+        #[prost(message, tag = "51")]
+        DaoOutput(super::super::super::governance::v1alpha1::DaoOutput),
+        #[prost(message, tag = "52")]
+        DaoDeposit(super::super::super::governance::v1alpha1::DaoDeposit),
     }
 }
 /// Describes a plan for forming a `Clue`.

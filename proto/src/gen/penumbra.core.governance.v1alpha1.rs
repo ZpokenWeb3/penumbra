@@ -20,6 +20,19 @@ pub struct ProposalWithdraw {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProposalDepositClaim {
+    /// The proposal to claim the deposit for.
+    #[prost(uint64, tag = "1")]
+    pub proposal: u64,
+    /// The expected deposit amount.
+    #[prost(message, optional, tag = "2")]
+    pub deposit_amount: ::core::option::Option<super::super::crypto::v1alpha1::Amount>,
+    /// The outcome of the proposal.
+    #[prost(message, optional, tag = "3")]
+    pub outcome: ::core::option::Option<ProposalOutcome>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidatorVote {
     /// The effecting data for the vote.
     #[prost(message, optional, tag = "1")]
@@ -92,19 +105,6 @@ pub struct DelegatorVoteBody {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ProposalDepositClaim {
-    /// The proposal to claim the deposit for.
-    #[prost(uint64, tag = "1")]
-    pub proposal: u64,
-    /// The expected deposit amount.
-    #[prost(message, optional, tag = "2")]
-    pub deposit_amount: ::core::option::Option<super::super::crypto::v1alpha1::Amount>,
-    /// The outcome of the proposal.
-    #[prost(message, optional, tag = "3")]
-    pub outcome: ::core::option::Option<ProposalOutcome>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DelegatorVotePlan {
     /// The proposal to vote on.
     #[prost(uint64, tag = "1")]
@@ -127,6 +127,30 @@ pub struct DelegatorVotePlan {
     /// The randomizer to use for the proof of spend capability.
     #[prost(bytes = "vec", tag = "7")]
     pub randomizer: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DaoDeposit {
+    /// The value to deposit into the DAO.
+    #[prost(message, optional, tag = "1")]
+    pub value: ::core::option::Option<super::super::crypto::v1alpha1::Value>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DaoSpend {
+    /// The value to spend from the DAO.
+    #[prost(message, optional, tag = "1")]
+    pub value: ::core::option::Option<super::super::crypto::v1alpha1::Value>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DaoOutput {
+    /// The value to output from the DAO.
+    #[prost(message, optional, tag = "1")]
+    pub value: ::core::option::Option<super::super::crypto::v1alpha1::Value>,
+    /// The address to send the output to.
+    #[prost(message, optional, tag = "2")]
+    pub address: ::core::option::Option<super::super::crypto::v1alpha1::Address>,
 }
 /// A vote on a proposal.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -181,17 +205,6 @@ pub mod vote {
             }
         }
     }
-}
-/// A chain parameter that can be modified by governance.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MutableChainParameter {
-    /// The identifier of the parameter, used for submitting change proposals.
-    #[prost(string, tag = "1")]
-    pub identifier: ::prost::alloc::string::String,
-    /// A textual description of the parameter and valid values.
-    #[prost(string, tag = "2")]
-    pub description: ::prost::alloc::string::String,
 }
 /// The current state of a proposal.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -266,10 +279,10 @@ pub mod proposal_outcome {
             ::prost::alloc::string::String,
         >,
     }
-    /// The proposal did not pass, and was vetoed.
+    /// The proposal did not pass, and was slashed.
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Vetoed {
+    pub struct Slashed {
         /// The proposal was withdrawn during the voting period.
         #[prost(string, optional, tag = "1")]
         pub withdrawn_with_reason: ::core::option::Option<
@@ -284,15 +297,22 @@ pub mod proposal_outcome {
         #[prost(message, tag = "2")]
         Failed(Failed),
         #[prost(message, tag = "3")]
-        Vetoed(Vetoed),
+        Slashed(Slashed),
     }
 }
-/// A list of proposal ids.
+/// A tally of votes on a proposal.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ProposalList {
-    #[prost(uint64, repeated, tag = "1")]
-    pub proposals: ::prost::alloc::vec::Vec<u64>,
+pub struct Tally {
+    /// The number of votes in favor of the proposal.
+    #[prost(uint64, tag = "1")]
+    pub yes: u64,
+    /// The number of votes against the proposal.
+    #[prost(uint64, tag = "2")]
+    pub no: u64,
+    /// The number of abstentions.
+    #[prost(uint64, tag = "3")]
+    pub abstain: u64,
 }
 /// A proposal to be voted upon.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -342,32 +362,24 @@ pub mod proposal {
         #[prost(bool, tag = "1")]
         pub halt_chain: bool,
     }
-    /// A parameter change proposal describes an alteration to one or more chain parameters, which
-    /// should take effect at a particular block height `effective_height` (which should be at least
-    /// the height when the proposal would be passed).
+    /// A parameter change proposal describes a replacement of the chain parameters, which should take
+    /// effect when the proposal is passed.
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ParameterChange {
-        /// The height at which the change should take effect.
-        #[prost(uint64, tag = "1")]
-        pub effective_height: u64,
-        /// The set of changes to chain parameters.
-        #[prost(message, repeated, tag = "2")]
-        pub new_parameters: ::prost::alloc::vec::Vec<parameter_change::SetParameter>,
-    }
-    /// Nested message and enum types in `ParameterChange`.
-    pub mod parameter_change {
-        /// A single change to an individual chain parameter.
-        #[allow(clippy::derive_partial_eq_without_eq)]
-        #[derive(Clone, PartialEq, ::prost::Message)]
-        pub struct SetParameter {
-            /// The name of the parameter.
-            #[prost(string, tag = "1")]
-            pub parameter: ::prost::alloc::string::String,
-            /// Its new value, as a string (this will be parsed as appropriate for the parameter's type).
-            #[prost(string, tag = "2")]
-            pub value: ::prost::alloc::string::String,
-        }
+        /// The old chain parameters to be replaced: even if the proposal passes, the update will not be
+        /// applied if the chain parameters have changed *at all* from these chain parameters. Usually,
+        /// this should be set to the current chain parameters at time of proposal.
+        #[prost(message, optional, tag = "1")]
+        pub old_parameters: ::core::option::Option<
+            super::super::super::chain::v1alpha1::ChainParameters,
+        >,
+        /// The new chain parameters to be set: the *entire* chain parameters will be replaced with these
+        /// at the time the proposal is passed.
+        #[prost(message, optional, tag = "2")]
+        pub new_parameters: ::core::option::Option<
+            super::super::super::chain::v1alpha1::ChainParameters,
+        >,
     }
     /// A DAO spend proposal describes zero or more transactions to execute on behalf of the DAO, with
     /// access to its funds, and zero or more scheduled transactions from previous passed proposals to
@@ -375,46 +387,10 @@ pub mod proposal {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DaoSpend {
-        /// The sequence of transactions to schedule for execution.
-        #[prost(message, repeated, tag = "1")]
-        pub schedule_transactions: ::prost::alloc::vec::Vec<
-            dao_spend::ScheduleTransaction,
-        >,
-        /// A sequence of previously-scheduled transactions to cancel before they are executed.
-        #[prost(message, repeated, tag = "2")]
-        pub cancel_transactions: ::prost::alloc::vec::Vec<dao_spend::CancelTransaction>,
-    }
-    /// Nested message and enum types in `DaoSpend`.
-    pub mod dao_spend {
-        /// A transaction to be executed as a consequence of this proposal.
-        ///
-        /// It is permissible for there to be duplicate transactions scheduled for a given height; they
-        /// will both be executed.
-        #[allow(clippy::derive_partial_eq_without_eq)]
-        #[derive(Clone, PartialEq, ::prost::Message)]
-        pub struct ScheduleTransaction {
-            /// The height at which the transaction should be executed.
-            #[prost(uint64, tag = "1")]
-            pub execute_at_height: u64,
-            /// The transaction to be executed.
-            #[prost(message, optional, tag = "2")]
-            pub transaction: ::core::option::Option<::pbjson_types::Any>,
-        }
-        /// A transaction to be canceled as a consequence of this proposal.
-        ///
-        /// If there are multiple duplicate transactions at the height, this cancels only the first.
-        /// To cancel more of them, specify duplicate cancellations.
-        #[allow(clippy::derive_partial_eq_without_eq)]
-        #[derive(Clone, PartialEq, ::prost::Message)]
-        pub struct CancelTransaction {
-            /// The height for which the transaction was scheduled.
-            #[prost(uint64, tag = "1")]
-            pub scheduled_at_height: u64,
-            /// The auth hash of the transaction to cancel.
-            #[prost(message, optional, tag = "2")]
-            pub effect_hash: ::core::option::Option<
-                super::super::super::super::crypto::v1alpha1::EffectHash,
-            >,
-        }
+        /// The transaction plan to be executed at the time the proposal is passed. This must be a
+        /// transaction plan which can be executed by the DAO, which means it can't require any witness
+        /// data or authorization signatures, but it may use the `DaoSpend` action.
+        #[prost(message, optional, tag = "2")]
+        pub transaction_plan: ::core::option::Option<::pbjson_types::Any>,
     }
 }

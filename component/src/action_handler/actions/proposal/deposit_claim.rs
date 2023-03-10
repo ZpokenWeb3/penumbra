@@ -4,11 +4,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use penumbra_crypto::ProposalNft;
 use penumbra_storage::{StateRead, StateWrite};
-use penumbra_transaction::action::proposal::Outcome;
+use penumbra_transaction::proposal::{self, Outcome};
 use penumbra_transaction::{action::ProposalDepositClaim, Transaction};
 
 use crate::action_handler::ActionHandler;
-use crate::governance::{proposal, StateReadExt as _, StateWriteExt as _};
+use crate::governance::{StateReadExt as _, StateWriteExt as _};
 use crate::shielded_pool::SupplyWrite;
 
 #[async_trait]
@@ -58,16 +58,14 @@ impl ActionHandler for ProposalDepositClaim {
                     &match &outcome {
                         Outcome::Passed => ProposalNft::passed(*proposal),
                         Outcome::Failed { .. } => ProposalNft::failed(*proposal),
-                        Outcome::Vetoed { .. } => ProposalNft::vetoed(*proposal),
+                        Outcome::Slashed { .. } => ProposalNft::slashed(*proposal),
                     }
                     .denom(),
                 )
                 .await?;
 
             // Set the proposal state to claimed
-            state
-                .put_proposal_state(*proposal, proposal::State::Claimed { outcome })
-                .await?;
+            state.put_proposal_state(*proposal, proposal::State::Claimed { outcome });
         } else {
             anyhow::bail!("proposal {} is not in finished state", proposal);
         }

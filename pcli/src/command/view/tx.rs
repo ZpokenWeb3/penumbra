@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use comfy_table::{presets, Table};
 use penumbra_crypto::{
     asset::Cache, dex::swap::SwapPlaintext, keys::IncomingViewingKey, Address, FullViewingKey,
@@ -160,13 +160,13 @@ fn format_visible_spend_row(
 }
 
 // Turns an `Address` into a `String` representation; either a short-form for addresses
-// not associated with the `ivk`, or in the form of `[self: <index or ephemeral>]` for
+// not associated with the `ivk`, or in the form of `[account: {account}]` for
 // addresses associated with the `ivk`.
 fn format_address(ivk: &IncomingViewingKey, address: &Address) -> String {
     if ivk.views_address(address) {
-        let index = ivk.index_for_diversifier(address.diversifier());
+        let account = ivk.index_for_diversifier(address.diversifier()).account;
 
-        format!("[self: {index:?}]")
+        format!("[account {account:?}]")
     } else {
         address.display_short_form()
     }
@@ -177,15 +177,18 @@ impl TxCmd {
         false
     }
     pub async fn exec<V: ViewClient>(&self, fvk: &FullViewingKey, view: &mut V) -> Result<()> {
+        let hash = self
+            .hash
+            // We have to convert to uppercase because `tendermint::Hash` only accepts uppercase :(
+            .to_uppercase()
+            .parse()
+            .context("invalid transaction hash")?;
         // Retrieve Transaction
-        let tx = view
-            .transaction_by_hash(self.hash.parse()?)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("transaction {} not found in view service", self.hash,)
-            })?;
+        let tx = view.transaction_by_hash(hash).await?.ok_or_else(|| {
+            anyhow::anyhow!("transaction {} not found in view service", self.hash,)
+        })?;
         // Retrieve full TxP
-        let txp = view.transaction_perspective(self.hash.parse()?).await?;
+        let txp = view.transaction_perspective(hash).await?;
         // Generate TxV using TxP
         let txv = tx.decrypt_with_perspective(&txp);
 
@@ -313,6 +316,15 @@ impl TxCmd {
                     penumbra_transaction::ActionView::Ics20Withdrawal(_) => {
                         ["Ics20 Withdrawal".to_string(), "".to_string()]
                     }
+                    penumbra_transaction::ActionView::DaoDeposit(_) => {
+                        ["Dao Deposit".to_string(), "".to_string()]
+                    }
+                    penumbra_transaction::ActionView::DaoSpend(_) => {
+                        ["Dao Spend".to_string(), "".to_string()]
+                    }
+                    penumbra_transaction::ActionView::DaoOutput(_) => {
+                        ["Dao Output".to_string(), "".to_string()]
+                    }
                 });
             }
 
@@ -321,7 +333,8 @@ impl TxCmd {
                 &txv.fee.value().format(&asset_cache),
             ]);
             if let Some(memo) = txv.memo {
-                metadata_table.add_row(vec!["Transaction Memo", &memo]);
+                metadata_table.add_row(vec!["Transaction Memo Sender", &memo.sender.to_string()]);
+                metadata_table.add_row(vec!["Transaction Memo Text", &memo.text]);
             }
             metadata_table.add_row(vec![
                 "Transaction Expiration Height",

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use penumbra_chain::params::FmdParameters;
-use penumbra_chain::{genesis, AppHash, StateWriteExt as _};
+use penumbra_chain::{genesis, AppHash, StateReadExt, StateWriteExt as _};
 use penumbra_proto::{DomainType, StateWriteProto};
 use penumbra_storage::{ArcStateDeltaExt, Snapshot, StateDelta, Storage};
 use penumbra_transaction::Transaction;
@@ -12,7 +12,7 @@ use tracing::Instrument;
 
 use crate::action_handler::ActionHandler;
 use crate::dex::Dex;
-use crate::governance::Governance;
+use crate::governance::{Governance, StateReadExt as _};
 use crate::ibc::IBCComponent;
 use crate::shielded_pool::ShieldedPool;
 use crate::stake::component::{Staking, ValidatorUpdates};
@@ -82,17 +82,57 @@ impl App {
         // store the block time
         state_tx.put_block_timestamp(begin_block.header.time);
 
+        // If a chain parameter change is scheduled for this block, apply it here, before any other
+        // component has executed. This ensures that chain parameter changes are consistently
+        // applied precisely at the boundary between blocks:
+        if let Some(chain_params) = state_tx
+            .pending_chain_parameters()
+            .await
+            .expect("chain params should always be readable")
+        {
+            tracing::info!(?chain_params, "applying pending chain parameters");
+            state_tx.put_chain_params(chain_params);
+        }
+
+        // Run each of the begin block handlers for each component, in sequence:
         Staking::begin_block(&mut state_tx, begin_block).await;
         IBCComponent::begin_block(&mut state_tx, begin_block).await;
         StubDex::begin_block(&mut state_tx, begin_block).await;
         Dex::begin_block(&mut state_tx, begin_block).await;
-        // Temporarily disabled until #1938 is resolved.
-        // Governance::begin_block(&mut state_tx, begin_block).await;
+        Governance::begin_block(&mut state_tx, begin_block).await;
 
         // Shielded pool always executes last.
         ShieldedPool::begin_block(&mut state_tx, begin_block).await;
 
-        state_tx.apply().1
+        // Apply the state from `begin_block` and return the events (we'll append to them if
+        // necessary based on the results of applying the DAO transactions queued)
+        let mut events = state_tx.apply().1;
+
+        // Deliver DAO transactions here, before any other block processing (effectively adding
+        // synthetic transactions slotted in after the start of the block but before any user
+        // transactions)
+        let pending_transactions = self
+            .state
+            .pending_dao_transactions()
+            .await
+            .expect("DAO transactions should always be readable");
+        for transaction in pending_transactions {
+            // NOTE: We are *intentionally* using `deliver_tx_allowing_dao_spends` here, rather than
+            // `deliver_tx`, because here is the **ONLY** place we want to permit DAO spends, when
+            // delivering transactions that have been scheduled by the chain itself for delivery.
+            tracing::info!(?transaction, "delivering DAO transaction");
+            match self
+                .deliver_tx_allowing_dao_spends(Arc::new(transaction))
+                .await
+            {
+                Err(error) => {
+                    tracing::warn!(?error, "failed to deliver DAO transaction");
+                }
+                Ok(dao_tx_events) => events.extend(dao_tx_events),
+            }
+        }
+
+        events
     }
 
     /// Wrapper function for [`Self::deliver_tx`]  that decodes from bytes.
@@ -102,6 +142,26 @@ impl App {
     }
 
     pub async fn deliver_tx(&mut self, tx: Arc<Transaction>) -> Result<Vec<abci::Event>> {
+        // Ensure that any normally-delivered transaction (originating from a user) does not contain
+        // any DAO spends or outputs; the only place those are permitted is transactions originating
+        // from the chain itself:
+        anyhow::ensure!(
+            tx.dao_spends().peekable().peek().is_none(),
+            "DAO spends are not permitted in user-submitted transactions"
+        );
+        anyhow::ensure!(
+            tx.dao_outputs().peekable().peek().is_none(),
+            "DAO outputs are not permitted in user-submitted transactions"
+        );
+
+        // Now that we've ensured that there are not any DAO spends or outputs, we can deliver the transaction:
+        self.deliver_tx_allowing_dao_spends(tx).await
+    }
+
+    async fn deliver_tx_allowing_dao_spends(
+        &mut self,
+        tx: Arc<Transaction>,
+    ) -> Result<Vec<abci::Event>> {
         // Both stateful and stateless checks take the transaction as
         // verification context.  The separate clone of the Arc<Transaction>
         // means it can be passed through the whole tree of checks.
@@ -146,8 +206,7 @@ impl App {
         IBCComponent::end_block(&mut state_tx, end_block).await;
         StubDex::end_block(&mut state_tx, end_block).await;
         Dex::end_block(&mut state_tx, end_block).await;
-        // Temporarily disabled until #1938 is resolved.
-        // Governance::end_block(&mut state_tx, end_block).await;
+        Governance::end_block(&mut state_tx, end_block).await;
 
         // Shielded pool always executes last.
         ShieldedPool::end_block(&mut state_tx, end_block).await;
@@ -166,11 +225,21 @@ impl App {
         let state = Arc::try_unwrap(std::mem::replace(&mut self.state, Arc::new(dummy_state)))
             .expect("we have exclusive ownership of the State at commit()");
 
+        // Check if someone has signaled that we should halt.
+        let should_halt = state.should_halt();
+
         // Commit the pending writes, clearing the state.
         let jmt_root = storage
             .commit(state)
             .await
             .expect("must be able to successfully commit to storage");
+
+        // If we should halt, we should end the process here.
+        if should_halt {
+            tracing::info!("committed block when a chain halt was signaled; exiting now");
+            std::process::exit(0);
+        }
+
         let app_hash: AppHash = jmt_root.into();
 
         tracing::debug!(?app_hash, "finished committing state");

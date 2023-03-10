@@ -8,7 +8,7 @@ use ark_ff::Zero;
 use bytes::Bytes;
 use decaf377_fmd::Clue;
 use penumbra_crypto::{
-    memo::MemoCiphertext,
+    memo::{MemoCiphertext, MemoPlaintext},
     note::Commitment,
     rdsa::{Binding, Signature, VerificationKey, VerificationKeyBytes},
     transaction::Fee,
@@ -23,11 +23,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     action::{
-        Delegate, DelegatorVote, Output, ProposalSubmit, ProposalWithdraw, Swap, Undelegate,
-        ValidatorVote,
+        DaoDeposit, DaoOutput, DaoSpend, Delegate, DelegatorVote, Output, ProposalSubmit,
+        ProposalWithdraw, Swap, Undelegate, ValidatorVote,
     },
     view::action_view::OutputView,
-    Action, ActionView, IsAction, TransactionPerspective, TransactionView,
+    Action, ActionView, Id, IsAction, TransactionPerspective, TransactionView,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -70,6 +70,7 @@ impl Transaction {
             })
             .sum()
     }
+
     pub fn payload_keys(
         &self,
         fvk: &FullViewingKey,
@@ -129,16 +130,20 @@ impl Transaction {
                 | Action::PositionClose(_)
                 | Action::PositionWithdraw(_)
                 | Action::PositionRewardClaim(_)
-                | Action::Ics20Withdrawal(_) => {}
+                | Action::Ics20Withdrawal(_)
+                | Action::DaoSpend(_)
+                | Action::DaoOutput(_)
+                | Action::DaoDeposit(_) => {}
             }
         }
 
         Ok(result)
     }
+
     pub fn decrypt_with_perspective(&self, txp: &TransactionPerspective) -> TransactionView {
         let mut action_views = Vec::new();
 
-        let mut memo_plaintext: Option<String> = None;
+        let mut memo_plaintext: Option<MemoPlaintext> = None;
 
         for action in self.actions() {
             let action_view = action.view_from_perspective(txp);
@@ -289,6 +294,36 @@ impl Transaction {
         })
     }
 
+    pub fn dao_deposits(&self) -> impl Iterator<Item = &DaoDeposit> {
+        self.actions().filter_map(|action| {
+            if let Action::DaoDeposit(d) = action {
+                Some(d)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn dao_spends(&self) -> impl Iterator<Item = &DaoSpend> {
+        self.actions().filter_map(|action| {
+            if let Action::DaoSpend(s) = action {
+                Some(s)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn dao_outputs(&self) -> impl Iterator<Item = &DaoOutput> {
+        self.actions().filter_map(|action| {
+            if let Action::DaoOutput(o) = action {
+                Some(o)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn transaction_body(&self) -> TransactionBody {
         self.transaction_body.clone()
     }
@@ -297,14 +332,14 @@ impl Transaction {
         &self.binding_sig
     }
 
-    pub fn id(&self) -> [u8; 32] {
+    pub fn id(&self) -> Id {
         use sha2::{Digest, Sha256};
 
         let tx_bytes: Vec<u8> = self.clone().try_into().expect("can serialize transaction");
         let mut id_bytes = [0; 32];
         id_bytes[..].copy_from_slice(Sha256::digest(&tx_bytes).as_slice());
 
-        id_bytes
+        Id(id_bytes)
     }
 
     /// Compute the binding verification key from the transaction data.

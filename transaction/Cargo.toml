@@ -9,8 +9,9 @@ decaf377-ka = { path = "../decaf377-ka/" }
 decaf377-fmd = { path = "../decaf377-fmd/" }
 penumbra-proto = { path = "../proto/" }
 penumbra-crypto = { path = "../crypto/" }
+penumbra-chain = { path = "../chain/" }
 penumbra-tct = { path = "../tct" }
-penumbra-proof-params = { path = "../proof-params/" }
+penumbra-proof-params = { path = "../proof-params/", features = ["proving-keys"] }
 
 # Git deps
 decaf377 = { git = "https://github.com/penumbra-zone/decaf377" }
@@ -21,7 +22,7 @@ ibc = "0.29"
 
 
 # Crates.io deps
-base64 = "0.20"
+base64 = "0.21"
 ark-ff = "0.3"
 ark-serialize = "0.3"
 regex = "1.5"

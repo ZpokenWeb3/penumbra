@@ -6,13 +6,13 @@ use std::{
 
 use anyhow::{Context, Result};
 use futures::{StreamExt, TryStreamExt};
-use penumbra_component::governance::{
-    proposal::{self, chain_params::MutableParam, ProposalList},
-    state_key::*,
-};
+use penumbra_component::governance::{self, state_key::*};
 use penumbra_crypto::stake::IdentityKey;
-use penumbra_proto::client::v1alpha1::MutableParametersRequest;
-use penumbra_transaction::action::{Proposal, Vote};
+use penumbra_proto::client::v1alpha1::{PrefixValueRequest, PrefixValueResponse};
+use penumbra_transaction::{
+    proposal::{self, Proposal},
+    vote::Vote,
+};
 use penumbra_view::ViewClient;
 use serde::Serialize;
 use serde_json::json;
@@ -35,8 +35,6 @@ pub enum GovernanceCmd {
         #[clap(subcommand)]
         query: PerProposalCmd,
     },
-    /// Query for the governance-modifiable chain parameters.
-    Parameters,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -47,10 +45,8 @@ pub enum PerProposalCmd {
     State,
     /// Display the voting period of a proposal.
     Period,
-    /// Display the latest epoch's tally of votes on the proposal, in units of voting power.
+    /// Display the most recent tally of votes on the proposal.
     Tally,
-    /// List the votes of the validators who have voted on a proposal.
-    ValidatorVotes,
 }
 
 impl GovernanceCmd {
@@ -60,33 +56,27 @@ impl GovernanceCmd {
         let mut client = app.specific_client().await?;
 
         match self {
-            GovernanceCmd::Parameters => {
-                let mut client = app.oblivious_client().await?;
-
-                let params = client
-                    .mutable_parameters(MutableParametersRequest {
-                        chain_id: app.view().chain_params().await?.chain_id,
-                    })
-                    .await?
-                    .into_inner()
-                    .try_collect::<Vec<_>>()
-                    .await?;
-
-                let params: Result<Vec<MutableParam>, _> =
-                    params.into_iter().map(TryInto::try_into).collect();
-
-                let params = params?;
-
-                json(&params)?;
-            }
             GovernanceCmd::ListProposals { inactive } => {
                 let proposal_id_list: Vec<u64> = if *inactive {
                     let next: u64 = client.key_proto(next_proposal_id()).await?;
                     (0..next).collect()
                 } else {
-                    let unfinished: ProposalList =
-                        client.key_domain(unfinished_proposals()).await?;
-                    unfinished.proposals.into_iter().collect()
+                    let mut unfinished = client
+                        .prefix_value(PrefixValueRequest {
+                            prefix: all_unfinished_proposals().into(),
+                            chain_id: app.view().chain_params().await?.chain_id,
+                        })
+                        .await?
+                        .into_inner();
+                    let mut unfinished_proposals: Vec<u64> = Vec::new();
+                    while let Some(PrefixValueResponse { key, .. }) =
+                        unfinished.next().await.transpose()?
+                    {
+                        let proposal_id = u64::from_str(key.rsplit('/').next().unwrap())
+                            .context("proposal id was not a valid u64")?;
+                        unfinished_proposals.push(proposal_id);
+                    }
+                    unfinished_proposals
                 };
 
                 let mut writer = stdout();
@@ -125,29 +115,90 @@ impl GovernanceCmd {
                     });
                     json(&period)?;
                 }
-                ValidatorVotes => {
-                    let mut votes: BTreeMap<IdentityKey, Vote> = BTreeMap::new();
-                    client
-                        .prefix_domain::<Vote>(voting_validators_list(*proposal_id))
+                Tally => {
+                    let validator_votes: BTreeMap<IdentityKey, Vote> = client
+                        .prefix_domain::<Vote>(all_validator_votes_for_proposal(*proposal_id))
                         .await?
-                        .next()
-                        .await
-                        .into_iter()
-                        .try_for_each(|r| {
-                            let r = r?;
-                            votes.insert(
+                        .and_then(|r| async move {
+                            let identity_key = IdentityKey::from_str(
+                                r.0.rsplit('/').next().context("invalid key")?,
+                            )?;
+                            Ok((identity_key, r.1))
+                        })
+                        .try_collect()
+                        .await?;
+
+                    let mut validator_votes_and_power: BTreeMap<IdentityKey, (Vote, u64)> =
+                        BTreeMap::new();
+                    for (identity_key, vote) in validator_votes.iter() {
+                        let power: u64 = client
+                            .key_proto(voting_power_at_proposal_start(*proposal_id, *identity_key))
+                            .await
+                            .context("validator power not found")?;
+                        validator_votes_and_power.insert(*identity_key, (*vote, power));
+                    }
+
+                    let mut delegator_tallies: BTreeMap<IdentityKey, governance::Tally> = client
+                        .prefix_domain::<governance::Tally>(
+                            all_tallied_delegator_votes_for_proposal(*proposal_id),
+                        )
+                        .await?
+                        .and_then(|r| async move {
+                            Ok((
                                 IdentityKey::from_str(
                                     r.0.rsplit('/').next().context("invalid key")?,
                                 )?,
                                 r.1,
-                            );
-                            Ok::<(), anyhow::Error>(())
-                        })?;
+                            ))
+                        })
+                        .try_collect()
+                        .await?;
 
-                    json(&votes)?;
-                }
-                Tally => {
-                    todo!("vote tallying not yet implemented");
+                    // Combine the two mappings
+                    let mut total = governance::Tally::default();
+                    let mut all_votes_and_power: BTreeMap<String, serde_json::Value> =
+                        BTreeMap::new();
+                    for (identity_key, (vote, power)) in validator_votes_and_power.into_iter() {
+                        all_votes_and_power.insert(identity_key.to_string(), {
+                            let mut map = serde_json::Map::new();
+                            map.insert(
+                                "validator".to_string(),
+                                json!({
+                                    vote.to_string(): power,
+                                }),
+                            );
+                            let delegator_tally =
+                                if let Some(tally) = delegator_tallies.remove(&identity_key) {
+                                    map.insert("delegators".to_string(), json_tally(&tally));
+                                    tally
+                                } else {
+                                    Default::default()
+                                };
+                            // Subtract delegator total from validator power, then add delegator
+                            // tally in to get the total tally for this validator:
+                            let sub_total =
+                                governance::Tally::from((vote, power - delegator_tally.total()))
+                                    + delegator_tally;
+                            map.insert("sub_total".to_string(), json_tally(&sub_total));
+                            total += sub_total;
+                            map.into()
+                        });
+                    }
+                    for (identity_key, tally) in delegator_tallies.into_iter() {
+                        all_votes_and_power.insert(identity_key.to_string(), {
+                            let mut map = serde_json::Map::new();
+                            let sub_total = tally;
+                            map.insert("delegators".to_string(), json_tally(&tally));
+                            map.insert("sub_total".to_string(), json_tally(&sub_total));
+                            total += sub_total;
+                            map.into()
+                        });
+                    }
+
+                    json(&json!({
+                        "total": json_tally(&total),
+                        "details": all_votes_and_power,
+                    }))?;
                 }
             },
         }
@@ -161,6 +212,20 @@ fn json<T: Serialize>(value: &T) -> Result<()> {
     serde_json::to_writer_pretty(&mut writer, value)?;
     writer.write_all(b"\n")?;
     Ok(())
+}
+
+fn json_tally(tally: &governance::Tally) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if tally.yes() > 0 {
+        map.insert("yes".to_string(), tally.yes().into());
+    }
+    if tally.no() > 0 {
+        map.insert("no".to_string(), tally.no().into());
+    }
+    if tally.abstain() > 0 {
+        map.insert("abstain".to_string(), tally.abstain().into());
+    }
+    map.into()
 }
 
 fn toml<T: Serialize>(value: &T) -> Result<()> {

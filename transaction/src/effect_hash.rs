@@ -8,13 +8,13 @@ use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, DomainType, Message};
 
 use crate::{
     action::{
-        output, proposal, spend, swap, swap_claim, Delegate, DelegatorVote, DelegatorVoteBody,
-        Ics20Withdrawal, PositionClose, PositionOpen, PositionRewardClaim, PositionWithdraw,
-        Proposal, ProposalDepositClaim, ProposalSubmit, ProposalWithdraw, Undelegate,
-        UndelegateClaimBody, ValidatorVote, ValidatorVoteBody, Vote,
+        output, spend, swap, swap_claim, DaoDeposit, DaoOutput, DaoSpend, Delegate, DelegatorVote,
+        DelegatorVoteBody, Ics20Withdrawal, PositionClose, PositionOpen, PositionRewardClaim,
+        PositionWithdraw, Proposal, ProposalDepositClaim, ProposalSubmit, ProposalWithdraw,
+        Undelegate, UndelegateClaimBody, ValidatorVote, ValidatorVoteBody, Vote,
     },
     plan::TransactionPlan,
-    Action, Transaction, TransactionBody,
+    proposal, Action, Transaction, TransactionBody,
 };
 
 pub trait EffectingData {
@@ -218,6 +218,15 @@ impl TransactionPlan {
                 .hash(&payload.encode_to_vec());
             state.update(effect_hash.as_bytes());
         }
+        for dao_spend in self.dao_spends() {
+            state.update(dao_spend.effect_hash().as_bytes());
+        }
+        for dao_output in self.dao_outputs() {
+            state.update(dao_output.effect_hash().as_bytes());
+        }
+        for dao_deposit in self.dao_deposits() {
+            state.update(dao_deposit.effect_hash().as_bytes());
+        }
         let num_clues = self.clue_plans.len() as u32;
         state.update(&num_clues.to_le_bytes());
         for clue_plan in self.clue_plans() {
@@ -270,6 +279,9 @@ impl EffectingData for Action {
             Action::PositionWithdraw(p) => p.effect_hash(),
             Action::PositionRewardClaim(p) => p.effect_hash(),
             Action::Ics20Withdrawal(w) => w.effect_hash(),
+            Action::DaoSpend(d) => d.effect_hash(),
+            Action::DaoOutput(d) => d.effect_hash(),
+            Action::DaoDeposit(d) => d.effect_hash(),
         }
     }
 }
@@ -545,8 +557,8 @@ where
                 state.update(b"Failed");
                 state.update(withdrawn.effect_hash().as_bytes());
             }
-            proposal::Outcome::Vetoed { withdrawn } => {
-                state.update(b"Vetoed");
+            proposal::Outcome::Slashed { withdrawn } => {
+                state.update(b"Slashed");
                 state.update(withdrawn.effect_hash().as_bytes());
             }
         }
@@ -673,6 +685,46 @@ impl EffectingData for Ics20Withdrawal {
     }
 }
 
+impl EffectingData for DaoSpend {
+    fn effect_hash(&self) -> EffectHash {
+        let mut state = blake2b_simd::Params::default()
+            .personal(b"PAH:daospend")
+            .to_state();
+
+        state.update(&self.value.amount.to_le_bytes());
+        state.update(&self.value.asset_id.to_bytes());
+
+        EffectHash(state.finalize().as_array().clone())
+    }
+}
+
+impl EffectingData for DaoDeposit {
+    fn effect_hash(&self) -> EffectHash {
+        let mut state = blake2b_simd::Params::default()
+            .personal(b"PAH:daodeposit")
+            .to_state();
+
+        state.update(&self.value.amount.to_le_bytes());
+        state.update(&self.value.asset_id.to_bytes());
+
+        EffectHash(state.finalize().as_array().clone())
+    }
+}
+
+impl EffectingData for DaoOutput {
+    fn effect_hash(&self) -> EffectHash {
+        let mut state = blake2b_simd::Params::default()
+            .personal(b"PAH:daooutput")
+            .to_state();
+
+        state.update(&self.address.encode_to_vec());
+        state.update(&self.value.amount.to_le_bytes());
+        state.update(&self.value.asset_id.to_bytes());
+
+        EffectHash(state.finalize().as_array().clone())
+    }
+}
+
 impl EffectingData for Clue {
     fn effect_hash(&self) -> EffectHash {
         let mut state = blake2b_simd::Params::default()
@@ -733,8 +785,9 @@ mod tests {
         asset,
         dex::{swap::SwapPlaintext, TradingPair},
         keys::{SeedPhrase, SpendKey},
+        memo::MemoPlaintext,
         transaction::Fee,
-        Note, Value, STAKING_TOKEN_ASSET_ID,
+        Address, Note, Value, STAKING_TOKEN_ASSET_ID,
     };
     use penumbra_tct as tct;
     use rand_core::OsRng;
@@ -797,6 +850,8 @@ mod tests {
             addr,
         );
 
+        let mut rng = OsRng;
+
         let plan = TransactionPlan {
             expiry_height: 0,
             fee: Fee::default(),
@@ -818,7 +873,16 @@ mod tests {
                 SwapPlan::new(&mut OsRng, swap_plaintext).into(),
             ],
             clue_plans: vec![CluePlan::new(&mut OsRng, addr, 1)],
-            memo_plan: Some(MemoPlan::new(&mut OsRng, String::new()).unwrap()),
+            memo_plan: Some(
+                MemoPlan::new(
+                    &mut OsRng,
+                    MemoPlaintext {
+                        sender: Address::dummy(&mut rng),
+                        text: "".to_string(),
+                    },
+                )
+                .unwrap(),
+            ),
         };
 
         println!("{}", serde_json::to_string_pretty(&plan).unwrap());

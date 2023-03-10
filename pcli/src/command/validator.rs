@@ -21,7 +21,11 @@ use crate::App;
 #[derive(Debug, clap::Subcommand)]
 pub enum ValidatorCmd {
     /// Display the validator identity key derived from this wallet's spend seed.
-    Identity,
+    Identity {
+        /// Use Base64 encoding for the identity key, rather than the default of Bech32.
+        #[clap(long)]
+        base64: bool,
+    },
     /// Manage your validator's definition.
     #[clap(subcommand)]
     Definition(DefinitionCmd),
@@ -30,7 +34,7 @@ pub enum ValidatorCmd {
         /// The transaction fee (paid in upenumbra).
         #[clap(long, default_value = "0", global = true, display_order = 200)]
         fee: u64,
-        /// Optional. Only spend funds originally received by the given address index.
+        /// Optional. Only spend funds originally received by the given account.
         #[clap(long, default_value = "0", global = true, display_order = 300)]
         source: u32,
         /// The vote to cast.
@@ -49,7 +53,7 @@ pub enum DefinitionCmd {
         /// The transaction fee (paid in upenumbra).
         #[clap(long, default_value = "0")]
         fee: u64,
-        /// Optional. Only spend funds originally received by the given address index.
+        /// Optional. Only spend funds originally received by the given account.
         #[clap(long, default_value = "0")]
         source: u32,
     },
@@ -80,7 +84,7 @@ pub enum DefinitionCmd {
 impl ValidatorCmd {
     pub fn offline(&self) -> bool {
         match self {
-            ValidatorCmd::Identity => true,
+            ValidatorCmd::Identity { .. } => true,
             ValidatorCmd::Definition(DefinitionCmd::Upload { .. }) => false,
             ValidatorCmd::Definition(
                 DefinitionCmd::Template { .. } | DefinitionCmd::Fetch { .. },
@@ -94,10 +98,15 @@ impl ValidatorCmd {
         let sk = app.wallet.spend_key.clone();
         let fvk = sk.full_viewing_key().clone();
         match self {
-            ValidatorCmd::Identity => {
+            ValidatorCmd::Identity { base64 } => {
                 let ik = IdentityKey(fvk.spend_verification_key().clone());
 
-                println!("{ik}");
+                if *base64 {
+                    use base64::{display::Base64Display, engine::general_purpose::STANDARD};
+                    println!("{}", Base64Display::new(&ik.0.to_bytes(), &STANDARD));
+                } else {
+                    println!("{ik}");
+                }
             }
             ValidatorCmd::Definition(DefinitionCmd::Upload { file, fee, source }) => {
                 // The definitions are stored in a JSON document,
@@ -131,8 +140,10 @@ impl ValidatorCmd {
                     auth_sig,
                 };
                 // Construct a new transaction and include the validator definition.
+
+                let account_id = app.fvk.account_id();
                 let plan = plan::validator_definition(
-                    &app.fvk,
+                    account_id,
                     app.view.as_mut().unwrap(),
                     OsRng,
                     vd,
@@ -174,8 +185,10 @@ impl ValidatorCmd {
                 // Construct a new transaction and include the validator definition.
                 let fee = Fee::from_staking_token_amount((*fee).into());
 
+                let account_id = app.fvk.account_id();
+
                 let plan = plan::validator_vote(
-                    &app.fvk,
+                    account_id,
                     app.view.as_mut().unwrap(),
                     OsRng,
                     vote,
@@ -221,11 +234,12 @@ impl ValidatorCmd {
                 // Customize the human-readable comment text in the definition.
                 let generated_key_notice: String = match tendermint_validator_keyfile {
                     Some(_s) => String::from(""),
-                    None => format!(
+                    None => {
                         "\n# The consensus_key field is random, and needs to be replaced with your
 # tendermint instance's public key, which can be found in `priv_validator_key.json`.
 #"
-                    ),
+                        .to_string()
+                    }
                 };
 
                 let template: ValidatorToml = Validator {
@@ -238,10 +252,13 @@ impl ValidatorCmd {
                     // Default enabled to "false" so operators are required to manually
                     // enable their validators when ready.
                     enabled: false,
-                    funding_streams: FundingStreams::try_from(vec![FundingStream {
-                        address,
-                        rate_bps: 100,
-                    }])?,
+                    funding_streams: FundingStreams::try_from(vec![
+                        FundingStream::ToAddress {
+                            address,
+                            rate_bps: 100,
+                        },
+                        FundingStream::ToDao { rate_bps: 100 },
+                    ])?,
                     sequence_number: 0,
                 }
                 .into();

@@ -1,6 +1,10 @@
 use anyhow::{anyhow, Context};
 use penumbra_proto::{core::dex::v1alpha1 as pb, serializers::bech32str, DomainType};
+use rand::RngCore;
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+
+use crate::{dex::TradingPair, Amount};
 
 use super::{trading_function::TradingFunction, Reserves};
 
@@ -13,15 +17,27 @@ pub const MAX_RESERVE_AMOUNT: u128 = (1 << 112) - 1;
 pub struct Position {
     /// A trading function to a specific trading pair.
     pub phi: TradingFunction,
-    /// A random value used to disambiguate different positions with the exact same
-    /// trading function.  The chain should reject newly created positions with the
-    /// same nonce as an existing position.  This ensures that [`Id`]s will
-    /// be unique, and allows us to track position ownership with a
+    /// A random value used to disambiguate different positions with the exact
+    /// same trading function.  The position ID is a hash of the trading
+    /// function and the nonce; the chain rejects transactions creating
+    /// duplicate position [`Id`]s, so it can track position ownership with a
     /// sequence of stateful NFTs based on the [`Id`].
     pub nonce: [u8; 32],
 }
 
 impl Position {
+    /// Construct a new [Position] with a random nonce.
+    pub fn new(pair: TradingPair, spread: Amount, reserves: Reserves) -> Position {
+        let mut rng = OsRng;
+        let mut nonce_bytes = [0u8; 32];
+        rng.fill_bytes(&mut nonce_bytes);
+
+        Position {
+            phi: TradingFunction::new(pair, spread.into(), reserves.r1, reserves.r2),
+            nonce: nonce_bytes,
+        }
+    }
+
     /// Get the ID of this position.
     pub fn id(&self) -> Id {
         let mut state = blake2b_simd::Params::default()

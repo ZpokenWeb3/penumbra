@@ -1,29 +1,34 @@
-use std::{collections::BTreeSet, pin::Pin, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
-use penumbra_chain::StateReadExt as _;
+use futures::{StreamExt, TryStreamExt};
+use penumbra_chain::{params::ChainParameters, StateReadExt as _, StateWriteExt as _};
 use penumbra_crypto::{
-    asset::Amount,
+    asset::{self, Amount},
     stake::{DelegationToken, IdentityKey},
     GovernanceKey, Nullifier, Value, STAKING_TOKEN_DENOM,
 };
 use penumbra_proto::{StateReadProto, StateWriteProto};
 use penumbra_storage::{StateRead, StateWrite};
 use penumbra_tct as tct;
-use penumbra_transaction::action::{Proposal, ProposalPayload, Vote};
+use penumbra_transaction::{
+    action::Vote,
+    proposal::{self, Proposal, ProposalPayload},
+    Transaction,
+};
 use tokio::task::JoinSet;
+use tracing::instrument;
 
 use crate::{
     shielded_pool::{StateReadExt as _, StateWriteExt as _, SupplyRead},
     stake::{rate::RateData, validator, StateReadExt as _},
 };
 
-use super::{
-    proposal::{self, ProposalList},
-    state_key,
-};
+use super::{state_key, tally::Tally};
 
 #[async_trait]
 pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
@@ -32,7 +37,7 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
         Ok(self
             .get_proto::<u64>(state_key::next_proposal_id())
             .await?
-            .expect("counter is initialized"))
+            .unwrap_or_default())
     }
 
     /// Get the proposal payload for a proposal.
@@ -58,25 +63,18 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
 
     /// Get all the unfinished proposal ids.
     async fn unfinished_proposals(&self) -> Result<BTreeSet<u64>> {
-        Ok(self
-            .get::<proposal::ProposalList>(state_key::unfinished_proposals())
-            .await?
-            .unwrap_or_default()
-            .proposals)
-    }
-
-    /// Get the list of validators who voted on a proposal.
-    async fn voting_validators(&self, proposal_id: u64) -> Result<Vec<IdentityKey>> {
-        let k = state_key::voting_validators_list(proposal_id);
-        let mut range: Pin<Box<dyn Stream<Item = Result<(String, Vote)>> + Send + '_>> =
-            self.prefix(&k);
-
-        range
-            .next()
-            .await
-            .into_iter()
-            .map(|r| IdentityKey::from_str(r?.0.rsplit('/').next().context("invalid key")?))
-            .collect()
+        let prefix = state_key::all_unfinished_proposals();
+        let mut stream = self.prefix_proto(prefix);
+        let mut proposals = BTreeSet::new();
+        while let Some((key, ())) = stream.next().await.transpose()? {
+            let proposal_id = u64::from_str(
+                key.rsplit('/')
+                    .next()
+                    .context("invalid key for unfinished proposal")?,
+            )?;
+            proposals.insert(proposal_id);
+        }
+        Ok(proposals)
     }
 
     /// Get the vote of a validator on a particular proposal.
@@ -116,17 +114,13 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
     }
 
     /// Get the total voting power across all validators.
-    async fn total_voting_power(&self) -> Result<u64> {
-        let mut total = 0;
-
-        for v in self.validator_list().await? {
-            total += self
-                .validator_power(&v.identity_key)
-                .await?
-                .unwrap_or_default();
-        }
-
-        Ok(total)
+    async fn total_voting_power_at_proposal_start(&self, proposal_id: u64) -> Result<u64> {
+        Ok(self
+            .validator_voting_power_at_proposal_start(proposal_id)
+            .await?
+            .values()
+            .copied()
+            .sum())
     }
 
     /// Check whether a nullifier was spent for a given proposal.
@@ -136,7 +130,7 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
         nullifier: &Nullifier,
     ) -> Result<()> {
         if let Some(height) = self
-            .get_proto::<u64>(&state_key::per_proposal_voted_nullifier_lookup(
+            .get_proto::<u64>(&state_key::voted_nullifier_lookup_for_proposal(
                 proposal_id,
                 nullifier,
             ))
@@ -231,6 +225,23 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
         Ok(())
     }
 
+    /// Look up the validator for a given asset ID, if it is a delegation token.
+    async fn validator_by_delegation_asset(&self, asset_id: asset::Id) -> Result<IdentityKey> {
+        // Attempt to find the denom for the asset ID of the specified value
+        let Some(denom) = self.denom_by_asset(&asset_id).await? else {
+            return Err(anyhow::anyhow!(
+                "asset ID {} does not correspond to a known denom",
+                asset_id
+            ));
+        };
+
+        // Attempt to find the validator identity for the specified denom, failing if it is not a
+        // delegation token
+        let validator_identity = DelegationToken::try_from(denom)?.validator();
+
+        Ok(validator_identity)
+    }
+
     /// Throw an error if the exchange between the value and the unbonded amount isn't correct for
     /// the proposal given.
     async fn check_unbonded_amount_correct_exchange_for_proposal(
@@ -239,14 +250,7 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
         value: &Value,
         unbonded_amount: &Amount,
     ) -> Result<()> {
-        // Attempt to find the denom for the asset ID of the specified value
-        let Some(denom) = self.denom_by_asset(&value.asset_id).await? else {
-            anyhow::bail!("unknown asset id {} is not a delegation token", value.asset_id);
-        };
-
-        // Attempt to find the validator identity for the specified denom, failing if it is not a
-        // delegation token
-        let validator_identity = DelegationToken::try_from(denom)?.validator();
+        let validator_identity = self.validator_by_delegation_asset(value.asset_id).await?;
 
         // Attempt to look up the snapshotted `RateData` for the validator at the start of the proposal
         let Some(rate_data) = self
@@ -376,15 +380,194 @@ pub trait StateReadExt: StateRead + crate::stake::StateReadExt {
 
         Ok(())
     }
+
+    /// Get all the active validator voting power for the proposal.
+    async fn validator_voting_power_at_proposal_start(
+        &self,
+        proposal_id: u64,
+    ) -> Result<BTreeMap<IdentityKey, u64>> {
+        let mut powers = BTreeMap::new();
+
+        let prefix = state_key::all_voting_power_at_proposal_start(proposal_id);
+        let mut stream = self.prefix_proto(&prefix);
+
+        while let Some((key, power)) = stream.next().await.transpose()? {
+            let identity_key = key
+                .rsplit('/')
+                .next()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "incorrect key format for validator voting power at proposal start"
+                    )
+                })?
+                .parse()?;
+            powers.insert(identity_key, power);
+        }
+
+        Ok(powers)
+    }
+
+    /// Check whether a validator was active at the start of a proposal, and fail if not.
+    async fn check_validator_active_at_proposal_start(
+        &self,
+        proposal_id: u64,
+        identity_key: &IdentityKey,
+    ) -> Result<()> {
+        if self
+            .get_proto::<u64>(&state_key::voting_power_at_proposal_start(
+                proposal_id,
+                *identity_key,
+            ))
+            .await?
+            .is_none()
+        {
+            anyhow::bail!(
+                "validator {} was not active at the start of proposal {}",
+                identity_key,
+                proposal_id
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Get all the validator votes for the proposal.
+    async fn validator_votes(&self, proposal_id: u64) -> Result<BTreeMap<IdentityKey, Vote>> {
+        let mut votes = BTreeMap::new();
+
+        let prefix = state_key::all_validator_votes_for_proposal(proposal_id);
+        let mut stream = self.prefix(&prefix);
+
+        while let Some((key, vote)) = stream.next().await.transpose()? {
+            let identity_key = key
+                .rsplit('/')
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("incorrect key format for validator vote"))?
+                .parse()?;
+            votes.insert(identity_key, vote);
+        }
+
+        Ok(votes)
+    }
+
+    /// Get all the *tallied* delegator votes for the proposal (excluding those which have been
+    /// cast but not tallied).
+    async fn tallied_delegator_votes(
+        &self,
+        proposal_id: u64,
+    ) -> Result<BTreeMap<IdentityKey, Tally>> {
+        let mut tallies = BTreeMap::new();
+
+        let prefix = state_key::all_tallied_delegator_votes_for_proposal(proposal_id);
+        let mut stream = self.prefix(&prefix);
+
+        while let Some((key, tally)) = stream.next().await.transpose()? {
+            let identity_key = key
+                .rsplit('/')
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("incorrect key format for delegator vote tally"))?
+                .parse()?;
+            tallies.insert(identity_key, tally);
+        }
+
+        Ok(tallies)
+    }
+
+    /// Add up all the currently tallied votes (without tallying any cast votes that haven't been
+    /// tallied yet).
+    async fn current_tally(&self, proposal_id: u64) -> Result<Tally> {
+        let validator_powers = self
+            .validator_voting_power_at_proposal_start(proposal_id)
+            .await?;
+        let mut validator_votes = self.validator_votes(proposal_id).await?;
+        let mut delegator_tallies = self.tallied_delegator_votes(proposal_id).await?;
+
+        // For each validator, tally their own vote, overriding it with any tallied delegator votes
+        let mut tally = Tally::default();
+        for (validator, power) in validator_powers.into_iter() {
+            let delegator_tally = delegator_tallies.remove(&validator).unwrap_or_default();
+            if let Some(vote) = validator_votes.remove(&validator) {
+                // The effective power of a validator is the voting power of that validator at
+                // proposal start, minus the total voting power used by delegators to that validator
+                // who have voted. Their votes will be added back in below, re-assigning their
+                // voting power to their chosen votes.
+                let effective_power = power - delegator_tally.total();
+                tally += (vote, effective_power).into();
+            }
+            // Add the delegator votes in, regardless of if the validator has voted.
+            tally += delegator_tally;
+        }
+
+        assert!(
+            validator_votes.is_empty(),
+            "no inactive validator should have voted"
+        );
+        assert!(
+            delegator_tallies.is_empty(),
+            "no delegator should have been able to vote for an inactive validator"
+        );
+
+        Ok(tally)
+    }
+
+    /// Get the current chain halt count.
+    async fn emergency_chain_halt_count(&self) -> Result<u64> {
+        Ok(self
+            .get_proto(state_key::emergency_chain_halt_count())
+            .await?
+            .unwrap_or_default())
+    }
+
+    /// Get all the transactions set to be delivered in this block (scheduled in last block).
+    async fn pending_dao_transactions(&self) -> Result<Vec<Transaction>> {
+        // Get the proposal IDs of the DAO transactions we are about to deliver.
+        let prefix = state_key::deliver_dao_transactions_at_height(self.get_block_height().await?);
+        let proposals: Vec<u64> = self
+            .prefix_proto::<u64>(&prefix)
+            .map(|result| Ok::<_, anyhow::Error>(result?.1))
+            .try_collect()
+            .await?;
+
+        // For each one, look up the corresponding built transaction, and return the list.
+        let mut transactions = Vec::new();
+        for proposal in proposals {
+            transactions.push(
+                self.get(&state_key::dao_transaction(proposal))
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("no transaction found for proposal {}", proposal)
+                    })?,
+            );
+        }
+        Ok(transactions)
+    }
+
+    /// Get the pending chain parameters, if any.
+    async fn pending_chain_parameters(&self) -> Result<Option<ChainParameters>> {
+        Ok(self
+            .get(&state_key::change_chain_params_at_height(
+                self.get_block_height().await?,
+            ))
+            .await?)
+    }
+
+    /// Get the next block's pending chain parameters, if any.
+    async fn next_block_pending_chain_parameters(&self) -> Result<Option<ChainParameters>> {
+        Ok(self
+            .get(&state_key::change_chain_params_at_height(
+                self.get_block_height().await? + 1,
+            ))
+            .await?)
+    }
 }
 
 impl<T: StateRead + crate::stake::StateReadExt + ?Sized> StateReadExt for T {}
 
 #[async_trait]
 pub trait StateWriteExt: StateWrite {
-    /// Initialize the proposal counter at zero.
-    async fn init_proposal_counter(&mut self) {
-        self.put_proto(state_key::next_proposal_id().to_owned(), 0);
+    /// Initialize the proposal counter so that it can always be read.
+    fn init_proposal_counter(&mut self) {
+        self.put_proto(state_key::next_proposal_id().to_string(), 0);
     }
 
     /// Store a new proposal with a new proposal id.
@@ -453,84 +636,55 @@ pub trait StateWriteExt: StateWrite {
     }
 
     /// Mark a nullifier as spent for a given proposal.
-    async fn mark_nullifier_voted(
-        &mut self,
-        proposal_id: u64,
-        nullifier: &Nullifier,
-    ) -> Result<()> {
+    async fn mark_nullifier_voted(&mut self, proposal_id: u64, nullifier: &Nullifier) {
         self.put_proto(
-            state_key::per_proposal_voted_nullifier_lookup(proposal_id, nullifier),
+            state_key::voted_nullifier_lookup_for_proposal(proposal_id, nullifier),
             self.height().await,
         );
-
-        Ok(())
     }
 
     /// Store the proposal deposit amount.
-    async fn put_deposit_amount(&mut self, proposal_id: u64, amount: Amount) {
+    fn put_deposit_amount(&mut self, proposal_id: u64, amount: Amount) {
         self.put(state_key::proposal_deposit_amount(proposal_id), amount);
     }
 
-    /// Set all the unfinished proposal ids.
-    async fn put_unfinished_proposals(&mut self, unfinished_proposals: ProposalList) {
-        self.put(
-            state_key::unfinished_proposals().to_owned(),
-            unfinished_proposals,
-        );
-    }
-
     /// Set the state of a proposal.
-    async fn put_proposal_state(&mut self, proposal_id: u64, state: proposal::State) -> Result<()> {
+    fn put_proposal_state(&mut self, proposal_id: u64, state: proposal::State) {
         // Set the state of the proposal
         self.put(state_key::proposal_state(proposal_id), state.clone());
 
-        // Track the index
-        let mut unfinished_proposals = self
-            .get::<proposal::ProposalList>(state_key::unfinished_proposals())
-            .await?
-            .unwrap_or_default();
         match &state {
             proposal::State::Voting | proposal::State::Withdrawn { .. } => {
                 // If we're setting the proposal to a non-finished state, track it in our list of
                 // proposals that are not finished
-                unfinished_proposals.proposals.insert(proposal_id);
+                self.put_proto(state_key::unfinished_proposal(proposal_id), ());
             }
             proposal::State::Finished { .. } | proposal::State::Claimed { .. } => {
                 // If we're setting the proposal to a finished or claimed state, remove it from our list of
                 // proposals that are not finished
-                unfinished_proposals.proposals.remove(&proposal_id);
+                self.delete(state_key::unfinished_proposal(proposal_id));
             }
         }
-
-        // Put the modified list back into the state
-        self.put_unfinished_proposals(unfinished_proposals).await;
-
-        Ok(())
     }
 
     /// Record a validator vote for a proposal.
-    async fn cast_validator_vote(
-        &mut self,
-        proposal_id: u64,
-        identity_key: IdentityKey,
-        vote: Vote,
-    ) {
+    fn cast_validator_vote(&mut self, proposal_id: u64, identity_key: IdentityKey, vote: Vote) {
         // Record the vote
         self.put(state_key::validator_vote(proposal_id, identity_key), vote);
     }
 
     /// Set the proposal voting start block height for a proposal.
-    async fn put_proposal_voting_start(&mut self, proposal_id: u64, end_block: u64) {
+    fn put_proposal_voting_start(&mut self, proposal_id: u64, end_block: u64) {
         self.put_proto(state_key::proposal_voting_start(proposal_id), end_block);
     }
 
     /// Set the proposal voting end block height for a proposal.
-    async fn put_proposal_voting_end(&mut self, proposal_id: u64, end_block: u64) {
+    fn put_proposal_voting_end(&mut self, proposal_id: u64, end_block: u64) {
         self.put_proto(state_key::proposal_voting_end(proposal_id), end_block);
     }
 
     /// Set the proposal voting start position for a proposal.
-    async fn put_proposal_voting_start_position(
+    fn put_proposal_voting_start_position(
         &mut self,
         proposal_id: u64,
         start_position: tct::Position,
@@ -542,33 +696,227 @@ pub trait StateWriteExt: StateWrite {
     }
 
     /// Mark a nullifier as having voted on a proposal.
-    async fn mark_nullifier_voted_on_proposal(
-        &mut self,
-        proposal_id: u64,
-        nullifier: &Nullifier,
-    ) -> Result<()> {
+    async fn mark_nullifier_voted_on_proposal(&mut self, proposal_id: u64, nullifier: &Nullifier) {
         self.put_proto(
-            state_key::per_proposal_voted_nullifier_lookup(proposal_id, nullifier),
+            state_key::voted_nullifier_lookup_for_proposal(proposal_id, nullifier),
             self.height().await,
         );
-
-        Ok(())
     }
 
     /// Record a delegator vote on a proposal.
     async fn cast_delegator_vote(
         &mut self,
         proposal_id: u64,
+        identity_key: IdentityKey,
         vote: Vote,
         nullifier: &Nullifier,
         unbonded_amount: Amount,
     ) -> Result<()> {
+        // Convert the unbonded amount into voting power
+        let power = u64::from(unbonded_amount);
+        let tally: Tally = (vote, power).into();
+
         // Record the vote
         self.put(
-            state_key::delegator_vote(proposal_id, vote, nullifier),
-            unbonded_amount,
+            state_key::untallied_delegator_vote(proposal_id, identity_key, nullifier),
+            tally,
         );
 
+        Ok(())
+    }
+
+    /// Tally delegator votes by sweeping them into the aggregate for each validator, for each proposal.
+    #[instrument(skip(self))]
+    async fn tally_delegator_votes(&mut self, just_for_proposal: Option<u64>) -> Result<()> {
+        // Iterate over all the delegator votes, or just the ones for a specific proposal
+        let prefix = if let Some(proposal_id) = just_for_proposal {
+            state_key::all_untallied_delegator_votes_for_proposal(proposal_id)
+        } else {
+            state_key::all_untallied_delegator_votes().to_string()
+        };
+        let mut prefix_stream = self.prefix(&prefix);
+
+        // We need to keep track of modifications and then apply them after iteration, because
+        // `self.prefix(..)` borrows `self` immutably, so we can't mutate `self` during iteration
+        let mut keys_to_delete = vec![];
+        let mut new_tallies: BTreeMap<u64, BTreeMap<IdentityKey, Tally>> = BTreeMap::new();
+
+        while let Some((key, tally)) = prefix_stream.next().await.transpose()? {
+            // Extract the validator identity key from the key string
+            let mut reverse_path_elements = key.rsplit('/');
+            reverse_path_elements.next(); // skip the nullifier element of the key
+            let identity_key = reverse_path_elements
+                .next()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("unexpected key format for untallied delegator vote")
+                })?
+                .parse()?;
+            let proposal_id = reverse_path_elements
+                .next()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("unexpected key format for untallied delegator vote")
+                })?
+                .parse()?;
+
+            // Get the current tally for this validator
+            let mut current_tally = self
+                .get::<Tally>(&state_key::tallied_delegator_votes(
+                    proposal_id,
+                    identity_key,
+                ))
+                .await?
+                .unwrap_or_default();
+
+            // Add the new tally to the current tally
+            current_tally += tally;
+
+            // Remember the new tally
+            new_tallies
+                .entry(proposal_id)
+                .or_default()
+                .insert(identity_key, current_tally);
+
+            // Remember to delete this key
+            keys_to_delete.push(key);
+        }
+
+        // Explicit drop because we need to borrow self mutably again below
+        drop(prefix_stream);
+
+        // Actually record the key deletions in the state
+        for key in keys_to_delete {
+            self.delete(key);
+        }
+
+        // Actually record the new tallies in the state
+        for (proposal_id, new_tallies_for_proposal) in new_tallies {
+            for (identity_key, tally) in new_tallies_for_proposal {
+                tracing::debug!(
+                    proposal_id,
+                    identity_key = %identity_key,
+                    yes = %tally.yes(),
+                    no = %tally.no(),
+                    abstain = %tally.abstain(),
+                    "tallying delegator votes"
+                );
+                self.put(
+                    state_key::tallied_delegator_votes(proposal_id, identity_key),
+                    tally,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn enact_proposal(
+        &mut self,
+        proposal_id: u64,
+        payload: &ProposalPayload,
+    ) -> Result<Result<()>> // inner error from proposal execution
+    {
+        match payload {
+            ProposalPayload::Signaling { .. } => {
+                // Nothing to do for signaling proposals
+                tracing::info!("signaling proposal passed, nothing to do");
+            }
+            ProposalPayload::Emergency { halt_chain } => {
+                // If the proposal calls to halt the chain...
+                if *halt_chain {
+                    // Print an informational message and signal to the consensus worker to halt the
+                    // process after the state is committed
+                    self.increment_emergency_chain_halt_count().await?;
+                    tracing::info!("emergency proposal passed calling for immediate chain halt");
+                    self.halt_now();
+                }
+            }
+            ProposalPayload::ParameterChange { old, new } => {
+                tracing::info!(
+                    "parameter change proposal passed, attempting to update chain parameters"
+                );
+
+                // If there has been a chain upgrade while the proposal was pending, the stateless
+                // verification criteria for the parameter change proposal could have changed, so we
+                // should check them again here, just to be sure:
+                old.check_valid_update(new)
+                    .context("final check for validity of chain parameter update failed")?;
+
+                // Check that the old parameters are an exact match for the current parameters, or
+                // else abort the update.
+                let current =
+                    // If there is a pending parameter change, sequence the update on top of that
+                    // one (i.e., pretend that those new parameters are the old parameters, since
+                    // chain parameter updates must be sequentially consistent)
+                    if let Some(params) = self.next_block_pending_chain_parameters().await? {
+                        params
+                    } else {
+                        // If no pending parameter change, use the current parameters
+                        self.get_chain_params().await?
+                    };
+
+                // The current parameters (whether pending from a previous passed proposal or just the
+                // current ones, unchanged) have to match the old parameters specified in the
+                // proposal, exactly. This prevents updates from clashing.
+                if **old != current {
+                    return Ok(Err(anyhow::anyhow!(
+                        "current chain parameters do not match the old parameters in the proposal"
+                    )));
+                }
+
+                // Tell the app to update the chain parameters in the next block
+                self.schedule_chain_params_change((**new).clone()).await?;
+
+                tracing::info!("chain parameters updated successfully");
+            }
+            ProposalPayload::DaoSpend {
+                transaction_plan: _,
+            } => {
+                // All we need to do here is signal to the `App` that we'd like this transaction to
+                // be slotted in at the end of the block:
+                self.deliver_dao_transaction(proposal_id).await?;
+            }
+        }
+
+        Ok(Ok(()))
+    }
+
+    async fn increment_emergency_chain_halt_count(&mut self) -> Result<()> {
+        let halt_count = self.emergency_chain_halt_count().await?;
+        self.put_proto(
+            state_key::emergency_chain_halt_count().to_string(),
+            halt_count + 1,
+        );
+        Ok(())
+    }
+
+    fn put_dao_transaction(&mut self, proposal: u64, transaction: Transaction) {
+        self.put(state_key::dao_transaction(proposal), transaction);
+    }
+
+    async fn deliver_dao_transaction(&mut self, proposal: u64) -> Result<()> {
+        // Schedule for beginning of next block
+        let delivery_height = self.get_block_height().await? + 1;
+
+        tracing::info!(%proposal, %delivery_height, "scheduling DAO transaction for delivery at next block");
+
+        self.put_proto(
+            state_key::deliver_single_dao_transaction_at_height(delivery_height, proposal),
+            proposal,
+        );
+        Ok(())
+    }
+
+    async fn schedule_chain_params_change(&mut self, chain_params: ChainParameters) -> Result<()> {
+        // Schedule for beginning of next block
+        let delivery_height = self.get_block_height().await? + 1;
+
+        tracing::info!(%delivery_height, "scheduling chain parameters change at next block");
+
+        self.put(
+            state_key::change_chain_params_at_height(delivery_height),
+            chain_params,
+        );
         Ok(())
     }
 }
