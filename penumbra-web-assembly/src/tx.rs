@@ -58,12 +58,13 @@ pub fn send_plan(
     let fmd_params: FmdParameters = send_tx.fmd_parameters.try_into().unwrap();
 
     let plan = planner
-        .plan_with_spendable_notes(
+        .plan_with_spendable_and_votable_notes(
             &chain_params,
             &fmd_params,
             &fvk,
            AddressIndex::from(0u32),
             send_tx.notes.try_into().unwrap(),
+            Default::default(),
         )
         .unwrap();
 

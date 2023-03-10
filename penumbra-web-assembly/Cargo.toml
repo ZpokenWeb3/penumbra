@@ -1,6 +1,6 @@
 [package]
 name = "penumbra-web-assembly"
-version = "0.45.0"
+version = "0.46.11"
 authors = ["Valentine <valentine@zpoken.io>"]
 edition = "2018"
 
@@ -10,9 +10,12 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["console_error_panic_hook"]
 
+
+
 [dependencies]
 
 anyhow = "1"
+
 
 
 
@@ -38,7 +41,6 @@ async-process = { version = "1.0.1", optional = true }
 indexmap = "=1.9.2"
 web-sys = { version = "0.3.4", features = ["console"] }
 gloo-utils = { version = "0.1", features = ["serde"] }
-
 
 rand_core = { version = "0.6.3", features = ["getrandom"] }
 
