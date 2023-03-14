@@ -34,6 +34,7 @@ use rand_core::{CryptoRng, RngCore};
 // use tracing::instrument;
 
 use penumbra_crypto::Balance;
+use penumbra_crypto::memo::MemoPlaintext;
 
 /// A planner for a [`TransactionPlan`] that can fill in the required spends and change outputs upon
 /// finalization to make a transaction balance.
@@ -124,10 +125,11 @@ impl<R: RngCore + CryptoRng> Planner<R> {
     /// Set a memo for this transaction plan.
     ///
     /// Errors if the memo is too long.
-    pub fn memo(&mut self, memo: String) -> anyhow::Result<&mut Self> {
+    pub fn memo(&mut self, memo: MemoPlaintext) -> anyhow::Result<&mut Self> {
         self.plan.memo_plan = Some(MemoPlan::new(&mut self.rng, memo)?);
         Ok(self)
     }
+
 
     /// Add a fee to the transaction plan.
     ///
@@ -439,7 +441,7 @@ impl<R: RngCore + CryptoRng> Planner<R> {
 
         // If there are outputs, we check that a memo has been added. If not, we add a default memo.
         if self.plan.num_outputs() > 0 && self.plan.memo_plan.is_none() {
-            self.memo(String::new())
+            self.memo(MemoPlaintext::default())
                 .expect("empty string is a valid memo");
         } else if self.plan.num_outputs() == 0 && self.plan.memo_plan.is_some() {
             anyhow::bail!("if no outputs, no memo should be added");
