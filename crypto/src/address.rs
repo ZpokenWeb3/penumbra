@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 mod r1cs;
 pub use r1cs::AddressVar;
 
+mod view;
+pub use view::AddressView;
+
 use crate::{fmd, ka, keys::Diversifier, Fq};
 
 pub const ADDRESS_LEN_BYTES: usize = 80;
@@ -33,6 +36,18 @@ pub struct Address {
     transmission_key_s: Fq,
 
     ck_d: fmd::ClueKey,
+}
+
+impl std::cmp::PartialOrd for Address {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.to_vec().cmp(&other.to_vec()))
+    }
+}
+
+impl std::cmp::Ord for Address {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.to_vec().cmp(&other.to_vec())
+    }
 }
 
 impl Address {

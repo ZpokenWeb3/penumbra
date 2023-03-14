@@ -113,6 +113,8 @@ pub mod action {
         Ics20Withdrawal(super::super::super::ibc::v1alpha1::Ics20Withdrawal),
     }
 }
+/// A transaction perspective is a bundle of key material and commitment openings
+/// that allow generating a view of a transaction from that perspective.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TransactionPerspective {
@@ -124,6 +126,11 @@ pub struct TransactionPerspective {
     /// but not included in the transaction.
     #[prost(message, repeated, tag = "3")]
     pub advice_notes: ::prost::alloc::vec::Vec<super::super::crypto::v1alpha1::Note>,
+    /// Any relevant address views.
+    #[prost(message, repeated, tag = "4")]
+    pub address_views: ::prost::alloc::vec::Vec<
+        super::super::crypto::v1alpha1::AddressView,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -168,6 +175,11 @@ pub struct TransactionView {
     /// outputs in the actions of this transaction.
     #[prost(bytes = "bytes", optional, tag = "6")]
     pub memo: ::core::option::Option<::prost::bytes::Bytes>,
+    /// Any relevant address views.
+    #[prost(message, repeated, tag = "400")]
+    pub address_views: ::prost::alloc::vec::Vec<
+        super::super::crypto::v1alpha1::AddressView,
+    >,
 }
 /// A view of a specific state change action performed by a transaction.
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -332,43 +344,6 @@ pub mod output_view {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum OutputView {
-        #[prost(message, tag = "1")]
-        Visible(Visible),
-        #[prost(message, tag = "2")]
-        Opaque(Opaque),
-    }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AddressView {
-    #[prost(oneof = "address_view::AddressView", tags = "1, 2")]
-    pub address_view: ::core::option::Option<address_view::AddressView>,
-}
-/// Nested message and enum types in `AddressView`.
-pub mod address_view {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Visible {
-        #[prost(message, optional, tag = "1")]
-        pub address: ::core::option::Option<
-            super::super::super::crypto::v1alpha1::Address,
-        >,
-        #[prost(message, optional, tag = "2")]
-        pub index: ::core::option::Option<
-            super::super::super::crypto::v1alpha1::AddressIndex,
-        >,
-    }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Opaque {
-        #[prost(message, optional, tag = "1")]
-        pub output: ::core::option::Option<
-            super::super::super::crypto::v1alpha1::Address,
-        >,
-    }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum AddressView {
         #[prost(message, tag = "1")]
         Visible(Visible),
         #[prost(message, tag = "2")]

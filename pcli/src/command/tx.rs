@@ -12,7 +12,7 @@ use penumbra_component::stake::rate::RateData;
 use penumbra_crypto::{
     asset,
     dex::{
-        lp::{position::Position, Reserves},
+        lp::{position::Position, Reserves, TradingFunction},
         TradingPair,
     },
     keys::AddressIndex,
@@ -247,7 +247,7 @@ impl TxCmd {
                 });
 
                 let plan = plan::send(
-                    app.fvk.account_id(),
+                    app.fvk.account_group_id(),
                     app.view.as_mut().unwrap(),
                     OsRng,
                     &values,
@@ -278,7 +278,7 @@ impl TxCmd {
                 let plan = planner
                     .plan(
                         app.view.as_mut().unwrap(),
-                        app.fvk.account_id(),
+                        app.fvk.account_group_id(),
                         AddressIndex::new(*source),
                     )
                     .await?;
@@ -287,7 +287,7 @@ impl TxCmd {
             TxCmd::Sweep => loop {
                 let specific_client = app.specific_client().await?;
                 let plans = plan::sweep(
-                    app.fvk.account_id(),
+                    app.fvk.account_group_id(),
                     app.view.as_mut().unwrap(),
                     OsRng,
                     specific_client,
@@ -333,9 +333,9 @@ impl TxCmd {
                 planner.fee(swap_fee);
                 planner.swap(input, into, swap_claim_fee.clone(), claim_address)?;
 
-                let account_id = app.fvk.account_id();
+                let account_group_id = app.fvk.account_group_id();
                 let plan = planner
-                    .plan(app.view(), account_id, AddressIndex::new(*source))
+                    .plan(app.view(), account_group_id, AddressIndex::new(*source))
                     .await
                     .context("can't plan swap transaction")?;
 
@@ -354,7 +354,7 @@ impl TxCmd {
                 // Fetch the SwapRecord with the claimable swap.
                 let swap_record = app
                     .view()
-                    .swap_by_commitment(account_id, swap_plaintext.swap_commitment())
+                    .swap_by_commitment(account_group_id, swap_plaintext.swap_commitment())
                     .await?;
 
                 let asset_cache = app.view().assets().await?;
@@ -388,7 +388,7 @@ impl TxCmd {
 
                 let params = app.view.as_mut().unwrap().chain_params().await?;
 
-                let account_id = app.fvk.account_id();
+                let account_group_id = app.fvk.account_group_id();
 
                 let mut planner = Planner::new(OsRng);
                 let plan = planner
@@ -398,7 +398,7 @@ impl TxCmd {
                         output_data: swap_record.output_data,
                         epoch_duration: params.epoch_duration,
                     })
-                    .plan(app.view(), account_id, AddressIndex::new(*source))
+                    .plan(app.view(), account_group_id, AddressIndex::new(*source))
                     .await
                     .context("can't plan swap claim")?;
 
@@ -432,7 +432,7 @@ impl TxCmd {
                 let fee = Fee::from_staking_token_amount((*fee).into());
 
                 let plan = plan::delegate(
-                    app.fvk.account_id(),
+                    app.fvk.account_group_id(),
                     app.view.as_mut().unwrap(),
                     OsRng,
                     rate_data,
@@ -486,7 +486,7 @@ impl TxCmd {
                     .undelegate(delegation_value.amount, rate_data, end_epoch_index)
                     .plan(
                         app.view.as_mut().unwrap(),
-                        app.fvk.account_id(),
+                        app.fvk.account_group_id(),
                         AddressIndex::new(*source),
                     )
                     .await
@@ -497,19 +497,21 @@ impl TxCmd {
             TxCmd::UndelegateClaim { fee } => {
                 let fee = Fee::from_staking_token_amount((*fee).into());
 
-                let account_id = app.fvk.account_id(); // this should be optional? or saved in the client statefully?
+                let account_group_id = app.fvk.account_group_id(); // this should be optional? or saved in the client statefully?
 
                 let mut specific_client = app.specific_client().await?;
                 let view: &mut dyn ViewClient = app.view.as_mut().unwrap();
 
                 let params = view.chain_params().await?;
-                let current_height = view.status(account_id).await?.sync_height;
+                let current_height = view.status(account_group_id).await?.sync_height;
                 let current_epoch = Epoch::from_height(current_height, params.epoch_duration);
                 let asset_cache = view.assets().await?;
 
                 // Query the view client for the list of undelegations that are ready to be claimed.
                 // We want to claim them into the same address index that currently holds the tokens.
-                let notes = view.unspent_notes_by_address_and_asset(account_id).await?;
+                let notes = view
+                    .unspent_notes_by_address_and_asset(account_group_id)
+                    .await?;
 
                 for (address_index, notes_by_asset) in notes.into_iter() {
                     for (token, notes) in notes_by_asset
@@ -576,7 +578,7 @@ impl TxCmd {
                             .fee(fee.clone())
                             .plan(
                                 app.view.as_mut().unwrap(),
-                                app.fvk.account_id(),
+                                app.fvk.account_group_id(),
                                 address_index,
                             )
                             .await?;
@@ -597,7 +599,7 @@ impl TxCmd {
                     .context("can't parse proposal file")?;
                 let fee = Fee::from_staking_token_amount((*fee).into());
                 let plan = plan::proposal_submit(
-                    app.fvk.account_id(),
+                    app.fvk.account_group_id(),
                     app.view.as_mut().unwrap(),
                     OsRng,
                     proposal,
@@ -615,7 +617,7 @@ impl TxCmd {
             }) => {
                 let fee = Fee::from_staking_token_amount((*fee).into());
                 let plan = plan::proposal_withdraw(
-                    app.fvk.account_id(),
+                    app.fvk.account_group_id(),
                     app.view.as_mut().unwrap(),
                     OsRng,
                     *proposal_id,
@@ -687,7 +689,7 @@ impl TxCmd {
                     .fee(fee)
                     .plan(
                         app.view.as_mut().unwrap(),
-                        app.fvk.account_id(),
+                        app.fvk.account_group_id(),
                         AddressIndex::new(*source),
                     )
                     .await?;
@@ -752,7 +754,7 @@ impl TxCmd {
                     .fee(fee)
                     .plan(
                         app.view.as_mut().unwrap(),
-                        app.fvk.account_id(),
+                        app.fvk.account_group_id(),
                         AddressIndex::new(*source),
                     )
                     .await?;
@@ -768,26 +770,27 @@ impl TxCmd {
                 let _fee = Fee::from_staking_token_amount((*fee).into());
 
                 // When opening a liquidity position, the initial reserves will only be set for one asset.
-                // This represents an "ask" in the order book, where bids are placed in the asset type without initial reserves.
-                let reserves = Reserves {
-                    // r1 will be set to 0 units of the asset being bought
-                    r1: Amount::zero(),
-                    // and r2 will be set to the amount of the asset being sold that would be needed to buy the desired amount of the asset being bought
-                    r2: buy_order.price.amount * buy_order.desired.amount,
-                };
-
                 let _asset_cache = app.view().assets().await?;
                 // TODO: check canonical ordering of trading_pair, or
                 // use DirectedTradingPair
                 let trading_pair =
                     TradingPair::new(buy_order.desired.asset_id, buy_order.price.asset_id);
 
-                let position = Position::new(trading_pair, (*spread).into(), reserves);
+                let p = buy_order.price.amount.clone() * 1_000_000u64.into();
+                let q = 1_000_000u64.into();
+
+                // `spread` is another name for `fee`, which is at most 10_000 bps.
+                if *spread > 10_000 {
+                    anyhow::bail!("spread parameter must be at most 10_000bps (i.e. 100%)");
+                }
+                let trading_function = TradingFunction::new(trading_pair, *spread, p, q);
+
+                let position = Position::new(OsRng, trading_function);
                 let _plan = Planner::new(OsRng)
                     .position_open(position)
                     .plan(
                         app.view.as_mut().unwrap(),
-                        app.fvk.account_id(),
+                        app.fvk.account_group_id(),
                         AddressIndex::new(*source),
                     )
                     .await?;

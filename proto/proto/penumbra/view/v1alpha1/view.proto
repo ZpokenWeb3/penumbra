@@ -6,6 +6,7 @@ import "penumbra/core/chain/v1alpha1/chain.proto";
 import "penumbra/core/crypto/v1alpha1/crypto.proto";
 import "penumbra/core/dex/v1alpha1/dex.proto";
 import "penumbra/core/transaction/v1alpha1/transaction.proto";
+import "penumbra/core/ibc/v1alpha1/ibc.proto";
 
 // The view protocol is used by a view client, who wants to do some
 // transaction-related actions, to request data from a view service, which is
@@ -35,6 +36,8 @@ service ViewProtocolService {
   // common root.  (Otherwise, if a client made multiple requests, the wallet
   // service could have advanced the state commitment tree state between queries).
   rpc Witness(WitnessRequest) returns (WitnessResponse);
+
+  rpc WitnessAndBuild(WitnessAndBuildRequest) returns (WitnessAndBuildResponse);
 
   // Queries for assets.
   rpc Assets(AssetsRequest) returns (stream AssetsResponse);
@@ -105,7 +108,7 @@ message TransactionPlannerRequest {
     // The memo for the requested TransactionPlan
     string memo = 3;
     // Identifies the FVK for the notes to query.
-    optional core.crypto.v1alpha1.AccountID account_id = 14;
+    optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
     // Authorizes the request.
     optional ViewAuthToken token = 15;
 
@@ -114,6 +117,7 @@ message TransactionPlannerRequest {
   repeated Swap swaps = 30;
   repeated Delegate delegations = 40;
   repeated Undelegate undelegations = 50;
+  repeated penumbra.core.ibc.v1alpha1.IbcAction ibc_actions = 60;
 
   // Request message subtypes
   message Output {
@@ -173,7 +177,7 @@ message BalanceByAddressResponse {
 }
 
 // Scaffolding for bearer-token authentication for the ViewService.
-// The `account_id` and `token` fields are both optional,
+// The `account_group_id` and `token` fields are both optional,
 // and numbered as 14 & 15 throughout the view service protocol.
 message ViewAuthToken {
   bytes inner = 1;
@@ -194,7 +198,7 @@ service ViewAuthService {
 // Requests sync status of the view service.
 message StatusRequest {
   // Identifies the FVK for the notes to query.
-  optional core.crypto.v1alpha1.AccountID account_id = 14;
+  optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
   // Authorizes the request.
   optional ViewAuthToken token = 15;
 }
@@ -210,7 +214,7 @@ message StatusResponse {
 // Requests streaming updates on the sync height until the view service is synchronized.
 message StatusStreamRequest {
   // Identifies the FVK for the notes to query.
-  optional core.crypto.v1alpha1.AccountID account_id = 14;
+  optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
   // Authorizes the request.
   optional ViewAuthToken token = 15;
 }
@@ -241,7 +245,7 @@ message NotesRequest {
   uint64 amount_to_spend = 5;
 
   // Identifies the FVK for the notes to query.
-  optional core.crypto.v1alpha1.AccountID account_id = 14;
+  optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
   // Authorizes the request.
   optional ViewAuthToken token = 15;
 }
@@ -255,7 +259,7 @@ message NotesForVotingRequest {
   core.crypto.v1alpha1.AddressIndex address_index = 3;
 
   // Identifies the FVK for the notes to query.
-  optional core.crypto.v1alpha1.AccountID account_id = 14;
+  optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
   // Authorizes the request.
   optional ViewAuthToken token = 15;
 }
@@ -268,13 +272,22 @@ message WitnessRequest {
   core.transaction.v1alpha1.TransactionPlan transaction_plan = 3;
 
   // Identifies the FVK for the notes to query.
-  optional core.crypto.v1alpha1.AccountID account_id = 14;
+  optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
   // Authorizes the request.
   optional ViewAuthToken token = 15;
 }
 
 message WitnessResponse {
   core.transaction.v1alpha1.WitnessData witness_data = 1;
+}
+
+message WitnessAndBuildRequest {
+  penumbra.core.transaction.v1alpha1.TransactionPlan transaction_plan = 1;
+  penumbra.core.transaction.v1alpha1.AuthorizationData authorization_data = 2;
+}
+
+message WitnessAndBuildResponse {
+  penumbra.core.transaction.v1alpha1.Transaction transaction = 1;
 }
 
 // Requests all assets known to the view service.
@@ -320,7 +333,7 @@ message NoteByCommitmentRequest {
   // If set to true, waits to return until the requested note is detected.
   bool await_detection = 3;
   // Identifies the FVK for the notes to query.
-  optional core.crypto.v1alpha1.AccountID account_id = 14;
+  optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
   // Authorizes the request.
   optional ViewAuthToken token = 15;
 }
@@ -334,7 +347,7 @@ message SwapByCommitmentRequest {
   // If set to true, waits to return until the requested swap is detected.
   bool await_detection = 3;
   // Identifies the FVK for the notes to query.
-  optional core.crypto.v1alpha1.AccountID account_id = 14;
+  optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
   // Authorizes the request.
   optional ViewAuthToken token = 15;
 }
@@ -347,7 +360,7 @@ message NullifierStatusRequest {
   core.crypto.v1alpha1.Nullifier nullifier = 2;
   bool await_detection = 3;
   // Identifies the FVK for the notes to query.
-  optional core.crypto.v1alpha1.AccountID account_id = 14;
+  optional core.crypto.v1alpha1.AccountGroupId account_group_id = 14;
   // Authorizes the request.
   optional ViewAuthToken token = 15;
 }

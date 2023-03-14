@@ -10,10 +10,9 @@ use camino::Utf8Path;
 use futures::stream::{StreamExt, TryStreamExt};
 use penumbra_crypto::{
     asset,
-    dex::{swap::SwapPlaintext, TradingPair},
-    keys::{AccountID, AddressIndex, FullViewingKey},
+    keys::{AccountGroupId, AddressIndex, FullViewingKey},
     transaction::Fee,
-    Address, Amount, Value,
+    Address, AddressView, Amount,
 };
 use penumbra_proto::{
     client::v1alpha1::{
@@ -22,17 +21,19 @@ use penumbra_proto::{
     },
     core::crypto::v1alpha1 as pbc,
     view::v1alpha1::{
-        self as pb, view_protocol_service_server::ViewProtocolService, ChainParametersResponse,
-        FmdParametersResponse, NoteByCommitmentResponse, StatusResponse, SwapByCommitmentResponse,
-        TransactionHashesResponse, TransactionPlannerResponse, TransactionsResponse,
-        WitnessResponse,
+        self as pb,
+        view_protocol_service_client::ViewProtocolServiceClient,
+        view_protocol_service_server::{ViewProtocolService, ViewProtocolServiceServer},
+        ChainParametersResponse, FmdParametersResponse, NoteByCommitmentResponse, StatusResponse,
+        SwapByCommitmentResponse, TransactionHashesResponse, TransactionPlannerResponse,
+        TransactionsResponse, WitnessResponse,
     },
     DomainType,
 };
 use penumbra_tct::{Commitment, Proof};
 use penumbra_transaction::{
-    plan::{OutputPlan, SwapPlan, TransactionPlan},
-    Transaction, TransactionPerspective, WitnessData,
+    plan::{ActionPlan, TransactionPlan},
+    AuthorizationData, Transaction, TransactionPerspective, WitnessData,
 };
 use rand::Rng;
 use rand_core::OsRng;
@@ -41,7 +42,7 @@ use tokio_stream::wrappers::WatchStream;
 use tonic::{async_trait, transport::Channel};
 use tracing::instrument;
 
-use crate::{Storage, Worker};
+use crate::{Planner, Storage, Worker};
 
 /// A service that synchronizes private chain state and responds to queries
 /// about it.
@@ -57,7 +58,7 @@ pub struct ViewService {
     // A shared error slot for errors bubbled up by the worker. This is a regular Mutex
     // rather than a Tokio Mutex because it should be uncontended.
     error_slot: Arc<Mutex<Option<anyhow::Error>>>,
-    account_id: AccountID,
+    account_group_id: AccountGroupId,
     // A copy of the SCT used by the worker task.
     state_commitment_tree: Arc<RwLock<penumbra_tct::Tree>>,
     // The address of the pd+tendermint node.
@@ -95,11 +96,11 @@ impl ViewService {
         tokio::spawn(worker.run());
 
         let fvk = storage.full_viewing_key().await?;
-        let account_id = fvk.account_id();
+        let account_group_id = fvk.account_group_id();
 
         Ok(Self {
             storage,
-            account_id,
+            account_group_id: account_group_id,
             error_slot,
             sync_height_rx,
             state_commitment_tree: sct,
@@ -108,12 +109,12 @@ impl ViewService {
         })
     }
 
-    async fn check_fvk(&self, fvk: Option<&pbc::AccountId>) -> Result<(), tonic::Status> {
+    async fn check_fvk(&self, fvk: Option<&pbc::AccountGroupId>) -> Result<(), tonic::Status> {
         // Takes an Option to avoid making the caller handle missing fields,
         // should error on None or wrong account ID
         match fvk {
             Some(fvk) => {
-                if fvk != &self.account_id.into() {
+                if fvk != &self.account_group_id.into() {
                     return Err(tonic::Status::new(
                         tonic::Code::InvalidArgument,
                         "Invalid account ID",
@@ -340,25 +341,19 @@ impl ViewProtocolService for ViewService {
     ) -> Result<tonic::Response<pb::TransactionPlannerResponse>, tonic::Status> {
         let prq = request.into_inner();
 
-        let chain_params = self.storage.chain_params().await.map_err(|e| {
-            tonic::Status::unavailable(format!("Could not retrieve chain id: {e:#}"))
-        })?;
-
-        let fee = match prq.fee {
-            Some(x) => x,
-            None => Fee::default().into(),
-        }
-        .try_into()
-        .map_err(|e| tonic::Status::invalid_argument(format!("Could not parse fee: {e:#}")))?;
-
-        let mut plan = TransactionPlan {
-            actions: Vec::new(),
-            expiry_height: prq.expiry_height,
-            chain_id: chain_params.chain_id,
-            fee,
-            clue_plans: Vec::new(),
-            memo_plan: None,
-        };
+        let mut planner = Planner::new(OsRng);
+        planner
+            .fee(
+                match prq.fee {
+                    Some(x) => x,
+                    None => Fee::default().into(),
+                }
+                .try_into()
+                .map_err(|e| {
+                    tonic::Status::invalid_argument(format!("Could not parse fee: {e:#}"))
+                })?,
+            )
+            .expiry_height(prq.expiry_height);
 
         for output in prq.outputs {
             let address: penumbra_crypto::Address = output
@@ -377,106 +372,18 @@ impl ViewProtocolService for ViewService {
                     tonic::Status::invalid_argument(format!("Could not parse value: {e:#}"))
                 })?;
 
-            let output = OutputPlan::new(&mut OsRng, value, address).into();
-
-            plan.actions.push(output);
+            planner.output(value, address);
         }
 
-        for swap in prq.swaps {
-            let fee: Fee = match swap.fee {
-                Some(x) => x,
-                None => Fee::default().into(),
-            }
-            .try_into()
-            .map_err(|e| {
-                tonic::Status::invalid_argument(format!("Could not parse swap fee: {e:#}"))
-            })?;
-
-            let target_asset: asset::Id = swap
-                .target_asset
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing swap asset"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse swap asset: {e:#}"))
-                })?;
-
-            let value: Value = swap
-                .value
-                .ok_or_else(|| tonic::Status::invalid_argument("Missing swap value"))?
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::invalid_argument(format!("Could not parse swap value: {e:#}"))
-                })?;
-
-            // Determine the canonical order for the assets being swapped.
-            // This will determine whether the input amount is assigned to delta_1 or delta_2.
-            let trading_pair = TradingPair::new(value.asset_id, target_asset);
-
-            // If `trading_pair.asset_1` is the input asset, then `delta_1` is the input amount,
-            // and `delta_2` is 0.
-            //
-            // Otherwise, `delta_1` is 0, and `delta_2` is the input amount.
-            let (delta_1, delta_2) = if trading_pair.asset_1() == value.asset_id {
-                (value.amount, 0u64.into())
-            } else {
-                (0u64.into(), value.amount)
-            };
-
-            // If there is no input, then there is no swap.
-            if delta_1 == Amount::zero() && delta_2 == Amount::zero() {
-                return Err(tonic::Status::invalid_argument("Missing swap value"));
-            }
-
-            let claim_address = Address::dummy(&mut OsRng); // TODO: where to source this for real?
-
-            // Create the `SwapPlaintext` representing the swap to be performed:
-            let swap_plaintext = SwapPlaintext::new(
-                &mut OsRng,
-                trading_pair,
-                delta_1,
-                delta_2,
-                fee,
-                claim_address,
-            );
-
-            let swap = SwapPlan::new(&mut OsRng, swap_plaintext).into();
-
-            plan.actions.push(swap);
+        #[allow(clippy::never_loop)]
+        for _swap in prq.swaps {
+            return Err(tonic::Status::unimplemented(
+                "Swaps are not yet implemented, sorry!",
+            ));
         }
 
         #[allow(clippy::never_loop)]
         for _delegation in prq.delegations {
-            // let amount = delegation
-            //     .amount
-            //     .ok_or_else(|| tonic::Status::invalid_argument("Missing delegation amount"))?
-            //     .try_into()
-            //     .map_err(|e| {
-            //         tonic::Status::invalid_argument(format!(
-            //             "Could not parse delegation amount: {:#}",
-            //             e
-            //         ))
-            //     })?;
-
-            // let idk = delegation
-            //     .identity_key
-            //     .ok_or_else(|| tonic::Status::invalid_argument("Missing identity key"))?
-            //     .try_into()
-            //     .map_err(|e| {
-            //         tonic::Status::invalid_argument(format!(
-            //             "Could not parse delegation amount: {:#}",
-            //             e
-            //         ))
-            //     })?;
-
-            // let delegation = Delegate {
-            //     delegation_amount: amount.into(),
-            //     epoch_index,     //TODO: where to source?
-            //     unbonded_amount, //TODO: where to source?
-            //     validator_identity: idk,
-            // };
-
-            // plan.actions.push(delegation.into());
-
             return Err(tonic::Status::unimplemented(
                 "Delegations are not yet implemented, sorry!",
             ));
@@ -484,31 +391,30 @@ impl ViewProtocolService for ViewService {
 
         #[allow(clippy::never_loop)]
         for _undelegation in prq.undelegations {
-            // let value: Value = undelegation
-            //     .value
-            //     .ok_or_else(|| tonic::Status::invalid_argument("Missing undelegation value"))?
-            //     .try_into()
-            //     .map_err(|e| {
-            //         tonic::Status::invalid_argument(format!(
-            //             "Could not parse undelegation value: {:#}",
-            //             e
-            //         ))
-            //     })?;
-
-            //TODO: does the undelegate need additiopnal fields to accomplish this?
-            // let undelegation = Undelegate {
-            //     validator_identity,
-            //     start_epoch_index,
-            //     end_epoch_index,
-            //     unbonded_amount,
-            //     delegation_amount,
-            // };
-
-            // plan.actions.push(undelegation.into());
-
             return Err(tonic::Status::unimplemented(
                 "Undelegations are not yet implemented, sorry!",
             ));
+        }
+
+        let mut client_of_self =
+            ViewProtocolServiceClient::new(ViewProtocolServiceServer::new(self.clone()));
+        let fvk = self.storage.full_viewing_key().await.map_err(|e| {
+            tonic::Status::failed_precondition(format!("Error retrieving full viewing key: {e:#}"))
+        })?;
+        let mut plan = planner
+            .plan(&mut client_of_self, fvk.account_group_id(), 0u32.into())
+            .await
+            .context("could not plan requested transaction")
+            .map_err(|e| tonic::Status::invalid_argument(format!("{e:#}")))?;
+
+        // Finally, insert all the requested IBC actions.  This is just stuffing
+        // the protos in, since IBC actions are just data relaying, and have no
+        // effect on the transaction's value balance etc.  TODO: after
+        // implementing fees, this will need to be supported as part of the
+        // Planner API, since the IBC actions will affect the required fees and
+        // thus the value balance.
+        for ibc_action in prq.ibc_actions {
+            plan.actions.push(ActionPlan::IBCAction(ibc_action));
         }
 
         Ok(tonic::Response::new(TransactionPlannerResponse {
@@ -619,6 +525,10 @@ impl ViewProtocolService for ViewService {
             .payload_keys(&fvk)
             .map_err(|_| tonic::Status::failed_precondition("Error generating payload keys"))?;
 
+        // TODO: better way to determine relevant addresses?
+        // For now, only supply addresses that are in spends.
+        let mut address_views = BTreeMap::<Address, AddressView>::new();
+
         let mut spend_nullifiers = BTreeMap::new();
 
         for action in tx.actions() {
@@ -628,7 +538,9 @@ impl ViewProtocolService for ViewService {
                 if let Ok(spendable_note_record) =
                     self.storage.note_by_nullifier(nullifier, false).await
                 {
+                    let address_view = fvk.view_address(spendable_note_record.note.address());
                     spend_nullifiers.insert(nullifier, spendable_note_record.note);
+                    address_views.insert(address_view.address(), address_view);
                 }
             }
         }
@@ -636,10 +548,12 @@ impl ViewProtocolService for ViewService {
         // TODO: query for advice notes
         let advice_notes = Default::default();
 
+        // TODO: give views on addresses other than in spends
         let txp = TransactionPerspective {
             payload_keys,
             spend_nullifiers,
             advice_notes,
+            address_views: address_views.into_values().collect(),
         };
 
         let response = pb::TransactionPerspectiveResponse {
@@ -655,7 +569,7 @@ impl ViewProtocolService for ViewService {
         request: tonic::Request<pb::SwapByCommitmentRequest>,
     ) -> Result<tonic::Response<pb::SwapByCommitmentResponse>, tonic::Status> {
         self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
+        self.check_fvk(request.get_ref().account_group_id.as_ref())
             .await?;
 
         let request = request.into_inner();
@@ -723,7 +637,7 @@ impl ViewProtocolService for ViewService {
         request: tonic::Request<pb::NoteByCommitmentRequest>,
     ) -> Result<tonic::Response<pb::NoteByCommitmentResponse>, tonic::Status> {
         self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
+        self.check_fvk(request.get_ref().account_group_id.as_ref())
             .await?;
 
         let request = request.into_inner();
@@ -755,7 +669,7 @@ impl ViewProtocolService for ViewService {
         request: tonic::Request<pb::NullifierStatusRequest>,
     ) -> Result<tonic::Response<pb::NullifierStatusResponse>, tonic::Status> {
         self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
+        self.check_fvk(request.get_ref().account_group_id.as_ref())
             .await?;
 
         let request = request.into_inner();
@@ -780,7 +694,7 @@ impl ViewProtocolService for ViewService {
         request: tonic::Request<pb::StatusRequest>,
     ) -> Result<tonic::Response<pb::StatusResponse>, tonic::Status> {
         self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
+        self.check_fvk(request.get_ref().account_group_id.as_ref())
             .await?;
 
         Ok(tonic::Response::new(self.status().await.map_err(|e| {
@@ -793,7 +707,7 @@ impl ViewProtocolService for ViewService {
         request: tonic::Request<pb::StatusStreamRequest>,
     ) -> Result<tonic::Response<Self::StatusStreamStream>, tonic::Status> {
         self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
+        self.check_fvk(request.get_ref().account_group_id.as_ref())
             .await?;
 
         let (latest_known_block_height, _) =
@@ -826,7 +740,7 @@ impl ViewProtocolService for ViewService {
         request: tonic::Request<pb::NotesRequest>,
     ) -> Result<tonic::Response<Self::NotesStream>, tonic::Status> {
         self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
+        self.check_fvk(request.get_ref().account_group_id.as_ref())
             .await?;
 
         let include_spent = request.get_ref().include_spent;
@@ -874,7 +788,7 @@ impl ViewProtocolService for ViewService {
         request: tonic::Request<pb::NotesForVotingRequest>,
     ) -> Result<tonic::Response<Self::NotesForVotingStream>, tonic::Status> {
         self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
+        self.check_fvk(request.get_ref().account_group_id.as_ref())
             .await?;
 
         let address_index = request
@@ -1062,7 +976,7 @@ impl ViewProtocolService for ViewService {
         request: tonic::Request<pb::WitnessRequest>,
     ) -> Result<tonic::Response<WitnessResponse>, tonic::Status> {
         self.check_worker().await?;
-        self.check_fvk(request.get_ref().account_id.as_ref())
+        self.check_fvk(request.get_ref().account_group_id.as_ref())
             .await?;
 
         // Acquire a read lock for the SCT that will live for the entire request,
@@ -1134,6 +1048,79 @@ impl ViewProtocolService for ViewService {
             witness_data: Some(witness_data.into()),
         };
         Ok(tonic::Response::new(witness_response))
+    }
+
+    async fn witness_and_build(
+        &self,
+        request: tonic::Request<pb::WitnessAndBuildRequest>,
+    ) -> Result<tonic::Response<pb::WitnessAndBuildResponse>, tonic::Status> {
+        let pb::WitnessAndBuildRequest {
+            transaction_plan,
+            authorization_data,
+        } = request.into_inner();
+
+        let transaction_plan: TransactionPlan = transaction_plan
+            .ok_or_else(|| tonic::Status::invalid_argument("missing transaction plan"))?
+            .try_into()
+            .map_err(|e: anyhow::Error| e.context("could not decode transaction plan"))
+            .map_err(|e| tonic::Status::invalid_argument(format!("{:#}", e)))?;
+
+        // Get the witness data from the view service only for non-zero amounts of value,
+        // since dummy spends will have a zero amount.
+        let note_commitments = transaction_plan
+            .spend_plans()
+            .filter(|plan| plan.note.amount() != 0u64.into())
+            .map(|spend| spend.note.commit().into())
+            .chain(
+                transaction_plan
+                    .swap_claim_plans()
+                    .map(|swap_claim| swap_claim.swap_plaintext.swap_commitment().into()),
+            )
+            .chain(
+                transaction_plan
+                    .delegator_vote_plans()
+                    .map(|vote_plan| vote_plan.staked_note.commit().into()),
+            )
+            .collect();
+
+        let authorization_data: AuthorizationData = authorization_data
+            .ok_or_else(|| tonic::Status::invalid_argument("missing authorization data"))?
+            .try_into()
+            .map_err(|e: anyhow::Error| e.context("could not decode authorization data"))
+            .map_err(|e| tonic::Status::invalid_argument(format!("{:#}", e)))?;
+
+        let witness_request = pb::WitnessRequest {
+            account_group_id: Some(self.account_group_id.into()),
+            note_commitments,
+            transaction_plan: Some(transaction_plan.clone().into()),
+            ..Default::default()
+        };
+
+        let witness_data: WitnessData = self
+            .witness(tonic::Request::new(witness_request))
+            .await?
+            .into_inner()
+            .witness_data
+            .ok_or_else(|| tonic::Status::invalid_argument("missing witness data"))?
+            .try_into()
+            .map_err(|e: anyhow::Error| e.context("could not decode witness data"))
+            .map_err(|e| tonic::Status::invalid_argument(format!("{:#}", e)))?;
+
+        let fvk =
+            self.storage.full_viewing_key().await.map_err(|_| {
+                tonic::Status::failed_precondition("Error retrieving full viewing key")
+            })?;
+
+        let transaction = Some(
+            transaction_plan
+                .build(&mut OsRng, &fvk, authorization_data, witness_data)
+                .map_err(|_| tonic::Status::failed_precondition("Error building transaction"))?
+                .into(),
+        );
+
+        Ok(tonic::Response::new(pb::WitnessAndBuildResponse {
+            transaction,
+        }))
     }
 
     async fn chain_parameters(

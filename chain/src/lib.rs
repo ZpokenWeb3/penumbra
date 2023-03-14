@@ -19,7 +19,10 @@ pub use sync::{CompactBlock, StatePayload};
 /// Hardcoded test data used by the `Default` genesis state.
 pub mod test_keys {
     use once_cell::sync::Lazy;
-    use penumbra_crypto::{keys::SpendKey, Address, FullViewingKey};
+    use penumbra_crypto::{
+        keys::{AccountGroupId, SpendKey},
+        Address, FullViewingKey,
+    };
 
     /// This address is for test purposes, allocations were added beginning with
     /// the 016-Pandia testnet.
@@ -38,4 +41,6 @@ pub mod test_keys {
 
     pub static FULL_VIEWING_KEY: Lazy<FullViewingKey> =
         Lazy::new(|| SPEND_KEY.full_viewing_key().clone());
+
+    pub static ACCOUNT_ID: Lazy<AccountGroupId> = Lazy::new(|| FULL_VIEWING_KEY.account_group_id());
 }

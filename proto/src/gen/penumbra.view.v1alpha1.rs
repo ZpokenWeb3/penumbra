@@ -31,8 +31,8 @@ pub struct TransactionPlannerRequest {
     pub memo: ::prost::alloc::string::String,
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -46,6 +46,10 @@ pub struct TransactionPlannerRequest {
     pub delegations: ::prost::alloc::vec::Vec<transaction_planner_request::Delegate>,
     #[prost(message, repeated, tag = "50")]
     pub undelegations: ::prost::alloc::vec::Vec<transaction_planner_request::Undelegate>,
+    #[prost(message, repeated, tag = "60")]
+    pub ibc_actions: ::prost::alloc::vec::Vec<
+        super::super::core::ibc::v1alpha1::IbcAction,
+    >,
 }
 /// Nested message and enum types in `TransactionPlannerRequest`.
 pub mod transaction_planner_request {
@@ -165,7 +169,7 @@ pub struct BalanceByAddressResponse {
     pub amount: ::core::option::Option<super::super::core::crypto::v1alpha1::Amount>,
 }
 /// Scaffolding for bearer-token authentication for the ViewService.
-/// The `account_id` and `token` fields are both optional,
+/// The `account_group_id` and `token` fields are both optional,
 /// and numbered as 14 & 15 throughout the view service protocol.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -193,8 +197,8 @@ pub struct ViewAuthResponse {
 pub struct StatusRequest {
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -217,8 +221,8 @@ pub struct StatusResponse {
 pub struct StatusStreamRequest {
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -258,8 +262,8 @@ pub struct NotesRequest {
     pub amount_to_spend: u64,
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -279,8 +283,8 @@ pub struct NotesForVotingRequest {
     >,
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -301,8 +305,8 @@ pub struct WitnessRequest {
     >,
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -314,6 +318,26 @@ pub struct WitnessResponse {
     #[prost(message, optional, tag = "1")]
     pub witness_data: ::core::option::Option<
         super::super::core::transaction::v1alpha1::WitnessData,
+    >,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WitnessAndBuildRequest {
+    #[prost(message, optional, tag = "1")]
+    pub transaction_plan: ::core::option::Option<
+        super::super::core::transaction::v1alpha1::TransactionPlan,
+    >,
+    #[prost(message, optional, tag = "2")]
+    pub authorization_data: ::core::option::Option<
+        super::super::core::transaction::v1alpha1::AuthorizationData,
+    >,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WitnessAndBuildResponse {
+    #[prost(message, optional, tag = "1")]
+    pub transaction: ::core::option::Option<
+        super::super::core::transaction::v1alpha1::Transaction,
     >,
 }
 /// Requests all assets known to the view service.
@@ -388,8 +412,8 @@ pub struct NoteByCommitmentRequest {
     pub await_detection: bool,
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -413,8 +437,8 @@ pub struct SwapByCommitmentRequest {
     pub await_detection: bool,
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -437,8 +461,8 @@ pub struct NullifierStatusRequest {
     pub await_detection: bool,
     /// Identifies the FVK for the notes to query.
     #[prost(message, optional, tag = "14")]
-    pub account_id: ::core::option::Option<
-        super::super::core::crypto::v1alpha1::AccountId,
+    pub account_group_id: ::core::option::Option<
+        super::super::core::crypto::v1alpha1::AccountGroupId,
     >,
     /// Authorizes the request.
     #[prost(message, optional, tag = "15")]
@@ -789,6 +813,25 @@ pub mod view_protocol_service_client {
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/penumbra.view.v1alpha1.ViewProtocolService/Witness",
+            );
+            self.inner.unary(request.into_request(), path, codec).await
+        }
+        pub async fn witness_and_build(
+            &mut self,
+            request: impl tonic::IntoRequest<super::WitnessAndBuildRequest>,
+        ) -> Result<tonic::Response<super::WitnessAndBuildResponse>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/penumbra.view.v1alpha1.ViewProtocolService/WitnessAndBuild",
             );
             self.inner.unary(request.into_request(), path, codec).await
         }
@@ -1278,6 +1321,10 @@ pub mod view_protocol_service_server {
             &self,
             request: tonic::Request<super::WitnessRequest>,
         ) -> Result<tonic::Response<super::WitnessResponse>, tonic::Status>;
+        async fn witness_and_build(
+            &self,
+            request: tonic::Request<super::WitnessAndBuildRequest>,
+        ) -> Result<tonic::Response<super::WitnessAndBuildResponse>, tonic::Status>;
         /// Server streaming response type for the Assets method.
         type AssetsStream: futures_core::Stream<
                 Item = Result<super::AssetsResponse, tonic::Status>,
@@ -1640,6 +1687,46 @@ pub mod view_protocol_service_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = WitnessSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/penumbra.view.v1alpha1.ViewProtocolService/WitnessAndBuild" => {
+                    #[allow(non_camel_case_types)]
+                    struct WitnessAndBuildSvc<T: ViewProtocolService>(pub Arc<T>);
+                    impl<
+                        T: ViewProtocolService,
+                    > tonic::server::UnaryService<super::WitnessAndBuildRequest>
+                    for WitnessAndBuildSvc<T> {
+                        type Response = super::WitnessAndBuildResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::WitnessAndBuildRequest>,
+                        ) -> Self::Future {
+                            let inner = self.0.clone();
+                            let fut = async move {
+                                (*inner).witness_and_build(request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = WitnessAndBuildSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -18,6 +18,39 @@ pub struct Address {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AddressView {
+    #[prost(oneof = "address_view::AddressView", tags = "1, 2")]
+    pub address_view: ::core::option::Option<address_view::AddressView>,
+}
+/// Nested message and enum types in `AddressView`.
+pub mod address_view {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Visible {
+        #[prost(message, optional, tag = "1")]
+        pub address: ::core::option::Option<super::Address>,
+        #[prost(message, optional, tag = "2")]
+        pub index: ::core::option::Option<super::AddressIndex>,
+        #[prost(message, optional, tag = "3")]
+        pub account_group_id: ::core::option::Option<super::AccountGroupId>,
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Opaque {
+        #[prost(message, optional, tag = "1")]
+        pub address: ::core::option::Option<super::Address>,
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum AddressView {
+        #[prost(message, tag = "1")]
+        Visible(Visible),
+        #[prost(message, tag = "2")]
+        Opaque(Opaque),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SpendKey {
     #[prost(bytes = "vec", tag = "1")]
     pub inner: ::prost::alloc::vec::Vec<u8>,
@@ -36,7 +69,7 @@ pub struct FullViewingKey {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AccountId {
+pub struct AccountGroupId {
     #[prost(bytes = "vec", tag = "1")]
     pub inner: ::prost::alloc::vec::Vec<u8>,
 }
@@ -49,8 +82,10 @@ pub struct Diversifier {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AddressIndex {
-    #[prost(bytes = "vec", tag = "1")]
-    pub inner: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag = "2")]
+    pub account: u32,
+    #[prost(bytes = "vec", tag = "3")]
+    pub randomizer: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -226,6 +261,13 @@ pub struct ZkOutputProof {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ZkSpendProof {
+    #[prost(bytes = "vec", tag = "1")]
+    pub inner: ::prost::alloc::vec::Vec<u8>,
+}
+/// A Penumbra ZK swap proof.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ZkSwapProof {
     #[prost(bytes = "vec", tag = "1")]
     pub inner: ::prost::alloc::vec::Vec<u8>,
 }

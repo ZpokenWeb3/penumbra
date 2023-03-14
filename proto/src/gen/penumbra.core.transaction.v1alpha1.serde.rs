@@ -1142,314 +1142,6 @@ impl<'de> serde::Deserialize<'de> for ActionView {
         deserializer.deserialize_struct("penumbra.core.transaction.v1alpha1.ActionView", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for AddressView {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.address_view.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.AddressView", len)?;
-        if let Some(v) = self.address_view.as_ref() {
-            match v {
-                address_view::AddressView::Visible(v) => {
-                    struct_ser.serialize_field("visible", v)?;
-                }
-                address_view::AddressView::Opaque(v) => {
-                    struct_ser.serialize_field("opaque", v)?;
-                }
-            }
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for AddressView {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "visible",
-            "opaque",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Visible,
-            Opaque,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "visible" => Ok(GeneratedField::Visible),
-                            "opaque" => Ok(GeneratedField::Opaque),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = AddressView;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct penumbra.core.transaction.v1alpha1.AddressView")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> std::result::Result<AddressView, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut address_view__ = None;
-                while let Some(k) = map.next_key()? {
-                    match k {
-                        GeneratedField::Visible => {
-                            if address_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("visible"));
-                            }
-                            address_view__ = map.next_value::<::std::option::Option<_>>()?.map(address_view::AddressView::Visible)
-;
-                        }
-                        GeneratedField::Opaque => {
-                            if address_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("opaque"));
-                            }
-                            address_view__ = map.next_value::<::std::option::Option<_>>()?.map(address_view::AddressView::Opaque)
-;
-                        }
-                    }
-                }
-                Ok(AddressView {
-                    address_view: address_view__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("penumbra.core.transaction.v1alpha1.AddressView", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for address_view::Opaque {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.output.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.AddressView.Opaque", len)?;
-        if let Some(v) = self.output.as_ref() {
-            struct_ser.serialize_field("output", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for address_view::Opaque {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "output",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Output,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "output" => Ok(GeneratedField::Output),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = address_view::Opaque;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct penumbra.core.transaction.v1alpha1.AddressView.Opaque")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> std::result::Result<address_view::Opaque, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut output__ = None;
-                while let Some(k) = map.next_key()? {
-                    match k {
-                        GeneratedField::Output => {
-                            if output__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("output"));
-                            }
-                            output__ = map.next_value()?;
-                        }
-                    }
-                }
-                Ok(address_view::Opaque {
-                    output: output__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("penumbra.core.transaction.v1alpha1.AddressView.Opaque", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for address_view::Visible {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.address.is_some() {
-            len += 1;
-        }
-        if self.index.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.AddressView.Visible", len)?;
-        if let Some(v) = self.address.as_ref() {
-            struct_ser.serialize_field("address", v)?;
-        }
-        if let Some(v) = self.index.as_ref() {
-            struct_ser.serialize_field("index", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for address_view::Visible {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "address",
-            "index",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Address,
-            Index,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "address" => Ok(GeneratedField::Address),
-                            "index" => Ok(GeneratedField::Index),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = address_view::Visible;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct penumbra.core.transaction.v1alpha1.AddressView.Visible")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> std::result::Result<address_view::Visible, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut address__ = None;
-                let mut index__ = None;
-                while let Some(k) = map.next_key()? {
-                    match k {
-                        GeneratedField::Address => {
-                            if address__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("address"));
-                            }
-                            address__ = map.next_value()?;
-                        }
-                        GeneratedField::Index => {
-                            if index__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("index"));
-                            }
-                            index__ = map.next_value()?;
-                        }
-                    }
-                }
-                Ok(address_view::Visible {
-                    address: address__,
-                    index: index__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("penumbra.core.transaction.v1alpha1.AddressView.Visible", FIELDS, GeneratedVisitor)
-    }
-}
 impl serde::Serialize for AuthorizationData {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -4218,6 +3910,9 @@ impl serde::Serialize for TransactionPerspective {
         if !self.advice_notes.is_empty() {
             len += 1;
         }
+        if !self.address_views.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.TransactionPerspective", len)?;
         if !self.payload_keys.is_empty() {
             struct_ser.serialize_field("payloadKeys", &self.payload_keys)?;
@@ -4227,6 +3922,9 @@ impl serde::Serialize for TransactionPerspective {
         }
         if !self.advice_notes.is_empty() {
             struct_ser.serialize_field("adviceNotes", &self.advice_notes)?;
+        }
+        if !self.address_views.is_empty() {
+            struct_ser.serialize_field("addressViews", &self.address_views)?;
         }
         struct_ser.end()
     }
@@ -4244,6 +3942,8 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
             "spendNullifiers",
             "advice_notes",
             "adviceNotes",
+            "address_views",
+            "addressViews",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4251,6 +3951,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
             PayloadKeys,
             SpendNullifiers,
             AdviceNotes,
+            AddressViews,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4275,6 +3976,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
                             "payloadKeys" | "payload_keys" => Ok(GeneratedField::PayloadKeys),
                             "spendNullifiers" | "spend_nullifiers" => Ok(GeneratedField::SpendNullifiers),
                             "adviceNotes" | "advice_notes" => Ok(GeneratedField::AdviceNotes),
+                            "addressViews" | "address_views" => Ok(GeneratedField::AddressViews),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4297,6 +3999,7 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
                 let mut payload_keys__ = None;
                 let mut spend_nullifiers__ = None;
                 let mut advice_notes__ = None;
+                let mut address_views__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::PayloadKeys => {
@@ -4317,12 +4020,19 @@ impl<'de> serde::Deserialize<'de> for TransactionPerspective {
                             }
                             advice_notes__ = Some(map.next_value()?);
                         }
+                        GeneratedField::AddressViews => {
+                            if address_views__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("addressViews"));
+                            }
+                            address_views__ = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(TransactionPerspective {
                     payload_keys: payload_keys__.unwrap_or_default(),
                     spend_nullifiers: spend_nullifiers__.unwrap_or_default(),
                     advice_notes: advice_notes__.unwrap_or_default(),
+                    address_views: address_views__.unwrap_or_default(),
                 })
             }
         }
@@ -4537,6 +4247,9 @@ impl serde::Serialize for TransactionView {
         if self.memo.is_some() {
             len += 1;
         }
+        if !self.address_views.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("penumbra.core.transaction.v1alpha1.TransactionView", len)?;
         if !self.action_views.is_empty() {
             struct_ser.serialize_field("actionViews", &self.action_views)?;
@@ -4555,6 +4268,9 @@ impl serde::Serialize for TransactionView {
         }
         if let Some(v) = self.memo.as_ref() {
             struct_ser.serialize_field("memo", pbjson::private::base64::encode(&v).as_str())?;
+        }
+        if !self.address_views.is_empty() {
+            struct_ser.serialize_field("addressViews", &self.address_views)?;
         }
         struct_ser.end()
     }
@@ -4576,6 +4292,8 @@ impl<'de> serde::Deserialize<'de> for TransactionView {
             "fmd_clues",
             "fmdClues",
             "memo",
+            "address_views",
+            "addressViews",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4586,6 +4304,7 @@ impl<'de> serde::Deserialize<'de> for TransactionView {
             Fee,
             FmdClues,
             Memo,
+            AddressViews,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4613,6 +4332,7 @@ impl<'de> serde::Deserialize<'de> for TransactionView {
                             "fee" => Ok(GeneratedField::Fee),
                             "fmdClues" | "fmd_clues" => Ok(GeneratedField::FmdClues),
                             "memo" => Ok(GeneratedField::Memo),
+                            "addressViews" | "address_views" => Ok(GeneratedField::AddressViews),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4638,6 +4358,7 @@ impl<'de> serde::Deserialize<'de> for TransactionView {
                 let mut fee__ = None;
                 let mut fmd_clues__ = None;
                 let mut memo__ = None;
+                let mut address_views__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::ActionViews => {
@@ -4680,6 +4401,12 @@ impl<'de> serde::Deserialize<'de> for TransactionView {
                                 map.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::AddressViews => {
+                            if address_views__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("addressViews"));
+                            }
+                            address_views__ = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(TransactionView {
@@ -4689,6 +4416,7 @@ impl<'de> serde::Deserialize<'de> for TransactionView {
                     fee: fee__,
                     fmd_clues: fmd_clues__.unwrap_or_default(),
                     memo: memo__,
+                    address_views: address_views__.unwrap_or_default(),
                 })
             }
         }

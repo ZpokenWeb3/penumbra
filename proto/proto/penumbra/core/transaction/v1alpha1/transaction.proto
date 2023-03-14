@@ -83,12 +83,16 @@ message Action {
   }
 }
 
+// A transaction perspective is a bundle of key material and commitment openings
+// that allow generating a view of a transaction from that perspective.
 message TransactionPerspective {
   repeated PayloadKeyWithCommitment payload_keys = 1;
   repeated NullifierWithNote spend_nullifiers = 2;
   // The openings of note commitments referred to in the transaction
   // but not included in the transaction.
   repeated crypto.v1alpha1.Note advice_notes = 3;
+  // Any relevant address views.
+  repeated crypto.v1alpha1.AddressView address_views = 4;
 }
 
 message PayloadKeyWithCommitment {
@@ -118,6 +122,9 @@ message TransactionView {
   // An optional plaintext memo. It will only be populated if there are
   // outputs in the actions of this transaction.
   optional bytes memo = 6;
+  
+  // Any relevant address views.
+  repeated crypto.v1alpha1.AddressView address_views = 400;
 }
 
 // A view of a specific state change action performed by a transaction.
@@ -195,22 +202,6 @@ message OutputView {
     Output output = 1;
   }
   oneof output_view {
-    Visible visible = 1;
-    Opaque opaque = 2;
-  }
-}
-
-message AddressView {
-    message Visible {
-    crypto.v1alpha1.Address address = 1;
-    crypto.v1alpha1.AddressIndex index = 2;
-
-  }
-
-  message Opaque {
-    crypto.v1alpha1.Address output = 1;
-  }
-  oneof address_view {
     Visible visible = 1;
     Opaque opaque = 2;
   }

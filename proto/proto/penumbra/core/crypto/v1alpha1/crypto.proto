@@ -15,6 +15,21 @@ message Address {
     bytes inner = 1;
 }
 
+message AddressView {
+    message Visible {
+        Address address = 1;
+        AddressIndex index = 2;
+        AccountGroupId account_group_id = 3;
+    }
+    message Opaque {
+        Address address = 1;
+    }
+    oneof address_view {
+        Visible visible = 1;
+        Opaque opaque = 2;
+    }
+}
+
 message SpendKey {
     bytes inner = 1;
 }
@@ -27,7 +42,7 @@ message FullViewingKey {
     bytes inner = 1;
 }
 
-message AccountID {
+message AccountGroupId {
     bytes inner = 1;
 }
 
@@ -36,7 +51,8 @@ message Diversifier {
 }
 
 message AddressIndex {
-    bytes inner = 1;
+    uint32 account = 2;
+    bytes randomizer = 3;
 }
 
 message StateCommitment {
@@ -156,4 +172,9 @@ message ZKOutputProof {
 // A Penumbra ZK spend proof.
 message ZKSpendProof {
   bytes inner = 1;
+}
+
+// A Penumbra ZK swap proof.
+message ZKSwapProof {
+    bytes inner = 1;
 }

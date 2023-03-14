@@ -33,8 +33,7 @@ impl ValueVar {
         value_blinding: Vec<UInt8<Fq>>,
     ) -> Result<BalanceCommitmentVar, SynthesisError> {
         let cs = self.amount().cs();
-        let value_blinding_generator =
-            ElementVar::new_constant(cs.clone(), *VALUE_BLINDING_GENERATOR)?;
+        let value_blinding_generator = ElementVar::new_constant(cs, *VALUE_BLINDING_GENERATOR)?;
 
         let asset_generator = self.asset_id.value_generator()?;
         let value_amount = self.amount();
@@ -75,8 +74,7 @@ impl AllocVar<Commitment, Fq> for BalanceCommitmentVar {
         match mode {
             AllocationMode::Constant => unimplemented!(),
             AllocationMode::Input => {
-                let compressed = inner.0.vartime_compress_to_field();
-                let element_var: ElementVar = AllocVar::new_input(cs, || Ok(compressed))?;
+                let element_var: ElementVar = AllocVar::new_input(cs, || Ok(inner.0))?;
                 Ok(Self { inner: element_var })
             }
             AllocationMode::Witness => unimplemented!(),
@@ -94,6 +92,24 @@ impl R1CSVar<Fq> for BalanceCommitmentVar {
     fn value(&self) -> Result<Self::Value, SynthesisError> {
         let inner = self.inner.value()?;
         Ok(Commitment(inner))
+    }
+}
+
+impl std::ops::Add<BalanceCommitmentVar> for BalanceCommitmentVar {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            inner: self.inner + rhs.inner,
+        }
+    }
+}
+
+impl std::ops::Sub<BalanceCommitmentVar> for BalanceCommitmentVar {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            inner: self.inner - rhs.inner,
+        }
     }
 }
 

@@ -1,9 +1,16 @@
+use crate::address::AddressVar;
+use crate::asset::{AmountVar, AssetIdVar};
 use crate::keys::OutgoingViewingKey;
+use crate::note::StateCommitmentVar;
 use crate::transaction::Fee;
+use crate::value::ValueVar;
 use crate::{asset, ka, Address, Amount, Note, PayloadKey, Rseed, Value};
 use anyhow::{anyhow, Error, Result};
 use ark_ff::PrimeField;
 
+use ark_r1cs_std::prelude::*;
+use ark_relations::r1cs::SynthesisError;
+use decaf377::r1cs::FqVar;
 use decaf377::{FieldExt, Fq};
 use once_cell::sync::Lazy;
 use penumbra_proto::{core::crypto::v1alpha1 as pb_crypto, core::dex::v1alpha1 as pb, DomainType};
@@ -159,6 +166,122 @@ impl SwapPlaintext {
             claim_fee,
             claim_address,
             rseed,
+        }
+    }
+}
+
+pub struct SwapPlaintextVar {
+    pub claim_fee: ValueVar,
+    pub delta_1_i: AmountVar,
+    pub trading_pair_asset_1: AssetIdVar,
+    pub delta_2_i: AmountVar,
+    pub trading_pair_asset_2: AssetIdVar,
+    pub claim_address: AddressVar,
+    pub rseed: FqVar,
+}
+
+impl SwapPlaintextVar {
+    pub fn delta_1_value(&self) -> ValueVar {
+        ValueVar {
+            amount: self.delta_1_i.clone(),
+            asset_id: self.trading_pair_asset_1.clone(),
+        }
+    }
+
+    pub fn delta_2_value(&self) -> ValueVar {
+        ValueVar {
+            amount: self.delta_2_i.clone(),
+            asset_id: self.trading_pair_asset_2.clone(),
+        }
+    }
+
+    pub fn commit(&self) -> Result<StateCommitmentVar, SynthesisError> {
+        // Access constraint system.
+        let cs = self.delta_1_i.amount.cs();
+
+        let domain_sep = FqVar::new_constant(cs.clone(), *DOMAIN_SEPARATOR)?;
+        let compressed_g_d = self
+            .claim_address
+            .diversified_generator()
+            .compress_to_field()?;
+
+        let inner_hash4 = poseidon377::r1cs::hash_4(
+            cs.clone(),
+            &domain_sep,
+            (
+                self.trading_pair_asset_1.asset_id.clone(),
+                self.trading_pair_asset_2.asset_id.clone(),
+                self.delta_1_i.amount.clone(),
+                self.delta_2_i.amount.clone(),
+            ),
+        )?;
+
+        let inner = poseidon377::r1cs::hash_7(
+            cs,
+            &domain_sep,
+            (
+                self.rseed.clone(),
+                self.claim_fee.amount.amount.clone(),
+                self.claim_fee.asset_id.asset_id.clone(),
+                compressed_g_d,
+                self.claim_address.transmission_key().compress_to_field()?,
+                self.claim_address.clue_key(),
+                inner_hash4,
+            ),
+        )?;
+
+        Ok(StateCommitmentVar { inner })
+    }
+}
+
+impl AllocVar<SwapPlaintext, Fq> for SwapPlaintextVar {
+    fn new_variable<T: std::borrow::Borrow<SwapPlaintext>>(
+        cs: impl Into<ark_relations::r1cs::Namespace<Fq>>,
+        f: impl FnOnce() -> Result<T, SynthesisError>,
+        mode: ark_r1cs_std::prelude::AllocationMode,
+    ) -> Result<Self, SynthesisError> {
+        let ns = cs.into();
+        let cs = ns.cs();
+
+        match mode {
+            AllocationMode::Constant => unimplemented!(),
+            AllocationMode::Input => {
+                unimplemented!()
+            }
+            AllocationMode::Witness => {
+                let swap_plaintext1 = f()?;
+                let swap_plaintext = swap_plaintext1.borrow();
+
+                let claim_fee =
+                    ValueVar::new_witness(cs.clone(), || Ok(swap_plaintext.claim_fee.0))?;
+                let delta_1_i =
+                    AmountVar::new_witness(cs.clone(), || Ok(swap_plaintext.delta_1_i))?;
+                let trading_pair_asset_1 = AssetIdVar::new_witness(cs.clone(), || {
+                    Ok(swap_plaintext.trading_pair.asset_1())
+                })?;
+                let delta_2_i =
+                    AmountVar::new_witness(cs.clone(), || Ok(swap_plaintext.delta_2_i))?;
+                let trading_pair_asset_2 = AssetIdVar::new_witness(cs.clone(), || {
+                    Ok(swap_plaintext.trading_pair.asset_2())
+                })?;
+                let claim_address =
+                    AddressVar::new_witness(cs.clone(), || Ok(swap_plaintext.claim_address))?;
+                let rseed = FqVar::new_witness(cs, || {
+                    Ok(Fq::from_le_bytes_mod_order(
+                        &swap_plaintext.rseed.to_bytes()[..],
+                    ))
+                })?;
+
+                Ok(Self {
+                    claim_fee,
+                    delta_1_i,
+                    trading_pair_asset_1,
+                    delta_2_i,
+                    trading_pair_asset_2,
+                    claim_address,
+                    rseed,
+                })
+            }
         }
     }
 }
