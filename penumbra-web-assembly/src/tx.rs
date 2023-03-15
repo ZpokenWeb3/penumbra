@@ -32,15 +32,15 @@ pub struct SendTx {
 #[wasm_bindgen]
 pub fn send_plan(
     full_viewing_key: &str,
-    valueJs: JsValue,
+    value_js: JsValue,
     dest_address: &str,
     view_service_data: JsValue,
 ) -> JsValue {
     utils::set_panic_hook();
-    web_console::log_1(&valueJs);
+    web_console::log_1(&value_js);
 
     let value: penumbra_proto::core::crypto::v1alpha1::Value =
-        serde_wasm_bindgen::from_value(valueJs).unwrap();
+        serde_wasm_bindgen::from_value(value_js).unwrap();
 
 
     let address = Address::from_str(dest_address).unwrap();

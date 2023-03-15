@@ -24,18 +24,6 @@ pub struct StoredTree {
     commitments: Vec<StoreCommitment>,
 }
 
-//#[derive(Clone, Debug, Serialize, Deserialize)]
-//pub struct StoredHash {
-//    position: u64,
-//    height: u8,
-//    hash: [u8; 32],
-//}
-//#[derive(Clone, Debug, Serialize, Deserialize)]
-//pub struct StoredCommitment {
-//    position: u64,
-//    commitment: [u8; 32],
-//}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanBlockResult {
     height: u64,
@@ -79,8 +67,6 @@ impl ViewClient {
             .context("The provided string is not a valid FullViewingKey")
             .unwrap();
 
-        //        web_console::log_1(&stored_tree);
-
         let stored_tree: StoredTree = serde_wasm_bindgen::from_value(stored_tree).unwrap();
 
         let tree = load_tree(stored_tree);
@@ -104,8 +90,6 @@ impl ViewClient {
     ) -> JsValue {
         utils::set_panic_hook();
 
-        //        web_console::log_1(&compact_block);
-
         let stored_position: Option<StoredPosition> =
             serde_wasm_bindgen::from_value(last_position).unwrap();
         let stored_forgotten: Option<Forgotten> =
@@ -116,16 +100,8 @@ impl ViewClient {
 
         let block: CompactBlock = block_proto.try_into().unwrap();
 
-        // Trial-decrypt the notes in this block, keeping track of the ones that were meant for us
-
-        // Newly detected spendable notes.
         let mut new_notes = Vec::new();
-        // Newly detected claimable swaps.
         let mut new_swaps: Vec<SwapRecord> = Vec::new();
-
-        //        if self.latest_height.wrapping_add(1) != block.height {
-        //            return Default::default();
-        //        }
 
         for state_payload in block.state_payloads {
             let clone_payload = state_payload.clone();
@@ -170,9 +146,6 @@ impl ViewClient {
                     match payload.trial_decrypt(&self.fvk) {
                         Some(swap) => {
                             let swap_position = self.nct.insert(Keep, payload.commitment).unwrap();
-                            // At this point, we need to retain the swap plaintext,
-                            // and also derive the expected output notes so we can
-                            // notice them while scanning later blocks.
 
                             let batch_data = block
                                 .swap_outputs
@@ -181,11 +154,6 @@ impl ViewClient {
                                 .unwrap();
 
                             let (output_1, output_2) = swap.output_notes(batch_data);
-                            // Pre-insert the output notes into our notes table, so that
-                            // we can notice them when we scan the block where they are claimed.
-                            //                            self.notes.insert(output_1.commit(), output_1);
-                            //                            self.notes.insert(output_2.commit(), output_2);
-
                             let source = clone_payload.source().cloned().unwrap_or_default();
                             let nullifier = self
                                 .fvk
@@ -255,19 +223,10 @@ impl ViewClient {
             ) -> JsValue  {
         utils::set_panic_hook();
 
-        //        web_console::log_1(&compact_block);
-
         let block_proto: penumbra_proto::core::chain::v1alpha1::CompactBlock =
             serde_wasm_bindgen::from_value(compact_block).unwrap();
 
         let block: CompactBlock = block_proto.try_into().unwrap();
-
-        // Trial-decrypt the notes in this block, keeping track of the ones that were meant for us
-
-
-        //        if self.latest_height.wrapping_add(1) != block.height {
-        //            return Default::default();
-        //        }
 
         // Newly detected spendable notes.
         let mut new_notes = Vec::new();
@@ -317,10 +276,6 @@ impl ViewClient {
                     match payload.trial_decrypt(&self.fvk) {
                         Some(swap) => {
                             let swap_position = self.nct.insert(Keep, payload.commitment).unwrap();
-                            // At this point, we need to retain the swap plaintext,
-                            // and also derive the expected output notes so we can
-                            // notice them while scanning later blocks.
-
                             let batch_data = block
                                 .swap_outputs
                                 .get(&swap.trading_pair)
@@ -328,11 +283,6 @@ impl ViewClient {
                                 .unwrap();
 
                             let (output_1, output_2) = swap.output_notes(batch_data);
-                            // Pre-insert the output notes into our notes table, so that
-                            // we can notice them when we scan the block where they are claimed.
-                            //                            self.notes.insert(output_1.commit(), output_1);
-                            //                            self.notes.insert(output_2.commit(), output_2);
-
                             let source = clone_payload.source().cloned().unwrap_or_default();
                             let nullifier = self
                                 .fvk
@@ -421,9 +371,6 @@ impl ViewClient {
 
 pub fn load_tree(stored_tree: StoredTree) -> Tree {
     let stored_position: StoredPosition = stored_tree.last_position.unwrap_or_default();
-    //        let position_option: Option<Position> = Some(position);
-    //        let stored_position: StoredPosition = position_option.try_into().unwrap();
-
     let mut add_commitments = Tree::load(
         stored_position,
         stored_tree.last_forgotten.unwrap_or_default(),
